@@ -18,10 +18,12 @@ import fast
 # double_centre_urban: a town's two-way road gets a double solid centre line (the US practice on arterials) instead of
 # a broken one; double_gap: the space between the two lines of a double line; edge_pattern: a broken edge line (dash,
 # gap) off the main roads; warning: the broken line in place of a double solid one on a narrow road; w_urban: a line's
-# width in town (else w).
+# width in town (else w). fork: double_barrier: a no-overtaking centre line (OpenStreetMap overtaking=no) is drawn as two
+# solid lines; double_multilane: so is the solid centre line of an undivided road of four lanes or more.
 Style = namedtuple("Style", "centre w w_motorway edge edge_motorway centre_rural centre_urban lane_rural lane_urban "
                             "lane_motorway left_edge double_centre_urban double_gap min_centre_m edge_classes ladder "
-                            "edge_pattern warning w_urban", defaults=(None, False, None, None, None))
+                            "edge_pattern warning w_urban double_barrier double_multilane",
+               defaults=(None, False, None, None, None, False, False))
 
 _US = Style(centre="line_yellow", w=0.12, w_motorway=0.15, edge=0.12, edge_motorway=0.15,
             centre_rural=(3.05, 9.14), centre_urban=(3.05, 9.14), lane_rural=(3.05, 9.14), lane_urban=(3.05, 9.14),
@@ -29,12 +31,14 @@ _US = Style(centre="line_yellow", w=0.12, w_motorway=0.15, edge=0.12, edge_motor
             min_centre_m=4.9,
             # edge lines on arterials (MUTCD 3B.10: rural arterials 20 ft and wider); local and collector roads mostly
             # have none (PEMA 6-inch aerials, Lancaster County, 2026-10-28: tertiary roads with a centre line only)
-            edge_classes=frozenset({"motorway", "trunk", "primary", "secondary"}), ladder=True)
+            edge_classes=frozenset({"motorway", "trunk", "primary", "secondary"}), ladder=True,
+            double_barrier=True, double_multilane=True)     # fork: (was hard-coded for yellow centres in roads.extras)
 _CA = _US._replace(centre_rural=(3.0, 6.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 6.0), lane_urban=(3.0, 6.0),
                    lane_motorway=(3.0, 6.0))
 _GB = Style(centre="line_white", w=0.10, w_motorway=0.15, edge=0.15, edge_motorway=0.20,
             centre_rural=(3.0, 6.0), centre_urban=(2.0, 4.0), lane_rural=(2.0, 7.0), lane_urban=(1.0, 5.0),
-            lane_motorway=(2.0, 7.0), left_edge=None, double_centre_urban=False, double_gap=0.175, min_centre_m=5.5)
+            lane_motorway=(2.0, 7.0), left_edge=None, double_centre_urban=False, double_gap=0.175, min_centre_m=5.5,
+            double_barrier=True)                            # fork: (was hard-coded for GB in roads.extras)
 _DE = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.12, edge_motorway=0.30,
             centre_rural=(6.0, 12.0), centre_urban=(3.0, 6.0), lane_rural=(6.0, 12.0), lane_urban=(3.0, 6.0),
             lane_motorway=(6.0, 12.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
@@ -48,7 +52,8 @@ _FR = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.15, edge_motorw
 _SE = Style(centre="line_white", w=0.15, w_motorway=0.15, edge=0.15, edge_motorway=0.30,
             centre_rural=(3.0, 9.0), centre_urban=(3.0, 3.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 3.0),
             lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.15, min_centre_m=5.5,
-            edge_pattern=(1.0, 2.0), warning=(9.0, 3.0), w_urban=0.10)
+            edge_pattern=(1.0, 2.0), warning=(9.0, 3.0), w_urban=0.10,
+            double_barrier=True, double_multilane=True)     # fork: (was hard-coded for SE in roads.extras)
 MIN_LANE_M = 2.75           # no line leaving a lane narrower than the least VGU 2024 allows (K233046; K233040: under 5.5 m none)
 WARNING_BELOW_M = 6.5       # a narrower road has a warning line, not a double solid one (TSFS 2010:171 2 kap. 7 §)
 # a 2+1 road (VGU 2024 table 12.5, K237686): no centre line, a solid left edge line each side of the barrier, its outer
@@ -58,18 +63,25 @@ _NL = _DE._replace(centre_rural=(3.0, 9.0), lane_rural=(3.0, 9.0), lane_motorway
 _JP = Style(centre="line_white", w=0.15, w_motorway=0.15, edge=0.15, edge_motorway=0.20,
             centre_rural=(5.0, 5.0), centre_urban=(5.0, 5.0), lane_rural=(6.0, 9.0), lane_urban=(5.0, 5.0),
             lane_motorway=(8.0, 12.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
-_AU = Style(centre="line_white", w=0.10, w_motorway=0.15, edge=0.12, edge_motorway=0.15,
+# fork: New Zealand keeps the line paint it had; Australia (_AU) has its own below
+_NZ = Style(centre="line_white", w=0.10, w_motorway=0.15, edge=0.12, edge_motorway=0.15,
             centre_rural=(3.0, 9.0), centre_urban=(3.0, 9.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 9.0),
             lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
+# fork: Australia, AS 1742.2 as TfNSW / IPWEA / TMR MRS45 draw it (docs/research/2026-10-28-road-markings-standards.md
+# 4.2, fork/QLD_REFERENCE.md): all white; separation and lane lines 0.10 m, 3 m / 9 m (kept: _NZ's); edge lines 0.15 m
+# (QLD's; 4.2 gives 0.12 general and 0.15 freeway; motorway stays 0.15); barrier lines (no overtaking, or an undivided
+# road of four lanes or more) two solid 0.10 m lines 0.10 m apart (BB / BS: "double solid ... about 0.08 m lines with
+# a 0.08 m gap"; MRS45 52127: two 100 mm lines)
+_AU = _NZ._replace(edge=0.15, double_gap=0.10, double_barrier=True, double_multilane=True)
 # the manuals' fallback: white centre lines 3 / 6 in towns and 6 / 12 out of them (or yellow where the country paints
 # them yellow), lanes 3 / 9
 _WHITE = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.15, edge_motorway=0.20,
                centre_rural=(6.0, 12.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 9.0),
                lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
-_YELLOW = _WHITE._replace(centre="line_yellow")
+_YELLOW = _WHITE._replace(centre="line_yellow", double_barrier=True, double_multilane=True)   # fork: (was hard-coded)
 
 STYLES = {"US": _US, "CA": _CA, "GB": _GB, "IE": _GB, "IM": _GB, "JE": _GB, "GG": _GB, "DE": _DE, "AT": _DE,
-          "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _AU,
+          "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _NZ,
           "SE": _SE}
 # where centre lines are yellow (outside the US and Canada): the Americas, Norway, Finland, South Korea, China, Taiwan,
 # Thailand (research table 4.4)
@@ -117,6 +129,24 @@ def _no_change(a, b):
     return a in ("no", "not_right", "only_left") or b in ("no", "not_left", "only_right")
 
 
+_BUS_LANE = {"designated", "yes"}
+
+
+def _bus_flags(osm, n, *keys):
+    """Which of n lanes (left to right in their travel direction) are bus lanes, from the first of keys whose value
+    has n entries (bus:lanes / psv:lanes, designated or yes), else None."""
+    for key in keys:
+        vals = _vals(osm.get(key))
+        if vals is not None and len(vals) == n:
+            return [v.lower() in _BUS_LANE for v in vals]
+    return None
+
+
+def _bus_boundary(flags, a, b):
+    """A solid line where a bus lane meets a general lane (the two flags differ)."""
+    return flags is not None and bool(flags[a]) != bool(flags[b])
+
+
 def lane_plan(osm, two_way, drive, lanes, left_hand=False):
     """The lines across a carriageway from OpenStreetMap's lane tags (osm: {key: value} of railtags.LANE_COLUMNS, may
     be empty): [(offset m, left of the line's direction, positive left; role, solid)]. role: "centre" (between the
@@ -130,10 +160,12 @@ def lane_plan(osm, two_way, drive, lanes, left_hand=False):
     if not two_way:
         n = lanes
         ch = _vals(osm.get("change:lanes"))
+        bus = _bus_flags(osm, n, "bus:lanes", "psv:lanes")
         lw = drive / max(n, 1)
         out = []
         for k in range(1, n):
-            solid = ch is not None and len(ch) == n and _no_change(ch[k - 1], ch[k])
+            solid = (ch is not None and len(ch) == n and _no_change(ch[k - 1], ch[k])
+                     or _bus_boundary(bus, k - 1, k))
             # lanes left to right in travel: lane k's left edge at -drive/2 + k * lw from the right? (offsets are left
             # positive: the leftmost lane starts at +drive/2)
             out.append((drive / 2 - k * lw, "lane", solid))
@@ -154,12 +186,16 @@ def lane_plan(osm, two_way, drive, lanes, left_hand=False):
     left_n, right_n = (bwd, fwd) if not left_hand else (fwd, bwd)
     out = []
     edge = drive / 2
-    ch_l = _vals(osm.get("change:lanes:backward" if not left_hand else "change:lanes:forward"))
-    ch_r = _vals(osm.get("change:lanes:forward" if not left_hand else "change:lanes:backward"))
+    back, fore = ("backward", "forward") if not left_hand else ("forward", "backward")
+    ch_l = _vals(osm.get("change:lanes:" + back))
+    ch_r = _vals(osm.get("change:lanes:" + fore))
+    bus_l = _bus_flags(osm, left_n, "bus:lanes:" + back, "psv:lanes:" + back, "bus:lanes", "psv:lanes")
+    bus_r = _bus_flags(osm, right_n, "bus:lanes:" + fore, "psv:lanes:" + fore, "bus:lanes", "psv:lanes")
     # the left-side lanes (travel against the way in right-hand traffic: their left to right is the way's right to left)
     for k in range(1, left_n):
         off = edge - k * lw
-        solid = ch_l is not None and len(ch_l) == left_n and _no_change(ch_l[left_n - k - 1], ch_l[left_n - k])
+        solid = (ch_l is not None and len(ch_l) == left_n and _no_change(ch_l[left_n - k - 1], ch_l[left_n - k])
+                 or _bus_boundary(bus_l, left_n - k - 1, left_n - k))
         out.append((off, "lane", solid))
     c_left = edge - left_n * lw
     no_pass = osm.get("overtaking") == "no"
@@ -177,7 +213,8 @@ def lane_plan(osm, two_way, drive, lanes, left_hand=False):
     c_right = c_left - both * lw
     for k in range(1, right_n):
         off = c_right - k * lw
-        solid = ch_r is not None and len(ch_r) == right_n and _no_change(ch_r[k - 1], ch_r[k])
+        solid = (ch_r is not None and len(ch_r) == right_n and _no_change(ch_r[k - 1], ch_r[k])
+                 or _bus_boundary(bus_r, k - 1, k))
         out.append((off, "lane", solid))
     return out
 
@@ -284,6 +321,11 @@ CAR_ROOM_M = 5.0        # m from the line to a crossing behind it, for a car bet
                         # the crossing (VGU 2024 12.2.1.4.1, 12.2.1.4.2 råd, both lines)
 # M13: 0.40 m wide (TSFS 2010:171 4 kap. 4 §), at signals at least 2.0 m before a crossing (VGU 2024 K237740)
 M13_W, M13_SIGNAL_CROSSWALK_M = 0.40, 2.0
+# Germany (docs/research/2026-10-28-road-markings-standards.md 3.1): the Haltlinie Z 294 0.50 m wide (RMS 4.6), at a 206
+# (VwV-StVO zu Zeichen 206 Rn. 4); the Wartelinie Z 341 a Breitstrich 0.50 m wide, its dashes 0.50 m with 0.25 m gaps
+# (RMS 4.7.2), where a 205 stands (VwV-StVO zu Zeichen 341 Rn. 1)
+Z294_W = 0.50
+Z341_W, Z341_DASH, Z341_GAP = 0.50, 0.50, 0.25
 
 
 def _way_in(line, s, at, spec, left_hand):
@@ -311,11 +353,12 @@ def _past_crossing(along, st, crosswalks, spec, at, gap, room):
     return at
 
 
-def stop_lines(arms, crosswalks, mapped=None, left_hand=False):
+def stop_lines(arms, crosswalks, mapped=None, left_hand=False, w=M13_W):
     """(stop lines [{"a", "b", "w", "stop": True}], line cuts {fid: [(junction point, u, m along)]}) of arms [(fid, spec,
     centreline from the junction, half the crossing road's width, what)] (furniture.give_way_arms): M13 across the lanes
     coming in, where the map has it (mapped: (n, 2), secrossings.nodes) or else at least 1.0 m from the crossing road's
-    edge (VGU 2024 12.2.1.4.1), and at signals before any crossing. The road's lines end at it."""
+    edge (VGU 2024 12.2.1.4.1), and at signals before any crossing. The road's lines end at it. w: the line's width
+    (Germany's Haltlinie: Z294_W)."""
     import furniture
     out, cuts = [], {}
     for fid, spec, line, wide, what in arms:
@@ -338,9 +381,35 @@ def stop_lines(arms, crosswalks, mapped=None, left_hand=False):
         if at + 2.0 > s[-1]:
             continue                        # (a stub: nowhere to stop)
         c, _, n, (lo, hi) = _way_in(line, s, at, spec, left_hand)
-        out.append({"a": np.r_[c[:2] + n * lo, c[2]], "b": np.r_[c[:2] + n * hi, c[2]], "w": M13_W, "stop": True})
+        out.append({"a": np.r_[c[:2] + n * lo, c[2]], "b": np.r_[c[:2] + n * hi, c[2]], "w": w, "stop": True})
         u = (along[1, :2] - along[0, :2]) if len(along) > 1 else line[1, :2] - line[0, :2]
         cuts.setdefault(fid, []).append((line[0, :2].copy(), u / max(float(np.hypot(*u)), 1e-6), at))
+    return out, cuts
+
+
+def wait_lines(arms, crosswalks, left_hand=False):
+    """(dashes [(4, 3) quads], line cuts {fid: [(junction point, u, m along)]}) of Germany's Wartelinie Z 341 on arms
+    [(fid, spec, centreline from the junction, half the crossing road's width)] (designs.line_arms: the 205 arms and a
+    roundabout's entries): where stop_lines stands a line (at least 1.0 m from the crossing road's edge, past a
+    crosswalk with no room for a car before it; a stub none), across the half coming in, whole 0.50 m dashes 0.25 m
+    apart (markings.dashes) in the middle of it, each Z341_W wide. The road's lines end at it, as at a stop line."""
+    import furniture
+    lines, cuts = stop_lines([(fid, spec, line, wide, furniture.G_STOP) for fid, spec, line, wide in arms], crosswalks,
+                             None, left_hand, Z341_W)
+    pitch = Z341_DASH + Z341_GAP
+    out = []
+    for ln in lines:
+        a, b = np.asarray(ln["a"], np.float64), np.asarray(ln["b"], np.float64)
+        d = b - a
+        span = float(np.hypot(*d[:2]))
+        count = int((span + Z341_GAP) // pitch)
+        if count < 1:
+            continue
+        n = d / span                                        # (across the lane: d's z is 0)
+        t = np.array([-n[1], n[0], 0.0]) * Z341_W / 2      # (along the road: the Breitstrich's half width)
+        spare = (span - (count * pitch - Z341_GAP)) / 2
+        for p in dashes(np.stack([a + n * spare, b - n * spare]), (Z341_DASH, Z341_GAP)):
+            out.append(np.stack([p[0] + t, p[-1] + t, p[-1] - t, p[0] - t]))
     return out, cuts
 
 

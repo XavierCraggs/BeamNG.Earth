@@ -921,6 +921,25 @@ class RegionTest(unittest.TestCase):
 
     ROOF_EAST = rect("roof", 0.0, 22.0, 36.0, 8.0, cls="roof")
 
+    def test_oceania_kit(self):
+        # fork: Australia and New Zealand get West Coast's flat slab roof on pillars (the closest stock canopy to a servo's),
+        # with the same shapes and layout as "default"; no other region's style changes
+        for lat, lon in ((-27.4698, 153.0251), (-33.8688, 151.2093), (-36.85, 174.76)):     # Brisbane, Sydney, Auckland
+            self.assertEqual(gs.style_of(lat, lon), "oceania", (lat, lon))
+        self.assertEqual(gs.style_of(-37.81, 144.96), "oceania")        # Melbourne
+        self.assertEqual(gs.style_of(34.05, -118.24), "default")        # Los Angeles
+        self.assertEqual(gs.style_of(40.403093, -80.041343), "us_east")
+        self.assertEqual(gs.style_of(48.8566, 2.3522), "europe")
+        self.assertEqual(gs.style_shapes("oceania"), gs.style_shapes("default"))
+        for blds in ([SHOP, self.ROOF_EAST], [SHOP]):
+            a = gs.layout(STATION, blds, ROAD, style=gs.style_of(-27.4698, 153.0251))
+            b = gs.layout(STATION, blds, ROAD, style="default")
+            self.assertEqual(a.props, b.props)
+            self.assertEqual(a.areas, b.areas)
+        names = {p["shape"].rsplit("/", 1)[-1] for p in a.props}
+        self.assertFalse([n for n in names if n.startswith(("italy_", "eca_"))], names)
+        self.assertIn("s_fuel_pump_2015.dae", names)
+
     def test_tile_sites_by_region(self):
         md = station_md()
         orig = gs.style_of
@@ -1199,6 +1218,29 @@ class TileTest(unittest.TestCase):
         self.assertEqual(recs1, [])
         self.assertIn("b-roof", skip1)
         json.dumps(recs)                                        # plain JSON
+
+    def test_tile_sites_reports_tried(self):
+        # (the station finder, the user 2026-11-09: a listing the world built nothing for leaves the map) the stations
+        # the tile owns, each with whether it was laid out; the records the same as without the report
+        md = station_md()
+        md.all["places"] = feats("places", [
+            ("pla-1", (240.0, 100.0), {"basic_category": "gas_station", "name": "Speedway", "operating_status": "open"}),
+            ("pla-2", (60.0, 200.0), {"basic_category": "gas_station", "name": "Sunoco", "operating_status": "open"})],
+            mg.POINT)
+        tried = []
+        recs, skip = gs.tile_sites(FRAME, 0, 0, md, flat, tried=tried)
+        self.assertEqual((recs, skip), gs.tile_sites(FRAME, 0, 0, md, flat))
+        got = sorted((k, round(la, 4), round(lo, 4), laid) for k, la, lo, laid in tried)
+        want = []
+        for x, y, laid in ((240.0, 100.0, True), (60.0, 200.0, False)):
+            la, lo, _ = FRAME.enu_to_geodetic(x, y, 0.0)
+            want.append(("fuel", round(float(la), 4), round(float(lo), 4), laid))
+        self.assertEqual(got, sorted(want))
+
+    def test_tile_sites_tried_owned_only(self):
+        tried = []
+        gs.tile_sites(FRAME, 1, 0, station_md(), flat, tried=tried)    # (the station's pin is tile (0, 0)'s)
+        self.assertEqual(tried, [])
 
     def test_tile_sites_walk_cuts(self):
         md = station_md()

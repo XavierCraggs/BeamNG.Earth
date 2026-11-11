@@ -63,10 +63,12 @@ class WordingTest(unittest.TestCase):
 
     def test_elevation_and_weather(self):
         self.assertEqual(set(credits.ELEVATION), {demmod.MAPTERHORN["name"], demmod.AWS["name"], polardem.SOURCE,
-                                                  "lidarbc", "hrdem"})
+                                                  "lidarbc", "hrdem", "hkdtm"})
         # the open government licences' required wording ("Contains information licensed under ...")
         self.assertIn("Open Government Licence - British Columbia", credits.ELEVATION["lidarbc"])
         self.assertIn("Open Government Licence - Canada", credits.ELEVATION["hrdem"])
+        self.assertIn("(c) Government of the Hong Kong SAR, from DATA.GOV.HK and the CSDI Portal",
+                      credits.ELEVATION["hkdtm"])
         self.assertIn("mapterhorn.com/attribution", credits.ELEVATION["mapterhorn"])
         # the Copernicus DEM's required wording (its licence)
         self.assertIn("provided under COPERNICUS by the European Union and ESA", credits.ELEVATION[polardem.SOURCE])
@@ -109,6 +111,15 @@ class WordingTest(unittest.TestCase):
         self.assertIn(f'"{weather.CREDIT}"', text)
         for name in (demmod.MAPTERHORN["name"], demmod.AWS["name"]):
             self.assertIn(credits.ELEVATION[name], earthd.ELEVATION_CREDIT, name)
+
+    def test_nvis_credit(self):
+        """fork: the NVIS vegetation credit (Australia's palettes): in the overlay's Vegetation group, worded as CREDITS.md lists it."""
+        self.assertIn("veg:nvis", credits.ORDER)
+        self.assertEqual(credits.line({"veg:nvis"}), "Vegetation: NVIS 7.0 (DCCEEW, CC BY 4.0)")
+        full = credits.full_label("veg:nvis")
+        self.assertIn("resampled", full)
+        text = (Path(__file__).resolve().parents[2] / "CREDITS.md").read_text(encoding="utf-8")
+        self.assertIn(f'"Vegetation: {full}"', text)
 
     def test_ascii_only(self):
         """The game's UI font lacks most non-ASCII glyphs (the settings page found it): the overlay
@@ -520,7 +531,9 @@ class SessionCreditsTest(test_server.ServerHarness):
         self.assertEqual([x["type"] for x in before if x["type"] == "hello"], ["hello"])
         # the player 50 km east: only AWS under the near tiles once the far field there is in
         self.pose(aid, 50000, 0)
-        _, moving = c.until(lambda m: m["type"] == "far_done", 120)
+        # (300 s: the whole far field of a new place, built beside the gate's other test servers; it ran out at 120 s
+        # in three parallel gates of 2026-11-08 and passed alone each time)
+        _, moving = c.until(lambda m: m["type"] == "far_done", 300)
         self.pose(aid, 50000, 0)
         later = self.credits_msgs(moving + c.drain(3 * self.INTERVAL))
         self.assertTrue(later)

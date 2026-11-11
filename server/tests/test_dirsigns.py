@@ -1,6 +1,7 @@
 """Direction signs (dirsigns.py, earthfast dirsign_place / dirsign_face / dirsign_mesh): where the boards stand, what
 they name, how a face is drawn."""
 import json
+import math
 import os
 import shutil
 import struct
@@ -192,6 +193,61 @@ class RepeatTest(unittest.TestCase):
         self.assertTrue(any(x[3] > 0.9 for x in b) or any(x[3] < -0.9 for x in b), "boards for the crossing roads too")
 
 
+@unittest.skipUnless(HAVE, "earthfast with the direction-sign kernels")
+class CityTest(unittest.TestCase):
+    """In a town a board stands only where one is needed: at an interchange, a way out of the built-up land, a fork of
+    numbered routes or a turn; not at every crossing of two main streets (the user, 2026-11-07)."""
+
+    def setUp(self):
+        self.places = place_array([(30000, 0, 20000, 1), (0, 80000, 500000, 2)])
+
+    @staticmethod
+    def junction(urban=True, link_n=False, out_e=False):
+        return {"w": row([(-1500, 0), (0, 0)], ends=("w", "j"), urban=urban),
+                "e": row([(0, 0), (1500, 0)], ends=("j", "e"), urban=urban and not out_e),
+                "n": row([(0, 0), (0, 1500)], ends=("j", "n"), urban=urban, link=link_n)}
+
+    @staticmethod
+    def west_boards(b):
+        return [x for x in b if x[2] > 0.9 and x[0] < 0]        # (travelling east: from the west arm)
+
+    def test_a_plain_crossing_of_main_streets_has_no_board_in_town(self):
+        b, _, _ = boards(self.junction(), self.places)
+        self.assertEqual(len(b), 0)
+
+    def test_the_same_junction_outside_town_still_has_its_board(self):
+        b, _, _ = boards(self.junction(urban=False), self.places)
+        self.assertGreaterEqual(len(self.west_boards(b)), 1)
+
+    def test_an_interchange_has_a_board(self):
+        b, _, _ = boards(self.junction(link_n=True), self.places)
+        self.assertGreaterEqual(len(self.west_boards(b)), 1)
+
+    def test_a_way_out_of_town_has_a_board_and_it_is_a_town_board(self):
+        b, _, _ = boards(self.junction(out_e=True), self.places)
+        west = self.west_boards(b)
+        self.assertGreaterEqual(len(west), 1)
+        self.assertAlmostEqual(west[0][6], 1.0)                 # urban
+        self.assertAlmostEqual(west[0][7], 0.0)                 # size class 0: town
+
+    def test_a_fork_of_numbered_routes_has_a_board(self):
+        routes = {"e": [("ua:national", "H-01", 0.0, 1.0)], "n": [("ua:regional", "P-10", 0.0, 1.0)]}
+        b, _, _ = boards(self.junction(), self.places, routes=routes)
+        self.assertGreaterEqual(len(self.west_boards(b)), 1)
+
+    def test_two_boards_for_one_way_are_far_apart_in_town(self):
+        roads = {}
+        for i, x in enumerate((-1500, -1200, -900)):            # three ways out 300 m apart on one street going east
+            roads[f"m{i}"] = row([(x, 0), (x + 300, 0)], ends=(f"j{i}", f"j{i + 1}"), urban=True)
+            roads[f"o{i}"] = row([(x + 300, 0), (x + 300, 800)], ends=(f"j{i + 1}", f"o{i}"), urban=False)
+            roads[f"s{i}"] = row([(x + 300, -800), (x + 300, 0)], ends=(f"s{i}", f"j{i + 1}"), urban=False)
+        roads["tail"] = row([(-2600, 0), (-1500, 0)], ends=("tail", "j0"), urban=True)
+        b, _, _ = boards(roads, self.places)
+        east = [x for x in b if x[2] > 0.9 and -20 < x[1] < 20]
+        xs = sorted(x[0] for x in east)
+        self.assertTrue(all(b2 - a2 >= 590 for a2, b2 in zip(xs, xs[1:])), f"too close: {xs}")
+
+
 class ContentTest(unittest.TestCase):
     def setUp(self):
         doc = {"places": [
@@ -231,6 +287,19 @@ class ContentTest(unittest.TestCase):
         self.assertIsNone(dirsigns._row_content(self.st["countries"]["UA"], row, dirsigns.RouteTable(), self.pl, 1.25,
                                                 self.st["distance_round"], True))
 
+    def test_an_au_board_row_has_the_m1_marker_and_the_one_name_in_green_and_white(self):
+        """fork: a board towards Brisbane on the M1: the alphanumeric marker, the name once (no English line), km."""
+        pl = dirsigns.Places({"places": [
+            {"id": "b", "cc": "AU", "class": "city", "pop": 2287896, "name": "Brisbane", "en": "", "lat": -27.47, "lon": 153.03},
+            {"id": "g", "cc": "AU", "class": "city", "pop": 607665, "name": "Gold Coast", "en": "", "lat": -28.0, "lon": 153.4}]})
+        table = dirsigns.RouteTable()
+        m1 = table.id("au:qld", "M1")
+        row = [0, 0.0, m1, -1, -1, 0, 24000.0, 1, 60000.0, 5, 0]
+        au = self.st["countries"]["AU"]
+        turn, marks, dests = dirsigns._row_content(au, row, table, pl, 1.25, self.st["distance_round"], True)
+        self.assertEqual(marks, [(0, "a", "M1")])
+        self.assertEqual(dests, [("Brisbane", "", "30"), ("Gold Coast", "", "75")])
+
     def test_a_board_names_the_best_class_and_the_european_road(self):
         marks = [(0, "m", "M-19"), (3, "t", "T-03-11"), (4, "e", "E 85")]
         self.assertEqual(dirsigns.best_plates(marks), [(0, "m", "M-19"), (4, "e", "E 85")])
@@ -254,6 +323,27 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(dirsigns.plate_for(st["CZ"], "cz:national", "35")[1], "i")
         self.assertEqual(dirsigns.plate_for(st["DE"], "", "L 3016")[1], "l")
         self.assertIsNone(dirsigns.plate_for(st["DE"], "", "XYZ"))
+
+    def test_au_routes_become_plates_as_overtures_queensland_networks_carry_them(self):
+        """fork: the networks and refs probed in Overture release 2026-10-21.0 over south-east Queensland."""
+        au = dirsigns.styles()["countries"]["AU"]
+        for network, ref, plate in (("au:qld", "M1", "a"), ("au:nsw", "M1", "a"), ("au:qld:nr", "13", "n"),
+                                    ("au:qld:s", "95", "s"), ("au:qld:t", "8", "t")):
+            self.assertEqual(dirsigns.plate_for(au, network, ref)[1], plate, (network, ref))
+        self.assertIsNone(dirsigns.plate_for(au, "au:qld:sstr", "ACW"), "a text ref has no plate")
+        self.assertIsNone(dirsigns.plate_for(au, "au:qld", "Bruce"), "only M/A/B and a number is a marker")
+        # M1 outranks the State Route of the same carriageway on a board (best class first)
+        marks = sorted({(dirsigns.plate_for(au, n, r)[0], dirsigns.plate_for(au, n, r)[1], r)
+                        for n, r in (("au:qld:s", "95"), ("au:qld", "M1"))})
+        self.assertEqual(dirsigns.best_plates(marks), [(0, "a", "M1")])
+
+    def test_au_places_are_in_the_snapshot_and_have_no_second_line(self):
+        pl = dirsigns.places()
+        for name in ("Brisbane", "Gold Coast", "Toowoomba"):
+            self.assertTrue(any(n == name and c == "AU" for n, c in zip(pl.names, pl.cc)), name)
+        au = [e for e, c in zip(pl.en, pl.cc) if c == "AU"]
+        self.assertEqual(set(au), {""}, "English is the local language: no doubled names")
+        self.assertIn("Ковель", pl.names, "the upstream places are still there")
 
     def test_parse_routes(self):
         self.assertEqual(dirsigns.parse_routes("ua:international|М-07|0.19|1.0;e-road|E 373|0.0|1.0"),
@@ -322,6 +412,120 @@ class FaceTest(unittest.TestCase):
         self.assertTrue(np.isfinite(p).all())
         self.assertLessEqual(float(p[:, 2].min()), -0.2, "the posts go into the ground")
         self.assertTrue(0.0 <= uv.min() and uv.max() <= 1.0)
+
+
+class PostedTextTest(unittest.TestCase):
+    """fork: the AU link roads' posted text (tools/build_dests_au.py, dirsigns.Dests / link_rows / _row_content link)."""
+
+    # the M1 exit ramp: leaves a motorway going north (compass 0) 14 deg to the right, curves on to 60 deg
+    def shard(self, rows):
+        doc = {"grid_deg": 0.01, "cells": {}}
+        for r in rows:
+            doc["cells"].setdefault(f"{math.floor(r[1] / 0.01)},{math.floor(r[2] / 0.01)}", []).append(r)
+        return dirsigns.Dests(doc)
+
+    LON, LAT = 153.096, -27.583
+
+    def link(self, way=1, bearing=(14, 60), dests=("Gold Coast",), refs=("M1",), streets=(), dlat=0.0, dlon=0.0):
+        return [way, self.LAT + dlat, self.LON + dlon, bearing[0], bearing[1], list(dests), list(refs), list(streets)]
+
+    @staticmethod
+    def arm(bearing_enu, routes=(-1, -1, -1)):
+        return [0, float(bearing_enu), *routes, 0, 12000.0, -1, 0.0, 5, 0]
+
+    def test_the_committed_shard_is_the_one_that_was_checked_and_has_the_m1_exit_to_the_gold_coast(self):
+        d = dirsigns.dests()
+        self.assertGreater(sum(len(r) for r in d.cells.values()), 2000)
+        # way 5135872 (OSM, 2026-11-07): the M1 Pacific Motorway link to the Gold Coast
+        rows = [r for rs in d.cells.values() for r in rs if r[0] == 5135872]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][5:], [["Gold Coast"], ["M1"], ["Pacific Motorway"]])
+        near = d.near(rows[0][2], rows[0][1], 5.0)
+        self.assertEqual(near[0][0], 5135872)
+        self.assertEqual(d.near(0.0, 0.0, 1000.0), [], "nowhere near")
+
+    def test_an_arm_that_is_a_link_gets_its_posted_text_the_road_going_on_does_not(self):
+        shard = self.shard([self.link()])
+        north = 90.0                                        # (the approach goes north: compass 0 is ENU 90)
+        straight, ramp = self.arm(north), self.arm(90.0 - 40.0)    # the ramp's walked chord: compass 40
+        got = dirsigns.link_rows(shard, self.LON, self.LAT, north, [straight, ramp])
+        self.assertEqual(list(got), [1], "only the ramp's arm")
+        self.assertEqual(got[1][0], 1)
+        # (the ramp's arm is not a row of the board: the road going on must not take its text)
+        self.assertEqual(dirsigns.link_rows(shard, self.LON, self.LAT, north, [straight]), {})
+
+    def test_a_link_elsewhere_or_going_another_way_is_not_the_arm(self):
+        north = 90.0
+        ramp = self.arm(90.0 - 40.0)
+        far = self.shard([self.link(dlat=0.001)])            # 111 m on
+        self.assertEqual(dirsigns.link_rows(far, self.LON, self.LAT, north, [ramp]), {})
+        back = self.shard([self.link(bearing=(200, 220))])   # leaves to the south west
+        self.assertEqual(dirsigns.link_rows(back, self.LON, self.LAT, north, [ramp]), {})
+
+    def test_two_links_go_to_two_arms_each_once(self):
+        shard = self.shard([self.link(way=1, bearing=(10, 40), dests=("Gold Coast",)),
+                            self.link(way=2, bearing=(350, 320), dests=("Brisbane",), refs=("M3",), dlat=0.00005)])
+        north = 90.0
+        left, right = self.arm(90.0 + 40.0), self.arm(90.0 - 40.0)
+        got = dirsigns.link_rows(shard, self.LON, self.LAT, north, [left, right])
+        self.assertEqual({i: r[0] for i, r in got.items()}, {0: 2, 1: 1})
+
+    def test_a_row_says_the_posted_destinations_and_route_refs_without_distances_at_most_three(self):
+        st = dirsigns.styles()["countries"]["AU"]
+        pl = dirsigns.Places({"places": [{"id": "b", "cc": "AU", "class": "city", "pop": 2287896, "name": "Brisbane",
+                                          "en": "", "lat": -27.47, "lon": 153.03}]})
+        table = dirsigns.RouteTable()
+        row = self.arm(50.0, (table.id("au:qld:s", "13"), -1, -1))
+        link = self.link(dests=("Logan", "Gold Coast", "Tugun", "Currumbin"), refs=("M3", "M1", "2"))
+        turn, marks, dests = dirsigns._row_content(st, row, table, pl, 1.25, dirsigns.styles()["distance_round"], True, link=link)
+        self.assertEqual(dests, [("Logan", "", ""), ("Gold Coast", "", ""), ("Tugun", "", "")])
+        self.assertEqual([m[2] for m in marks], ["M1", "M3"], "the best class of the road: the State Route is left off")
+        self.assertEqual([m[1] for m in marks], ["a", "a"], "alphanumeric routes: gold on green")
+        self.assertEqual(dirsigns.posted_marks(st, ["2"]), [(4, "s", "2")], "a bare number is a State Route")
+        # no destination: the street names; neither: the guess; a ref only: the kernel's places under the posted plate
+        _, _, by_street = dirsigns._row_content(st, row, table, pl, 1.25, dirsigns.styles()["distance_round"], True,
+                                                link=self.link(dests=(), streets=("Pacific Motorway",)))
+        self.assertEqual(by_street, [("Pacific Motorway", "", "")])
+        _, m2, guess = dirsigns._row_content(st, row, table, pl, 1.25, dirsigns.styles()["distance_round"], True,
+                                             link=self.link(dests=(), refs=("A3",)))
+        self.assertEqual(guess, [("Brisbane", "", "15")])
+        self.assertEqual([m[2] for m in m2], ["A3"])
+
+    def test_without_a_link_a_row_is_what_it_was(self):
+        st = dirsigns.styles()["countries"]["AU"]
+        pl = dirsigns.Places({"places": [{"id": "b", "cc": "AU", "class": "city", "pop": 2287896, "name": "Brisbane",
+                                          "en": "", "lat": -27.47, "lon": 153.03}]})
+        table = dirsigns.RouteTable()
+        m1 = table.id("au:qld", "M1")
+        row = [0, 0.0, m1, -1, -1, 0, 24000.0, -1, 0.0, 5, 0]
+        args = (st, row, table, pl, 1.25, dirsigns.styles()["distance_round"], True)
+        self.assertEqual(dirsigns._row_content(*args), dirsigns._row_content(*args, link=None))
+        self.assertEqual(dirsigns._row_content(*args), (0, [(0, "a", "M1")], [("Brisbane", "", "30")]))
+
+    def test_a_missing_shard_is_an_empty_one_the_places_stay(self):
+        saved = dirsigns.DESTS_FILE
+        try:
+            dirsigns.DESTS_FILE = os.path.join(tempfile.gettempdir(), "no_such_dests_au.json.gz")
+            dirsigns.dests.cache_clear()
+            with self.assertLogs("earthd.dirsigns", "WARNING"):
+                self.assertEqual(dirsigns.dests().near(self.LON, self.LAT, 1e6), [])
+        finally:
+            dirsigns.DESTS_FILE = saved
+            dirsigns.dests.cache_clear()
+
+    @unittest.skipUnless(HAVE, "earthfast with the direction-sign kernels")
+    def test_a_face_of_rows_with_and_without_distances_is_drawn(self):
+        d = tempfile.mkdtemp(prefix="bne_dirsigns_test_")
+        try:
+            dirsigns._set_fonts()
+            st = dirsigns.styles()
+            content = [(0, [("a", "M1")], [("Gold Coast", "", ""), ("Tugun", "", "")]),
+                       (1, [], [("Brisbane", "", "30")])]
+            name, _tex, w, h = dirsigns._face(d, "vfs", st["countries"]["AU"], ["a"], "freeway", content, st["face"])
+            self.assertTrue(os.path.exists(os.path.join(d, name + ".dds")))
+            self.assertTrue(w > 1.0 and h > 0.5)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

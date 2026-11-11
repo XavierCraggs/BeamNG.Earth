@@ -305,3 +305,169 @@ def inner_sides(found):
 def in_island(found, p):
     """Is point p (x, y) inside one of the loops?"""
     return any(_inside(f["poly"], p) for f in found)
+
+
+# fork: Australia's roundabout centres: mown grass (surface.py fills the ground), with a small garden on it, a few low
+# shrubs among them and, on a bigger island, one small street tree (Brisbane's roundabouts: couch lawn, native shrubs and
+# a few small trees, no bare earth). Rows [group, x, y, z, yaw, scale, height, rank] like the street furniture's.
+GARDEN_MIN_RADIUS_M = 2.5       # an island this small (the nearest curb to its centre) keeps its grass bare
+GARDEN_TREE_RADIUS_M = 4.0      # ... and one this big has a small tree
+GARDEN_M2_PER_SHRUB = 18.0      # one shrub per this much island
+GARDEN_MAX_SHRUBS = 12
+GARDEN_SHRUB_H = (0.7, 1.4)     # m
+GARDEN_TREE_H = (4.0, 5.5)      # m (the stock "deciduous" group's nearest model, scaled)
+GARDEN_EDGE_M = 1.4             # m kept clear of the curb (the sight lines and the verge's mowing)
+GARDEN_APART_M = 1.7            # m between plants
+
+
+def _h01(*vals):
+    import hashlib
+    h = hashlib.blake2b(repr(vals).encode(), digest_size=8).digest()
+    return int.from_bytes(h, "little") / 2.0 ** 64
+
+
+def au_garden_rows(found, box, ground=None, own=None):
+    """fork: Prop rows of the gardens of the roundabouts among found (find's result) whose points lie in box (the tile's
+    own: own(box, x, y) -> bool, else a half-open box test). ground(x (n,), y (n,)) -> z (n,): the drawn ground, else
+    each island's mean level. Deterministic: each island's plants are keyed on where its centre is (to the metre), so
+    every tile that finds the loop makes the same ones and the tile that owns a plant's point adds it. Pure."""
+    rows = []
+    for f in found:
+        ring = f.get("ring")
+        if not f.get("round") or ring is None or len(ring) < 8:
+            continue
+        xy = np.asarray(ring, np.float64)[:, :2]
+        c = xy.mean(0)
+        r_in = float(np.min(np.hypot(*(xy - c).T)))
+        if r_in < GARDEN_MIN_RADIUS_M:
+            continue
+        area = abs(_area(xy))
+        key = (round(float(c[0])), round(float(c[1])))
+        plants = []                         # (group, x, y, height)
+        tree = r_in >= GARDEN_TREE_RADIUS_M
+        if tree:
+            a, d = _h01(key, "tree a") * 2 * math.pi, _h01(key, "tree d") * 0.2 * r_in
+            plants.append(("deciduous", float(c[0] + d * math.cos(a)), float(c[1] + d * math.sin(a)),
+                           GARDEN_TREE_H[0] + (GARDEN_TREE_H[1] - GARDEN_TREE_H[0]) * _h01(key, "tree h")))
+        want = int(min(GARDEN_MAX_SHRUBS, max(3, area / GARDEN_M2_PER_SHRUB))) + (1 if tree else 0)
+        reach = r_in - GARDEN_EDGE_M
+        for k in range(want * 6):           # a hashed scatter inside the curb, thinned to a minimum spacing
+            if len(plants) >= want:
+                break
+            a = _h01(key, "a", k) * 2 * math.pi
+            d = reach * math.sqrt(_h01(key, "d", k))
+            x, y = float(c[0] + d * math.cos(a)), float(c[1] + d * math.sin(a))
+            if any(math.hypot(x - p[1], y - p[2]) < GARDEN_APART_M for p in plants):
+                continue
+            h = GARDEN_SHRUB_H[0] + (GARDEN_SHRUB_H[1] - GARDEN_SHRUB_H[0]) * _h01(key, "h", k)
+            plants.append(("shrub", x, y, h))
+        z0 = float(np.mean(np.asarray(ring, np.float64)[:, 2]))
+        for k, (group, x, y, h) in enumerate(plants):
+            if own is not None:
+                if not own(box, x, y):
+                    continue
+            elif not (box[0] <= x < box[2] and box[1] <= y < box[3]):
+                continue
+            z = float(ground(np.array([x]), np.array([y]))[0]) if ground is not None else z0
+            if not math.isfinite(z):
+                z = z0
+            rows.append([group, round(x, 2), round(y, 2), round(z, 2), round(_h01(key, "yaw", k) * 360.0, 1), 1.0,
+                         round(h, 2), round(_h01(key, "rank", k), 3)])
+    return rows
+def _splitter_flow(point, into, lanes):
+    """A keep-right marker needs opposing traffic, with the incoming lane to its right."""
+    import furniture
+
+    left = np.array([-into[1], into[0]])
+    sides = set()
+    for spec, line in lanes:
+        q, tangent = furniture._at(line, furniture._project(line, point[None]))
+        delta = q[0, :2] - point
+        gap = np.linalg.norm(delta) - spec.width / 2
+        across = float(delta @ left)
+        if not .32 <= gap <= 7. or abs(across) <= .6:
+            continue
+        side = 1 if across > 0 else -1
+        forward = float(tangent[0] @ into)
+        if (spec.oneway and -side * forward * (spec.dir or 1) >= .48
+                or not spec.oneway and abs(forward) >= .65):
+            sides.add(side)
+    return len(sides) == 2
+
+
+def _splitter_noses(ring):
+    """A point inside each end of the raised curb and its inward approach axis."""
+    xy = ring[:, :2]
+    _, _, axes = np.linalg.svd(xy - xy.mean(axis=0), full_matrices=False)
+    along, across = (xy @ axes.T).T
+    if not 4. <= np.ptp(along) <= 115. or not .85 <= np.ptp(across) <= 16.:
+        return
+    for sign in (1, -1):
+        signed = sign * along
+        next_s = np.roll(signed, -1)
+        for depth in (.9, 1.5, 2.4, 3.2):
+            level = signed.min() + depth
+            cross = (signed <= level) != (next_s <= level)
+            u = (level - signed[cross]) / (next_s[cross] - signed[cross])
+            meets = across[cross] + u * (np.roll(across, -1)[cross] - across[cross])
+            if len(meets) == 2 and np.ptp(meets) >= .82:
+                yield np.array([sign * level, meets.mean()]) @ axes, sign * axes[0]
+                break
+
+
+def splitter_heads(found, runs, roads_list, box):
+    """Positions and approach axes for raised traffic separators, owned once per tile."""
+    import furniture
+    import geotiles
+    import roads
+
+    local = {"primary", "secondary", "tertiary", "unclassified", "residential", "living_street"}
+    streets = {fid: (spec, line) for fid, spec, line, _ in roads_list if spec.kind == "paved" and spec.cls in local}
+    if len(streets) < 2:
+        return []
+    bounds = roads._blocker_segments([(line[:, :2], max(.2, spec.width / 2 + .23))
+                                      for _, spec, line, _ in roads_list])
+    from streetfront import _road_overlap
+
+    candidates = []
+    for f in found:
+        if f["round"] or f["ring"] is None:
+            continue
+        roadsides = [streets[fid] for fid in f["inner"] if fid in streets]
+        if len(roadsides) >= 2:
+            candidates.extend((p, d) for p, d in _splitter_noses(f["ring"]) if _splitter_flow(p, d, roadsides))
+    medians = [w for w in runs if w.get("median") and w["fid"] in streets]
+    for walk in medians:
+        spec, road = streets[walk["fid"]]
+        run = walk["pts"]
+        s = furniture._project(road, run[[0, -1], :2]) * (spec.dir or 1)
+        start = int(s[1] < s[0])
+        if walk["open"][start]:
+            continue
+        run = run if start == 0 else run[::-1]
+        if furniture._arclen(run)[-1] < 3.:
+            continue
+        p, into = furniture._at(run, np.array([1.4]))
+        p, into = p[0, :2], into[0]
+        # Both raised bands must start at this physical opening, rather than at a split in the map data.
+        for other in medians:
+            if walk["fid"] == other["fid"] or not any(
+                    not is_open and np.linalg.norm(end[:2] - run[0, :2]) <= 5.
+                    for end, is_open in zip(other["pts"][[0, -1]], other["open"])):
+                continue
+            q, _ = furniture._at(other["pts"], furniture._project(other["pts"], p[None]))
+            q = q[0, :2]
+            if .35 <= np.linalg.norm(p - q) <= 5.:
+                middle = (p + q) / 2
+                if _splitter_flow(middle, into, [streets[walk["fid"]], streets[other["fid"]]]):
+                    candidates.append((middle, into))
+    placed = []
+    for point, into in candidates:
+        if not geotiles.box_owns(box, *point):
+            continue
+        if any(np.linalg.norm(point - q) < 3. and float(into @ d) > .5 for q, d in placed):
+            continue
+        across = .29 * np.array([into[1], -into[0]])
+        if not _road_overlap(np.array([[point - across, point + across]]), bounds)[0]:
+            placed.append((point, into))
+    return placed

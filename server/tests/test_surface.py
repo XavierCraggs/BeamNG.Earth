@@ -27,7 +27,9 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(idx.tolist(), [[sf.DIRT, sf.GRASS, sf.DUSTY, sf.GRASS], [sf.DIRT, sf.DIRT, sf.LOOSE, sf.SNOW],
                                         [sf.MUD, sf.MUD, sf.MUD, sf.GRASS]])
         self.assertEqual(sf.MATERIALS[sf.DIRT], ("beamngEarthDirt", "DIRT"))
-        self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 1, "the default material goes last (ties pick the later layer)")
+        # fork: the default dirt is the last of the stock materials; RED_DIRT, CANE and DRY_LONG follow it (appended: no stock mask changes its name)
+        self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 4, "the default material goes last of the stock ones")
+        self.assertEqual((sf.RED_DIRT, sf.CANE, sf.DRY_LONG), (len(sf.MATERIALS) - 3, len(sf.MATERIALS) - 2, len(sf.MATERIALS) - 1))
 
     def test_unknown_class_is_dirt(self):
         self.assertEqual(sf.classify(np.array([[7, 255]], np.uint8), np.zeros((1, 2)), 2.0).tolist(), [[sf.DIRT, sf.DIRT]])
@@ -52,6 +54,19 @@ class ClassifyTest(unittest.TestCase):
         self.assertLess(moab, east - 0.05, "Moab: fewer (the photo decides in detail mode: photo_lawns)")
         grass = np.full((2, 2), 30, np.uint8)
         self.assertTrue((sf.classify(grass, np.zeros((2, 2)), 2.0, np.full((2, 2), 39.3), np.full((2, 2), -76.6)) == sf.GRASS).all())
+
+    def test_australian_towns_have_fewer_lawns(self):       # fork
+        def share(lat, lon):
+            la, lo = np.meshgrid(np.linspace(lat, lat + 0.02, 200), np.linspace(lon, lon + 0.02, 200))
+            idx = sf.classify(np.full(la.shape, 50, np.uint8), np.zeros(la.shape), 2.0, la, lo)
+            return float((idx == sf.LAWN).mean())
+        brisbane, longreach, townsville = share(-27.48, 153.00), share(-23.45, 144.25), share(-19.27, 146.80)
+        cairns, melbourne, baltimore = share(-16.93, 145.75), share(-37.82, 144.95), share(39.28, -76.60)
+        for name, v in (("Brisbane Cfa", brisbane), ("Longreach BSh", longreach), ("Townsville Aw", townsville)):
+            self.assertAlmostEqual(v, sf.LAWN_SHARE_AU, delta=0.08, msg=name)
+        self.assertGreater(cairns, 0.8, "Cairns (Af / Am) keeps the humid share")
+        self.assertGreater(melbourne, 0.8, "Melbourne (Cfb) keeps the humid share")
+        self.assertGreater(baltimore, 0.8, "outside Australia unchanged")
 
     def test_photo_lawns_only_where_the_photo_is_green(self):
         import tempfile
@@ -297,6 +312,9 @@ class ServerSurfaceTest(unittest.TestCase):
             lat = np.asarray(lat)
             return np.where(lat > LAT, 30, 40).astype(np.uint8), True
 
+        def block_classes(self, frame, cx, cy, lat, lon):
+            return self.classes(lat, lon)
+
         def roads(self, lat, lon):
             return [], True
 
@@ -507,8 +525,128 @@ class LotTest(unittest.TestCase):
                 return [[np.array([(a, c), (b, c), (b, d), (a, d), (a, c)])]]
         idx = np.full((50, 50), sf.DIRT, np.uint8)
         out = sf.paint_lots(idx, lat, lon, [Land()])
-        self.assertEqual(out[12, 12], sf.ASPHALT)
+        self.assertEqual(out[12, 12], sf.PAVERS, "no surface mapped: flat stone pavers")
         self.assertEqual(out[12, 37], sf.DIRT)
+
+    def _square(self, lat0, lon0, surface, holes=False):
+        lat = lat0 + np.arange(50)[:, None] * 2e-5 + np.zeros((1, 50))
+        lon = lon0 + np.arange(50)[None, :] * 2.6e-5 + np.zeros((50, 1))
+
+        class Land:
+            kind = np.array([3], np.uint8)
+            attrs = {"class": np.array(["plaza"], object), "subtype": np.array(["pedestrian"], object),
+                     "surface": np.array([surface], object)}
+
+            def __len__(self):
+                return 1
+
+            def parts(self, i):
+                a, b = lon0 + 5 * 2.6e-5, lon0 + 40 * 2.6e-5
+                c, d = lat0 + 5 * 2e-5, lat0 + 40 * 2e-5
+                outer = np.array([(a, c), (b, c), (b, d), (a, d), (a, c)])
+                if not holes:
+                    return [[outer]]
+                e, f = lon0 + 18 * 2.6e-5, lon0 + 26 * 2.6e-5
+                g, h = lat0 + 18 * 2e-5, lat0 + 26 * 2e-5
+                return [[outer, np.array([(e, g), (f, g), (f, h), (e, h), (e, g)])]]
+        return lat, lon, [Land()]
+
+    def test_square_by_its_surface(self):
+        """The user, 2026-11-11: "paint the plaza and apply a texture to it like the roads": each square's layer by its
+        mapped surface, its holes (a fountain, a lawn) left as they were."""
+        for lat0, lon0, surf, want in ((48.86, 2.32, "paving_stones", sf.PAVERS), (48.86, 2.32, "sett", sf.COBBLE),
+                                       (48.86, 2.32, "asphalt", sf.ASPHALT), (40.71, -74.01, "bricks", sf.BRICK)):
+            lat, lon, land = self._square(lat0, lon0, surf, holes=True)
+            idx = np.full((50, 50), sf.GRASS, np.uint8)
+            out = sf.paint_lots(idx, lat, lon, land)
+            self.assertEqual(out[10, 10], want, surf)
+            self.assertEqual(out[22, 22], sf.GRASS, "the hole")
+            self.assertEqual(out[45, 45], sf.GRASS)
+        lat, lon, land = self._square(48.86, 2.32, "sand")
+        self.assertEqual(sf.paint_lots(np.full((50, 50), sf.GRASS, np.uint8), lat, lon, land)[10, 10], sf.GRASS,
+                         "unpaved: the land cover")
+
+    def test_square_by_its_own_tags(self):
+        """surface:colour / paving_stones:material over the photo's vote and the surface rule (plazas.tag_look)."""
+        import json
+        for tags, want in (({"surface:colour": "red"}, sf.BRICK), ({"paving_stones:material": "concrete"}, sf.PAVERS),
+                           ({"colour": "#b04a3a"}, sf.BRICK), ({"colour": "#9a9a9a"}, sf.PAVERS), ({}, sf.PAVERS)):
+            lat, lon, land = self._square(48.86, 2.32, "paving_stones")
+            land[0].attrs["tags"] = np.array([json.dumps(tags)], object)
+            out = sf.paint_lots(np.full((50, 50), sf.DIRT, np.uint8), lat, lon, land,
+                                lambda rings: [(plazas_mod().BRICK, 1.2)] * len(rings))
+            self.assertEqual(out[10, 10], want, tags)
+
+    def test_us_square_by_the_photo(self):
+        """A US square mapped paving_stones: red brick where the photo shows red (us_looks), else grey pavers, also
+        without a photo."""
+        import plazas
+        lat, lon, land = self._square(40.71, -74.01, "paving_stones")
+        idx = np.full((50, 50), sf.DIRT, np.uint8)
+        self.assertEqual(sf.paint_lots(idx, lat, lon, land)[10, 10], sf.PAVERS, "no photo read: grey")
+        red = sf.paint_lots(idx, lat, lon, land, lambda rings: [(plazas.BRICK, plazas.BRICK_REPEAT_M)] * len(rings))
+        self.assertEqual(red[10, 10], sf.BRICK)
+        grey = sf.paint_lots(idx, lat, lon, land, lambda rings: [plazas.PAVERS] * len(rings))
+        self.assertEqual(grey[10, 10], sf.PAVERS)
+
+
+class IslandFillTest(unittest.TestCase):
+    def test_paved_island_left_to_its_photo(self):
+        """A roundabout footprint the photo shows paved (Baltimore's Washington Monument circle) is not grassed over;
+        a green one is."""
+        poly = [(20, 20), (80, 20), (80, 80), (20, 80)]
+        paved = np.full((100, 100, 3), (170, 165, 155), np.uint8)
+        self.assertTrue(np.array_equal(sf._fill_island_photos(paved, [poly]), paved))
+        grass = paved.copy()
+        grass[30:70, 30:70] = (70, 120, 50)
+        out = sf._fill_island_photos(grass, [poly])
+        self.assertGreater(int(out[25, 25, 1]) - int(out[25, 25, 0]), 20, "the island grassed over")
+
+
+class RoadToneTest(unittest.TestCase):
+    """The roads painted in the photo's own pavement tone (earthfast.paint_lines_toned; the user, 2026-11-11: "start
+    with 1")."""
+
+    def test_tone_from_the_photo_not_the_cars(self):
+        import fast
+        rgb = np.full((200, 200, 3), (60, 110, 50), np.uint8)              # grass
+        rgb[80:120, :] = (150, 148, 140)                                    # a pale concrete road across
+        rgb[95:105, 20:40] = (20, 20, 25)                                   # a black car on it
+        rgb[95:105, 120:126] = (250, 250, 250)                              # a marking
+        segs = np.array([[0.0, 100.0, 200.0, 100.0]])
+        cols = np.array([sf.PHOTO_ROAD_RGBA[k] for k in sf.PHOTO_ROAD_RGBA], np.float32)
+        tone = np.array([sf.PHOTO_ROAD_TONE[k] for k in sf.PHOTO_ROAD_RGBA], np.float32)
+        paved = np.array([list(sf.PHOTO_ROAD_RGBA).index("paved")], np.uint8)
+        out = fast._ef.paint_lines_toned(rgb, segs, np.array([18.0]), paved, cols, tone, 12,
+                                         sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT, sf.PHOTO_TONE_GREEN)
+        road = out[85:115, 5:195].reshape(-1, 3).astype(float)
+        flat = np.array(sf.PHOTO_ROAD_RGBA["paved"][:3])
+        self.assertGreater(road.mean(0)[0], flat[0] + 15, "lighter than the flat grey: the photo's concrete")
+        self.assertLess(road.std(0).max(), 6.0, "even: no car or marking left in it")
+        self.assertTrue((out[20, 20] == rgb[20, 20]).all(), "off the road: the photo")
+        lum = road @ [0.299, 0.587, 0.114]
+        self.assertLessEqual(lum.max(), sf.PHOTO_ROAD_TONE["paved"][1] + 1.0, "within the kind's range")
+        cover = np.zeros((200, 200), np.float32)                            # a lot: paint_cover_toned
+        cover[60:140, 60:140] = 1.0
+        lot = rgb.copy()
+        lot[60:140, 60:140] = (140, 138, 132)
+        lot[90:100, 70:80] = (15, 15, 20)                                   # a parked car
+        painted = fast._ef.paint_cover_toned(lot, cover, np.array(sf.PHOTO_ROAD_RGBA["paved"], np.float32),
+                                             np.array(sf.PHOTO_ROAD_TONE["paved"], np.float32), 12,
+                                             sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT, sf.PHOTO_TONE_GREEN)
+        inside = painted[65:135, 65:135].reshape(-1, 3).astype(float)
+        self.assertGreater(inside.mean(0)[0], flat[0] + 15, "the lot's own pale asphalt")
+        self.assertLess(inside.std(0).max(), 6.0, "no car left in it")
+        self.assertTrue((painted[20, 20] == lot[20, 20]).all())
+        bare = np.full((200, 200, 3), (60, 110, 50), np.uint8)              # no pavement in the photo: the flat colour
+        flat_out = fast._ef.paint_lines_toned(bare, segs, np.array([18.0]), paved, cols, tone, 12,
+                                              sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT, sf.PHOTO_TONE_GREEN)
+        self.assertTrue(np.allclose(flat_out[100, 100], flat, atol=1))
+
+
+def plazas_mod():
+    import plazas
+    return plazas
 
 
 class PhotoRoadsTest(unittest.TestCase):
@@ -786,6 +924,64 @@ class GolfSurfaceTest(unittest.TestCase):
         self.assertTrue(np.array_equal(out[40, 40], expect))
         self.assertTrue(np.array_equal(out[2, 2], [40, 40, 40]))
         self.assertTrue(np.array_equal(rgb[40, 40], [40, 40, 40]))
+
+
+class AustraliaGroundTest(unittest.TestCase):
+    """fork: red soils and sugarcane (surface.red_soil, au_ground, cane_belt, classify)."""
+
+    def grid(self, lat, lon, n=4):
+        la = np.full((n, n), lat)
+        lo = np.full((n, n), lon)
+        return la, lo
+
+    def test_cropland_is_cane_in_the_belt_only(self):
+        classes = np.full((4, 4), 40, np.uint8)
+        u = np.zeros((4, 4))
+        la, lo = self.grid(-21.14, 149.19)
+        self.assertTrue((sf.classify(classes, u, 2.0, la, lo) == sf.CANE).all())
+        la, lo = self.grid(-33.9, 151.2)
+        self.assertTrue((sf.classify(classes, u, 2.0, la, lo) == sf.DIRT).all())
+        la, lo = self.grid(36.5, -118.3)
+        self.assertTrue((sf.classify(classes, u, 2.0, la, lo) == sf.DIRT).all())
+        # grass in the belt is the cleared land's long dry grass (fork: veg_palettes "cleared")
+        la, lo = self.grid(-21.14, 149.19)
+        self.assertTrue((sf.classify(np.full((4, 4), 30, np.uint8), u, 2.0, la, lo) == sf.DRY_LONG).all())
+
+    def test_red_soil_inland_not_on_the_coast(self):
+        idx = np.full((4, 4), sf.DIRT, np.uint8)
+        la, lo = self.grid(-23.7, 133.9)        # Alice Springs: arid
+        self.assertTrue((sf.au_ground(idx, la, lo) == sf.RED_DIRT).all())
+        la, lo = self.grid(-27.47, 153.03)      # Brisbane: Cfa
+        self.assertIs(sf.au_ground(idx, la, lo), idx)
+        la, lo = self.grid(-20.7, 139.5)        # Mount Isa: dry
+        self.assertTrue((sf.au_ground(idx, la, lo) == sf.RED_DIRT).all())
+
+    def test_only_bare_ground_turns_red_and_nowhere_else(self):
+        la, lo = self.grid(-23.7, 133.9)
+        idx = np.array([[sf.GRASS, sf.ASPHALT, sf.DIRT, sf.LOOSE]] * 4, np.uint8)
+        out = sf.au_ground(idx, la, lo)
+        self.assertEqual(out[0].tolist(), [sf.GRASS, sf.ASPHALT, sf.RED_DIRT, sf.RED_DIRT])
+        la, lo = self.grid(36.5, -118.3)
+        self.assertIs(sf.au_ground(idx, la, lo), idx)
+        la, lo = self.grid(51.5, -0.1)
+        self.assertIs(sf.au_ground(idx, la, lo), idx)
+
+    def test_palette_ground_cover(self):
+        """fork: au_cover: the NVIS palette's ground on vegetated land (woodland: long dry grass, shrubland: dusty,
+        rainforest: none); other land covers, other countries and unclassified (cleared) land stay as classify made them."""
+        tree = np.full((4, 4), 10, np.uint8)
+        u = np.zeros((4, 4))
+        cases = (((-23.31, 150.60), sf.DRY_LONG), ((-23.70, 133.88), sf.DUSTY),      # Mt Archer (woodland), Alice Springs
+                 ((-16.17, 145.40), sf.DIRT), ((-23.38, 150.51), sf.DRY_LONG))   # + Rockhampton (cleared: grazing land)                                       # the Daintree: rainforest
+        for (lat, lon), want in cases:
+            la, lo = self.grid(lat, lon)
+            self.assertTrue((sf.classify(tree, u, 2.0, la, lo) == want).all(), (lat, lon))
+            built = sf.classify(np.full((4, 4), 50, np.uint8), u, 2.0, la, lo)
+            self.assertFalse(np.isin(built, (sf.DRY_LONG, sf.DUSTY)).any(), "built-up land keeps its own")
+        for lat, lon in ((36.5, -118.3), (51.5, -0.1)):        # the US, England
+            la, lo = self.grid(lat, lon)
+            self.assertTrue((sf.classify(tree, u, 2.0, la, lo) == sf.GRASS).all(), (lat, lon))
+        self.assertIn(sf.DRY_LONG, sf.VERGE_FROM)
 
 
 if __name__ == "__main__":

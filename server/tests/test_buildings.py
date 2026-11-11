@@ -59,13 +59,204 @@ class RegionStyleTest(unittest.TestCase):
         self.assertEqual(bld.region_style(40.42, -3.70).name, "mediterranean")
         self.assertEqual(bld.region_style(19.43, -99.13).name, "latin_america")
         self.assertEqual(bld.region_style(35.66, 139.70).name, "east_asia")
-        self.assertEqual(bld.region_style(-33.87, 151.21).name, "oceania")
+        self.assertEqual(bld.region_style(-33.87, 151.21).name, "australia_south")
         self.assertEqual(bld.region_style(30.9, 75.8).name, "south_asia")
         self.assertEqual(bld.region_style(0.0, 25.0).name, "warm")
         self.assertEqual(bld.region_style(19.7, 96.1).name, "warm", "Myanmar: not South Asia's style")
         self.assertEqual(bld.brick_share(39.29, -76.61), 0.75)      # the US as before
         self.assertEqual(bld.brick_share(30.0, -90.0), 0.35)
         self.assertEqual(bld.brick_share(40.0, -110.0), 0.15)
+
+    def test_queensland_region_and_the_rest_unchanged(self):     # fork
+        self.assertEqual(bld.region_style(-27.47, 153.02).name, "australia", "Brisbane")
+        self.assertEqual(bld.region_style(-16.92, 145.77).name, "australia", "Cairns")
+        self.assertEqual(bld.region_style(-19.26, 146.82).name, "australia", "Townsville")
+        self.assertEqual(bld.region_style(-28.0, 153.43).name, "australia", "Gold Coast")
+        self.assertEqual(bld.region_style(-12.46, 130.84).name, "australia", "Darwin")
+        self.assertEqual(bld.region_style(-33.87, 151.21).name, "australia_south", "Sydney")
+        self.assertEqual(bld.region_style(-37.81, 144.96).name, "australia_south", "Melbourne")
+        self.assertEqual(bld.region_style(-42.88, 147.33).name, "australia_south", "Hobart")
+        self.assertEqual(bld.region_style(-31.95, 115.86).name, "australia_west", "Perth")
+        self.assertEqual(bld.region_style(-41.29, 174.78).name, "oceania", "Wellington")
+        self.assertEqual(bld.region_style(-23.70, 133.88).name, "australia", "Alice Springs")
+        self.assertEqual(bld.region_style(-36.85, 174.76).name, "oceania", "Auckland")
+        self.assertEqual(bld.region_style(-9.44, 147.18).name, "warm", "Port Moresby: not Queensland")
+        self.assertEqual(bld.region_style(-10.31, 150.45).name, "oceania", "Milne Bay, PNG: as before, not Queensland")
+        # the shared tint tuples keep their length and order (styles, sheds and barns hash into them by position)
+        self.assertEqual(len(bld.ROOF_TINTS[bld.ROOF_METAL]), 5)
+        self.assertEqual(len(bld.ROOF_TINTS[bld.ROOF_SLATE]), 10)
+        self.assertEqual(len(bld.ROOF_TINTS[bld.ROOF_SHINGLE]), 8)
+        self.assertEqual(len(bld.ROOF_TINTS[bld.ROOF_FLAT]), 5)
+        self.assertEqual(len(bld.WALL_TINTS[bld.SIDING]), 9)
+        self.assertEqual(len(bld.WALL_TINTS[bld.STUCCO]), 11)
+        self.assertEqual(bld.ROOF_TINTS[bld.ROOF_METAL][:2], ((0.85, 0.86, 0.88), (0.55, 0.57, 0.60)))
+        self.assertEqual(bld.WALL_TINTS[bld.SIDING][-2:], ((0.62, 0.20, 0.17), (0.66, 0.24, 0.20)), "barn reds last")
+        self.assertEqual(bld.BRICK_TINTS, ("bne_bld_fac_white", "bne_bld_fac_brickdark", "bne_bld_fac_brickwarm"))
+        o = bld.STYLES["oceania"]
+        self.assertEqual((o.brick, o.walls, o.porch, o.flat, o.hipped, o.pitch, o.brick_house, o.brick_tints, o.looks),
+                         (0.55, ((bld.STUCCO, 0.5), (bld.SIDING, 0.3)), 0.25, 0.05, 0.7, 24.0, 0.35, None, None))
+
+    def test_queensland_houses(self):       # fork
+        hs = self.houses(-27.47, 153.02, n=1000)
+        self.assertTrue(all(h.pitch == 23.0 for h in hs))
+        pitched = [h for h in hs if h.roof != "flat"]
+        self.assertGreater(len(pitched), 0.95 * len(hs), "very few flat roofs")
+        hipped = sum(h.roof == "hipped" for h in pitched) / len(pitched)
+        self.assertAlmostEqual(hipped, 0.65, delta=0.07)
+        metal = sum(h.roof_mat.startswith(bld.ROOF_COLORBOND) for h in pitched) / len(pitched)
+        self.assertAlmostEqual(metal, 0.65, delta=0.08, msg="Colorbond ~65 %, the rest tile")
+        self.assertEqual(sum(h.roof_mat.startswith((bld.ROOF_COLORBOND, bld.ROOF_QTILE)) for h in pitched), len(pitched))
+        for h in hs:
+            for look in (h.roof_mat, h.facade, h.wall):
+                if look:
+                    self.assertIn(look, bld.LOOKS, "every colour the plan picks is a known look")
+        walls = [str(h.wall) for h in hs if h.wall]
+        self.assertTrue(any(w.startswith(f"{bld.SIDING}|q") for w in walls), "painted weatherboard")
+        self.assertTrue(any(w.startswith(bld.STUCCO) for w in walls), "render")
+        self.assertFalse(any(w.startswith(bld.SIDING) and "|q" not in w for w in walls), "no US siding colours, no barn red")
+        brick = sum(h.band is bld.BAND_BRICK for h in hs) / len(hs)
+        self.assertAlmostEqual(brick, 0.45, delta=0.07, msg="brick veneer ~45 % of detached houses")
+        self.assertTrue(all(str(h.facade).startswith("bne_bld_fac_qbrick") for h in hs if h.band is bld.BAND_BRICK))
+        porch = sum(bool(h.porch) for h in hs) / len(hs)
+        self.assertAlmostEqual(porch, 0.3, delta=0.06, msg="a modest share of verandahs (the porch)")
+        # the tints are multipliers: 0..1, the sheds' and barns' keep the shared ones
+        for k in (*[f"{bld.ROOF_COLORBOND}|q{i}" for i in range(13)], *[f"{bld.ROOF_QTILE}|q{i}" for i in range(4)]):
+            self.assertTrue(all(0.0 <= v <= 1.0 for v in bld.LOOKS[k][1]), k)
+        barn = bld.plan(rect(0, 0, 12, 20), {"class": "barn"}, lat=-27.47, lon=153.02)
+        self.assertNotIn("|q", barn.roof_mat)
+
+    def test_other_regions_roofs_unchanged(self):           # fork
+        """build() of buildings outside Queensland (every region's style, tagged metal / tile roofs, custom roof colours,
+        barns) is byte-for-byte what it was before the Queensland roof materials: vertices, UVs, triangles, materials,
+        colours. (digest taken on the code before the change.)"""
+        import hashlib
+        h = hashlib.sha256()
+        rng = np.random.default_rng(11)
+        places = ((39.29, -76.61), (37.36, -118.39), (46.59, 7.91), (52.37, 4.90), (40.42, -3.70), (28.61, 77.21),
+                  (19.43, -99.13), (-36.85, 174.76), (35.68, 139.69), (-26.2, 28.04))
+        for lat, lon in places:
+            for _ in range(8):
+                w, l = rng.uniform(7, 12), rng.uniform(9, 16)
+                ring = np.array([[0, 0], [w, 0], [w, l], [0, l]], float) + rng.uniform(-900, 900, 2)
+                for attrs in ({"class": "house"}, {"class": "barn"}, {"class": "house", "roof_material": "metal"},
+                              {"class": "house", "roof_material": "tile"}, {"class": "house", "roof_color": "#aa3322"}):
+                    spec = bld.plan(ring, attrs, lat=lat, lon=lon)
+                    m = bld.build([(spec, 0.0, 1.0)])
+                    for k in (0, 1, 2, 3, 5):
+                        h.update(np.ascontiguousarray(m[k]).tobytes())
+                    h.update(repr((spec.roof_mat, spec.facade, spec.wall, spec.roof)).encode())
+        self.assertEqual(h.hexdigest(), "047ea103a59b555efe3ee2b9f9379e23f7927083a4ef548b1d1cf6fc5ca3f578")
+
+    def test_other_regions_gables_unchanged(self):          # fork
+        """build() of buildings outside Queensland (gabled, hipped and flat; brick, wood and plain houses and barns, in
+        every other region's style, Perth, Melbourne and the NSW coast just south of Queensland's box too) is byte-for-byte
+        what it was before Queensland's gable ends continued the wall: vertices, UVs, triangles, materials, colours.
+        (digest taken on the code before the change.)"""
+        import hashlib
+        h = hashlib.sha256()
+        rng = np.random.default_rng(23)
+        places = ((39.29, -76.61), (37.36, -118.39), (46.59, 7.91), (52.37, 4.90), (40.42, -3.70), (28.61, 77.21),
+                  (19.43, -99.13), (-36.85, 174.76), (35.68, 139.69), (-26.2, 28.04), (59.33, 18.07))
+        roofs = set()
+        for lat, lon in places:
+            for _ in range(24):
+                w, l = rng.uniform(7, 12), rng.uniform(9, 16)
+                ring = np.array([[0, 0], [w, 0], [w, l], [0, l]], float) + rng.uniform(-900, 900, 2)
+                for attrs in ({"class": "house"}, {"class": "barn"}, {"class": "house", "facade_material": "brick"},
+                              {"class": "house", "facade_material": "wood"}):
+                    spec = bld.plan(ring, attrs, lat=lat, lon=lon)
+                    self.assertIsNone(spec.gable)
+                    roofs.add(spec.roof)
+                    m = bld.build([(spec, 0.0, 1.0)])
+                    for k in (0, 1, 2, 3, 5):
+                        h.update(np.ascontiguousarray(m[k]).tobytes())
+                    h.update(repr((spec.roof_mat, spec.facade, spec.wall, spec.roof)).encode())
+        self.assertEqual(roofs, {"gabled", "hipped", "flat"})
+        self.assertEqual(h.hexdigest(), "1c6c6bf71de62b128d589c3e72783bdaf3d084920e3f84ee3c6058b1f594c967")
+
+    @staticmethod
+    def gable_ends(m):
+        """The gable-end triangles of a built single house: vertical isosceles triangles on a horizontal base whose apex
+        stands over the middle of the base (a wall's half-quad is right-angled): [(tri index, 3 vertex rows)]."""
+        P, tris = m[0], m[2]
+        out = []
+        for i, t in enumerate(tris):
+            p = P[t]
+            if abs(p[0, 2] - p[1, 2]) > 1e-6 or p[2, 2] <= p[0, 2] + 0.1:
+                continue
+            mid = (p[0] + p[1]) / 2
+            if np.allclose(mid[:2], p[2, :2], atol=1e-6) and abs(p[0, 0] - p[1, 0]) + abs(p[0, 1] - p[1, 1]) > 3.0:
+                out.append((i, t))
+        return out
+
+    def test_queensland_gable_ends_continue_the_wall(self):     # fork
+        """The user's in-game report (Brisbane): the gable end over a face-brick wall was a flat salmon triangle (one
+        pixel of the window sheet, times the brick tint). Now the gable continues the wall: weatherboard on a weatherboard
+        house, render on a rendered one, brick or a light weatherboard on a face-brick one."""
+        bi, si, ui = (bld.MATERIALS.index(x) for x in (bld.BRICK_WALL, bld.SIDING, bld.STUCCO))
+        seen = {"siding": 0, "stucco": 0, "brick": 0, "brick_siding": 0}
+        brick_tints = set()
+        n = 0
+        for h in self.houses(-27.47, 153.02, n=700):
+            if h.roof != "gabled":
+                continue
+            n += 1
+            m = bld.build([(h, 0.0, 1.0)])
+            ends = self.gable_ends(m)
+            self.assertEqual(len(ends), 2, "a gable end at each end")
+            look = bld._Looks(h.seed)
+            for i, t in ends:
+                mat, rgba = m[3][i], tuple(int(c) for c in m[5][t[0]])
+                self.assertTrue(all(tuple(int(c) for c in m[5][v]) == rgba for v in t), "one tint")
+                uv, z = m[1][t], m[0][t][:, 2]
+                if h.wall:                          # weatherboard / render: the wall's own material and tint
+                    self.assertEqual((mat, rgba), look[h.wall], h.wall)
+                    scale = bld.SIDING_UV_M
+                    seen["siding" if h.wall.startswith(bld.SIDING) else "stucco"] += 1
+                elif h.band is bld.BAND_BRICK:      # face brick: brick of the facade's tint, or a light weatherboard
+                    k = int(h.facade[len("bne_bld_fac_qbrick"):])
+                    if mat == bi:
+                        self.assertEqual(rgba, look[f"{bld.BRICK_WALL}|q{k}"][1])
+                        self.assertEqual(look[h.facade][1], rgba, "the very tint of the wall's brick")
+                        scale, brick_tints = bld.GABLE_BRICK_UV_M, brick_tints | {k}
+                        seen["brick"] += 1
+                    else:
+                        self.assertEqual(mat, si)
+                        self.assertIn(rgba, [look[f"{bld.SIDING}|q{j}"][1] for j in bld.QLD_GABLE_SIDING])
+                        scale = bld.SIDING_UV_M
+                        seen["brick_siding"] += 1
+                else:
+                    continue
+                # u along the base, v = height / scale like the walls (z / scale): courses run on across the corner
+                np.testing.assert_allclose(uv[:, 1] * scale, z, atol=1e-5)
+                base = np.linalg.norm(m[0][t][1, :2] - m[0][t][0, :2])
+                self.assertAlmostEqual(uv[1, 0] - uv[0, 0], base / scale, places=5)
+                self.assertAlmostEqual(uv[2, 0] - uv[0, 0], base / 2 / scale, places=5)
+        self.assertGreater(n, 150)
+        for k, v in seen.items():
+            self.assertGreater(v, 20, k)
+        share = seen["brick"] / (seen["brick"] + seen["brick_siding"])
+        self.assertAlmostEqual(share, bld.QLD_GABLE_BRICK, delta=0.1, msg="~60 % brick gables on brick houses")
+        self.assertGreaterEqual(len(brick_tints), 4, "the brick tints vary")
+        # the same house is the same every time (the hash is the building's seed)
+        h = next(x for x in self.houses(-27.47, 153.02, n=100) if x.roof == "gabled" and x.band is bld.BAND_BRICK)
+        a, b = bld.build([(h, 0.0, 1.0)]), bld.build([(h, 0.0, 1.0)])
+        self.assertTrue(all(np.array_equal(a[k], b[k]) for k in (0, 1, 2, 3, 5)))
+
+    def test_queensland_gable_ends_scope(self):             # fork
+        """Only gabled Queensland roofs carry a gable look; the other roofs and every other region have none; the new
+        looks are on existing materials (nothing added to MATERIALS)."""
+        self.assertEqual(len(bld.MATERIALS), 43)       # (23 before the merge of upstream dev: its new materials come first)
+        for h in self.houses(-27.47, 153.02, n=300):
+            self.assertEqual(h.gable is not None, h.roof == "gabled" and (bool(h.wall) or h.band is bld.BAND_BRICK), h.roof)
+            if h.gable:
+                self.assertIn(h.gable[0], bld.LOOKS)
+        for k in range(len(bld.QLD_BRICK)):
+            mat, c = bld.LOOKS[f"{bld.BRICK_WALL}|q{k}"]
+            self.assertEqual((mat, c), (bld.BRICK_WALL, bld.QLD_BRICK[k]))
+        # sheds and barns (plain siding walls) continue theirs too
+        s = bld.plan(rect(0, 0, 8, 14), {"class": "barn"}, lat=-27.47, lon=153.02)
+        self.assertEqual(s.gable, (s.facade, bld.SIDING_UV_M) if s.roof == "gabled" else None)
 
     def test_south_asia_houses(self):
         hs = self.houses(28.61, 77.21)                  # Delhi, India
@@ -84,13 +275,30 @@ class RegionStyleTest(unittest.TestCase):
         self.assertTrue(all(h.pitch == 24.0 for h in hs))
         for h in pitched:
             mat, k = h.roof_mat.split("|")
+            if mat in (bld.ROOF_WOOD, bld.ROOF_SLATE_ROUND):     # (wooden shingles, fish-scale slate)
+                continue
             self.assertIn(int(k), (5, 7, 8, 9))     # dark or brown roofs
+
+    def test_more_stock_roofs_and_walls(self):
+        """Mapped slate: dark courses or fish-scale; mapped wood: shingles; cement block: cinder block; the stock
+        textures' own repeats."""
+        kinds = {bld.plan(rect(13 * k, 0, 10, 10), {"class": "house", "roof_material": "slate"}, 0, 51.5,
+                          -0.1).roof_mat.split("|")[0] for k in range(30)}
+        self.assertEqual(kinds, {bld.ROOF_SLATE_DARK, bld.ROOF_SLATE_ROUND})
+        w = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "wood"}, 0, 46.6, 7.9)
+        self.assertTrue(w.roof_mat.startswith(bld.ROOF_WOOD + "|"))
+        c = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_material": "cement_block"}, 0, 39.3, -76.6)
+        self.assertTrue(str(c.wall).startswith(bld.CINDER + "|"))
+        rubble = [bld.plan(rect(13 * k, 0, 9, 8), {"class": "house", "facade_material": "stone"}, 0, 43.9,
+                           5.2).wall.split("|")[0] for k in range(30)]
+        self.assertIn(bld.STONE_RUBBLE, rubble, "Provence's stone houses: some rubble")
+        self.assertEqual(bld.stone_kind(bld.STYLES["europe_north"], 0.1), bld.STONE)
 
     def test_mediterranean_and_latin_houses(self):
         med = self.houses(40.42, -3.70)
         for h in med:
             if h.roof != "flat":
-                self.assertIn(int(h.roof_mat.split("|")[1]), (4, 5, 6), "clay tile roofs")
+                self.assertTrue(h.roof_mat.startswith(bld.ROOF_TILES + "|"), "clay tile roofs")
         self.assertTrue(any(h.roof == "flat" for h in med))
         lat = self.houses(19.43, -99.13)
         self.assertGreater(sum(h.roof == "flat" for h in lat), 0.5 * len(lat))
@@ -117,6 +325,392 @@ class RegionStyleTest(unittest.TestCase):
             if h.wall and h.wall.startswith(bld.STUCCO):
                 self.assertLess(int(h.wall.split("|")[1]), 5)
             self.assertIsNone(h.pitch)
+
+
+class HighSetTest(unittest.TestCase):       # fork
+    """High-set and low-set Queensland houses: stumps under timber houses only, a masonry base under brick and
+    rendered ones, the door and stair at the raised floor, every other region as before."""
+    LAT, LON = -27.47, 153.02
+
+    def plan(self, i, w=9.0, l=12.0, **attrs):
+        return bld.plan(rect(0, 0, w, l), {"class": "house", "seed_id": i, **attrs}, lat=self.LAT, lon=self.LON)
+
+    def house(self, kind, pred=lambda s: True, n=800):
+        for i in range(n):
+            spec = self.plan(i)
+            if spec.hs and spec.hs[0] == kind and pred(spec):
+                return spec
+        self.fail(f"no {kind} house in {n}")
+
+    @staticmethod
+    def slope(spec, drop):
+        """The block rises to the north (+y) by drop; the door on the lowest wall of the drawn footprint."""
+        spec.gring = np.array([0.0, 0.0, drop, drop])
+        dr = bld.drawn_ring(spec)
+        mids = [(dr[k][1] + dr[(k + 1) % len(dr)][1]) / 2 for k in range(len(dr))]
+        e = int(np.argmin(mids))
+        spec.door = (e, float(np.hypot(*(dr[(e + 1) % len(dr)] - dr[e]))) * 0.5)
+        return 0.0, float(drop)
+
+    @staticmethod
+    def under(spec, gmin, gmax, stair=False):
+        """(the HighSet, P, T, tri materials, each tri's colour) of the under-floor geometry (the stair only if asked)."""
+        hs = bld.highset(spec, gmin, gmax)
+        door = spec.door
+        if not stair:
+            spec.door = None
+        m = bld.Mesh()
+        bld._hs_draw(m, spec, hs, bld.drawn_ring(spec), bld._Looks(spec.seed))
+        spec.door = door
+        P, UV, T, M, C = m.arrays()
+        return hs, P, T, M, C[T[:, 0]]
+
+    def test_plan_marks_detached_queensland_houses_by_their_wall(self):
+        kinds = set()
+        for i in range(600):
+            s = self.plan(i)
+            if not s.hs:
+                self.assertTrue(s.roof == "flat" or s.floors > 2, "only a pitched one or two storey house is left out")
+                continue
+            self.assertLessEqual(s.floors, 2)
+            self.assertNotEqual(s.roof, "flat")
+            k, look, uv = s.hs[:3]
+            if k == bld.HS_TIMBER:      # weatherboard / fibro look: SIDING walls, any paint
+                self.assertTrue(s.wall.startswith(bld.SIDING))
+            elif k == bld.HS_RENDER:
+                self.assertTrue(s.wall.startswith(bld.STUCCO))
+                self.assertEqual((look, uv), (s.wall, bld.SIDING_UV_M), "its base is its own render")
+            else:
+                self.assertIs(s.band, bld.BAND_BRICK)
+                self.assertTrue(look.startswith(bld.BRICK_WALL) and look in bld.LOOKS)
+                self.assertEqual(bld.LOOKS[look][1], bld.LOOKS[s.facade][1], "brick of the very tint of the wall")
+            kinds.add(k)
+        self.assertEqual(kinds, {bld.HS_TIMBER, bld.HS_RENDER, bld.HS_BRICK})
+        # a barn, three storeys and every other region: none
+        self.assertIsNone(bld.plan(rect(0, 0, 9, 12), {"class": "barn"}, lat=self.LAT, lon=self.LON).hs)
+        self.assertIsNone(self.plan(1, num_floors=3).hs)
+        for lat, lon in ((39.29, -76.61), (46.59, 7.91), (-9.44, 147.18)):
+            for i in range(60):
+                s = bld.plan(rect(0, 0, 9, 12), {"class": "house", "seed_id": i}, lat=lat, lon=lon)
+                self.assertIsNone(s.hs)
+
+    def test_timber_house_on_a_slope_is_high_set_on_stumps_or_battens(self):
+        bi = bld.MATERIALS.index(bld.BRICK_WALL)
+        seen = set()
+        for battens in (False, True):
+            spec = self.house(bld.HS_TIMBER, pred=lambda s: bld.highset(s, 0.0, 2.0).battens == battens)
+            gmin, gmax = self.slope(spec, 2.0)
+            hs, P, T, M, C = self.under(spec, gmin, gmax)
+            self.assertGreaterEqual(hs.floor, gmin + 2.2, "at least 2.2 m over the lowest ground")
+            self.assertLessEqual(hs.floor, gmin + 3.2, "and no more than 3.2 m on a 2 m fall")
+            self.assertGreaterEqual(hs.floor, gmax + bld.HS_UPHILL_MIN_M, "clear of the uphill ground too")
+            self.assertNotIn(bi, M, "no brick under a timber house")
+            zb = hs.floor - bld.HS_BEARER_M
+            self.assertEqual(len(P) % 4, 0)
+            sides = P[4:]           # (the first four vertices: the floor's dark underside)
+            self.assertAlmostEqual(float(sides[:, 2].max()), zb, places=6, msg="up to the bearers")
+            self.assertLess(float(sides[:, 2].min()), gmin, "down into the ground")
+            if battens:             # a screen on each wall
+                self.assertEqual(len(P), 4 + 4 * 4)
+            else:                   # square stumps: 16 vertices each, at most HS_STUMP_MAX, all round the footprint
+                posts = (len(P) - 4) // 16
+                self.assertEqual(len(P), 4 + 16 * posts)
+                self.assertTrue(4 <= posts <= bld.HS_STUMP_MAX, posts)
+                span = sides[:, :2].max(0) - sides[:, :2].min(0)
+                self.assertTrue(span[0] > 8.5 and span[1] > 11.5, "round the whole footprint")
+            seen.add(battens)
+            full = bld.build([(spec, gmin, gmax)])          # the whole house: no brick, its roof over the raised floor
+            self.assertNotIn(bi, full[3])
+            self.assertGreaterEqual(float(full[0][:, 2].max()), hs.floor + spec.height)
+        self.assertEqual(seen, {False, True})
+
+    def test_brick_and_render_houses_get_a_base_never_stumps(self):
+        bi, mi = bld.MATERIALS.index(bld.BRICK_WALL), bld.MATERIALS.index(bld.METALWALL)
+        for kind in (bld.HS_BRICK, bld.HS_RENDER):
+            spec = self.house(kind)
+            gmin, gmax = self.slope(spec, 2.0)
+            hs, P, T, M, C = self.under(spec, gmin, gmax)
+            lk = bld._Looks(spec.seed)
+            self.assertGreaterEqual(hs.floor, gmin + 2.4)
+            colours = {tuple(int(v) for v in c) for c in C}
+            for name in ("qhs_stump_conc", "qhs_stump_wood", bld.HS_UNDER, bld.HS_BATTEN_DARK):
+                self.assertNotIn(lk[name][1], colours, f"no {name}: no stumps, no timber floor underside")
+            self.assertIn(mi, M, "a roller door in a base this tall")
+            if kind == bld.HS_BRICK:
+                tris = np.where(M == bi)[0]
+                self.assertEqual(len(tris), 8, "a brick wall on each side")
+                self.assertEqual({tuple(int(v) for v in C[t]) for t in tris}, {lk[spec.hs[1]][1]}, "the house's brick tint")
+                wall = P[T[tris]]
+                self.assertAlmostEqual(float(wall[:, :, 2].max()), hs.floor, places=6)
+                self.assertLess(float(wall[:, :, 2].min()), gmin)
+            else:
+                self.assertNotIn(bi, M, "a render house's lower level is its own render (its wall runs down)")
+            full = bld.build([(spec, gmin, gmax)])
+            self.assertGreater(float(full[0][:, 2].max()), hs.floor + spec.height)
+        # a brick house on a gentle fall: its base up to the floor at the highest ground; render keeps its wall
+        spec = self.house(bld.HS_BRICK)
+        self.assertEqual(bld.highset(spec, 0.0, 0.8).floor, 0.8)
+        self.assertIsNone(bld.highset(spec, 0.0, 0.3))
+        self.assertIsNone(bld.highset(self.house(bld.HS_RENDER), 0.0, 0.8))
+
+    def test_door_and_stair_at_the_raised_floor(self):
+        road = (np.array([(-50.0, -6.0), (50.0, -6.0)]), 4.0)        # south of the house, the low side
+        for kind in (bld.HS_TIMBER, bld.HS_BRICK, bld.HS_RENDER):
+            for porch in (False, True):
+                spec = self.house(kind, pred=lambda s: bool(s.porch) == porch)
+                spec.gring = np.array([0.0, 0.0, 2.0, 2.0])
+                rows = bld.doors([(spec, 0.0, 2.0)], [road], 0.0, 0.0)
+                hs = bld.highset(spec, 0.0, 2.0)
+                top = hs.floor + (bld.PORCH_DECK_M if porch else 0.0)
+                self.assertFalse([r for r in rows if r[0] == "door"],
+                                 "no stock door prop (its own steps and rails) at a raised door: the leaf is in the mesh")
+                m = bld.Mesh()
+                bld._hs_stair(m, spec, hs, bld.drawn_ring(spec), bld._Looks(spec.seed))
+                P = m.arrays()[0]
+                self.assertAlmostEqual(float(P[:, 2].max()), top, places=6, msg="down from the door's level")
+                self.assertLess(float(P[:, 2].min()), 0.0, "to the ground in front of the low side")
+                self.assertLess(m.n, 8 * bld.HS_MAX_STEPS + 4 + 60, "a modest number of vertices")
+                if porch:           # (the deck's own stumps / screen under it)
+                    pm = bld.Mesh()
+                    bld._porch(pm, spec, hs.floor, bld._Looks(spec.seed), hs)
+                    plain = bld.Mesh()
+                    bld._porch(plain, spec, hs.floor, bld._Looks(spec.seed))
+                    self.assertGreater(pm.n, plain.n, "the verandah deck is not left in the air")
+
+    def test_stair_stays_in_the_yard_and_turns_along_the_wall_when_tight(self):     # fork
+        """A high floor over a falling street: the straight run would reach the road; it is kept within HS_STAIR_REACH_M of
+        the wall, turned to run along the front wall when it does not fit; a low floor keeps its straight stair."""
+        for kind in (bld.HS_TIMBER, bld.HS_BRICK, bld.HS_RENDER):
+            for porch in (False, True):
+                spec = self.house(kind, pred=lambda s: bool(s.porch) == porch)
+                gmin, gmax = self.slope(spec, 2.0)
+                hs = bld.highset(spec, gmin, gmax)
+                ring = bld.drawn_ring(spec)
+                a, d, L, out = bld._hs_edge(ring, spec.door[0])
+                m = bld.Mesh()
+                bld._hs_stair(m, spec, hs, ring, bld._Looks(spec.seed))
+                P = m.arrays()[0]
+                self.assertGreater(len(P), 40, "a stair is still drawn")
+                self.assertLessEqual(float(((P[:, :2] - a) @ out).max()), bld.HS_STAIR_REACH_M + 1e-6, "not into the street")
+                self.assertGreater(float(np.ptp((P[:, :2] - a) @ d)), 3.0, "turned: it runs along the front wall")
+                self.assertLess(float(P[:, 2].min()), 0.3, "down to the ground")
+        spec = self.house(bld.HS_TIMBER, pred=lambda s: bld._hs_floor(s, 0.0, 0.0) is not None and not s.porch)
+        gmin, gmax = self.slope(spec, 0.0)
+        hs = bld.highset(spec, gmin, gmax)
+        ring = bld.drawn_ring(spec)
+        a, d, L, out = bld._hs_edge(ring, spec.door[0])
+        m = bld.Mesh()
+        bld._hs_stair(m, spec, hs, ring, bld._Looks(spec.seed))
+        P = m.arrays()[0]
+        self.assertLess(float(np.ptp((P[:, :2] - a) @ d)), 1.7, "a short flight stays straight")
+        self.assertLessEqual(float(((P[:, :2] - a) @ out).max()), bld.HS_STAIR_REACH_M + 1e-6)
+
+    def test_raised_door_is_a_flat_leaf_and_there_is_no_stoop_prop(self):         # fork
+        for kind in (bld.HS_TIMBER, bld.HS_BRICK, bld.HS_RENDER):
+            spec = self.house(kind)
+            spec.gring = np.array([0.0, 0.0, 2.0, 2.0])
+            rows = bld.doors([(spec, 0.0, 2.0)], [(np.array([(-50.0, -6.0), (50.0, -6.0)]), 4.0)], 0.0, 0.0)
+            self.assertFalse([r for r in rows if r[0] == "door"])
+            self.assertIsNotNone(spec.door)
+            hs = bld.highset(spec, 0.0, 2.0)
+            ring = bld.drawn_ring(spec)
+            m = bld.Mesh()
+            bld._hs_door(m, spec, hs, ring, bld._Looks(spec.seed))
+            P = m.arrays()[0]
+            a, d, L, out = bld._hs_edge(ring, spec.door[0])
+            self.assertEqual(len(P), 4)
+            np.testing.assert_allclose((P[:, :2] - a) @ out, bld.WIN_OUT_M, atol=1e-9)      # flat on the wall
+            self.assertAlmostEqual(float(P[:, 2].min()), hs.floor + (bld.PORCH_DECK_M if spec.porch else 0.0), places=6)
+
+    def test_roller_door_is_flush_vertical_and_only_on_level_ground(self):        # fork
+        mi = bld.MATERIALS.index(bld.METALWALL)
+        seen = 0
+        for crossfall in (False, True):
+            for i in range(80):
+                spec = self.plan(i)
+                if not spec.hs or spec.hs[0] == bld.HS_TIMBER:
+                    continue
+                spec.gring = np.array([0.0, 2.0, 2.0, 0.0]) if crossfall else np.array([0.0, 0.0, 2.0, 2.0])
+                spec.door = None
+                hs = bld.highset(spec, 0.0, 2.0)
+                ring = bld.drawn_ring(spec)
+                m = bld.Mesh()
+                bld._hs_openings(m, spec, hs, ring, bld._Looks(spec.seed))
+                P, UV, T, M, C = m.arrays()
+                tris = T[M == mi]
+                if not len(tris):
+                    continue
+                seen += 1
+                q = P[np.unique(tris)]
+                self.assertEqual(len(q), 4)
+                xy = np.round(q[:, :2], 9)
+                self.assertEqual(len(np.unique(xy, axis=0)), 2, "top and bottom corners are above each other: vertical")
+                def line_dist(p, k):
+                    e, w = ring[(k + 1) % 4] - ring[k], p - ring[k]
+                    return abs(float(e[0] * w[1] - e[1] * w[0])) / float(np.linalg.norm(e))
+                dist = [line_dist(p, k) for p in xy for k in range(4)]
+                self.assertAlmostEqual(min(dist), bld.HS_GARAGE_OUT_M, places=6, msg="0.02 m proud of the wall plane")
+                lows = sorted(q[:, 2])[:2]
+                self.assertLessEqual(abs(lows[1] - lows[0]), bld.HS_GARAGE_LEVEL_M + 1e-9, "level ground along the door")
+                self.assertLessEqual(float(q[:, 2].max()), hs.floor - 0.2 + 1e-9)
+        self.assertGreater(seen, 10)
+
+    def test_collision_and_boxes_follow_the_raised_floor(self):
+        spec = self.house(bld.HS_TIMBER)
+        gmin, gmax = self.slope(spec, 2.0)
+        hf = bld._hs_floor(spec, gmin, gmax)
+        col = bld.collision_mesh([(spec, gmin, gmax)])
+        self.assertAlmostEqual(float(col[0][:, 2].max()), hf + spec.height, places=6, msg="a raised box")
+        self.assertAlmostEqual(float(col[0][:, 2].min()), gmin - bld.FOUNDATION_M, places=6, msg="solid from the ground up")
+        box = bld.collider_boxes([(spec, gmin, gmax)], 0.0, 0.0)[0]
+        self.assertAlmostEqual(box[5], round(hf + spec.height + 6.0, 2))
+        flat = self.house(bld.HS_TIMBER, pred=lambda s: bld._hs_floor(s, 0.0, 0.0) is None)    # (not low-set)
+        self.assertAlmostEqual(bld.collider_boxes([(flat, 0.0, 0.0)], 0.0, 0.0)[0][5], round(flat.height + 6.0, 2))
+
+    def test_other_regions_unchanged_on_a_slope(self):
+        """build(), collision and boxes outside Queensland on sloping ground, with a door (Spec.hs stays None): byte-for-byte
+        what they were before high-set houses. (digest taken on the code before the change.)"""
+        import hashlib
+        h = hashlib.sha256()
+        rng = np.random.default_rng(31)
+        places = ((39.29, -76.61), (-36.85, 174.76), (-26.2, 28.04), (-9.44, 147.18),
+                  (46.59, 7.91))
+        road = (np.array([(-900.0, -900.0), (900.0, -900.0)]), 4.0)
+        for lat, lon in places:
+            for _ in range(12):
+                w, l = rng.uniform(7, 12), rng.uniform(9, 16)
+                ring = np.array([[0, 0], [w, 0], [w, l], [0, l]], float) + rng.uniform(-900, 900, 2)
+                for attrs in ({"class": "house"}, {"class": "house", "facade_material": "brick"},
+                              {"class": "house", "facade_material": "wood"}):
+                    spec = bld.plan(ring, attrs, lat=lat, lon=lon)
+                    self.assertIsNone(spec.hs)
+                    if spec.au:     # fork: Australia's own fences (boundary fences behind the front wall) are tested in test_au_streetscape
+                        continue
+                    spec.gring = np.array([0.0, 0.0, 2.0, 2.0])
+                    rows = bld.doors([(spec, 0.0, 2.0)], [road], 0.0, 0.0)
+                    h.update(repr(rows).encode())
+                    m = bld.build([(spec, 0.0, 2.0)])
+                    for k in (0, 1, 2, 3, 5):
+                        h.update(np.ascontiguousarray(m[k]).tobytes())
+                    h.update(np.ascontiguousarray(bld.collision_mesh([(spec, 0.0, 2.0)])[0]).tobytes())
+                    h.update(repr(bld.collider_boxes([(spec, 0.0, 2.0)], 0.0, 0.0)).encode())
+        self.assertEqual(h.hexdigest(), "49c8b2067f43db59486bc01940218e3f54c10890cdd9883021c39346dec1be17")   # fork: Port Moresby left Australia with the state borders; merge of upstream dev 2026-11-11: the digest is upstream dev's own (checked)
+
+
+class QldDetailsTest(unittest.TestCase):        # fork
+    """Queensland houses' eaves, gutters, solar panels, whirlybirds, awnings, carports and water tanks."""
+    LAT, LON = -27.47, 153.02
+
+    def house(self, i, w=9.0, l=12.0, ang=0.0, at=(0.0, 0.0), rural=False):
+        ring = rect(0, 0, w, l) - (w / 2, l / 2)
+        c, s = math.cos(ang), math.sin(ang)
+        ring = ring @ np.array([[c, s], [-s, c]]) + at
+        return bld.plan(ring, {"class": "house", "seed_id": i}, lat=self.LAT, lon=self.LON, rural=rural)
+
+    def houses(self, n=300, **kw):
+        return [h for h in (self.house(i, **kw) for i in range(n)) if h.qld]
+
+    @staticmethod
+    def diff(spec, **flags):
+        """(build with the flags on, without any extra, the vertex count between them)."""
+        q0 = spec.qld
+        base = dict(q0, solar=False, whirly=0, awn=False, carport=None, tank=False)
+        spec.qld = dict(base, **flags)
+        a = bld.build([(spec, 0.0, 0.0)])
+        spec.qld = base
+        b = bld.build([(spec, 0.0, 0.0)])
+        spec.qld = q0
+        return a, b
+
+    def test_only_detached_queensland_houses_with_pitched_roofs_have_details(self):
+        for lat, lon in ((39.29, -76.61), (46.59, 7.91), (-9.44, 147.18)):
+            for i in range(40):
+                s = bld.plan(rect(0, 0, 9, 12), {"class": "house", "seed_id": i}, lat=lat, lon=lon)
+                self.assertIsNone(s.qld)
+        hs = [self.house(i) for i in range(300)]
+        for h in hs:
+            self.assertEqual(h.qld is not None, h.roof != "flat" and h.floors <= 2)
+        self.assertIsNone(bld.plan(rect(0, 0, 8, 14), {"class": "barn"}, lat=self.LAT, lon=self.LON).qld)
+
+    def test_solar_on_the_north_face_only(self):
+        hs = [self.house(i) for i in range(800)]
+        hs = [h for h in hs if h.qld]
+        share = sum(h.qld["solar"] for h in hs) / len(hs)
+        self.assertAlmostEqual(share, bld.QLD_SOLAR, delta=0.06)
+        got = want = 0
+        for k, h in enumerate(hs[:300]):
+            if not h.qld["solar"]:
+                continue
+            ang = (k * 0.7) % (2 * math.pi)
+            sp = h                                  # (the same house, turned)
+            rot = np.array([[math.cos(ang), math.sin(ang)], [-math.sin(ang), math.cos(ang)]])
+            sp.ring = (rect(0, 0, 9, 12) - (4.5, 6.0)) @ rot
+            sp.qld = dict(sp.qld, whirly=0, awn=False, carport=None, tank=False)
+            a, b = self.diff(sp, solar=True)
+            look = bld._Looks(sp.seed)["qsolar_cell"][1]
+            mask = (a[5][a[2][:, 0]] == np.array(look)).all(axis=1)
+            want += 1
+            if not mask.any():
+                continue
+            got += 1
+            tri = a[0][a[2][mask]]
+            nrm = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+            self.assertTrue((nrm[:, 1] > 0).all() and (nrm[:, 2] > 0).all(), "panels face north and up, never south")
+            n = mask.sum() // 2
+            self.assertTrue(bld.SOLAR_N[0] <= n <= bld.SOLAR_N[1], n)
+            self.assertLess(len(a[0]) - len(b[0]), 20 * 8 + 1)
+        self.assertGreater(got, 0.6 * want, "most rotations have a face towards the north")
+        # a ridge running north-south has no north face: no panels
+        h = next(h for h in self.houses(200) if h.roof == "gabled")
+        h.ring = rect(0, 0, 9, 12) - (4.5, 6.0)           # long axis along y (north-south): faces east and west
+        a, b = self.diff(h, solar=True)
+        self.assertEqual(len(a[0]), len(b[0]))
+
+    def street(self, n, pitch, rural=False):
+        rows, items = [], []
+        for i in range(n):
+            h = bld.plan(rect(i * pitch, 0, 9, 12), {"class": "house", "seed_id": i}, lat=self.LAT, lon=self.LON, rural=rural)
+            h.gring = np.zeros(4)
+            items.append((h, 0.0, 0.0))
+        road = (np.array([(-50.0, -15.0), (n * pitch + 50, -15.0)]), 4.0)
+        return items, bld.doors(items, [road], 0.0, 0.0)
+
+    def test_carports_only_with_room_and_never_overlap(self):
+        for pitch, expect in ((40.0, True), (11.5, False)):
+            items, _ = self.street(300 if expect else 150, pitch)
+            hs = [s for s, _, _ in items if s.qld and s.door]
+            cps = [s for s in hs if s.qld["carport"]]
+            if expect:
+                self.assertAlmostEqual(len(cps) / len(hs), bld.QLD_CARPORT, delta=0.07, msg="~30 % with room")
+            for s in cps:
+                cp = s.qld["carport"]
+                A, S, T = np.array(cp["p0"]), np.array(cp["s"]), np.array(cp["t"])
+                R = np.array([A, A + S * bld.CARPORT_W, A + S * bld.CARPORT_W + T * bld.CARPORT_L, A + T * bld.CARPORT_L])
+                if bld._area2(R) < 0:
+                    R = R[::-1]
+                for o, _, _ in items:
+                    if o is not s:
+                        self.assertFalse(bld._rect_hits(R, o.ring), "no overlap with another house")
+                a, b = self.diff(s, carport=cp)
+                self.assertTrue(40 <= len(a[0]) - len(b[0]) <= 64, len(a[0]) - len(b[0]))
+            if not expect:
+                self.assertLess(len(cps), 0.2 * len(hs) * 0.3 + 3, "a gap of 2.5 m: almost none")
+        # a carport leans on a wall at 2.4 m clear
+        s = cps[0] if cps else next(s for s, _, _ in self.street(300, 40.0)[0] if s.qld["carport"])
+        a, b = self.diff(s, carport=s.qld["carport"])
+        self.assertTrue(np.isfinite(a[0]).all())
+
+    def test_water_tanks_only_on_isolated_rural_houses(self):
+        rural, _ = self.street(200, 60.0, rural=True)
+        urban, _ = self.street(200, 60.0, rural=False)
+        tight, _ = self.street(100, 14.0, rural=True)
+        r = [s for s, _, _ in rural if s.qld and not s.qld["carport"]]
+        self.assertAlmostEqual(sum(s.qld["tank"] for s in r) / len(r), bld.QLD_TANK, delta=0.08)
+        self.assertFalse(any(s.qld["tank"] for s, _, _ in urban if s.qld), "suburban tiles: none")
+        self.assertFalse(any(s.qld["tank"] for s, _, _ in tight if s.qld), "neighbours within 25 m: none")
+        s = next(s for s in r if s.qld["tank"])
+        a, b = self.diff(s, tank=True)
+        self.assertTrue(30 <= len(a[0]) - len(b[0]) <= 60)
 
 
 class PlanTest(unittest.TestCase):
@@ -201,6 +795,21 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(c.steeple)
         P = bld.build([(c, 0.0, 0.0)])[0]
         self.assertGreater(P[:, 2].max(), 25.0, "a spire over the nave")
+
+    def test_church_towers_by_region(self):
+        """Rome's churches: campanili (a tall square tower, a low tiled pyramid) on some, no slate spires; the US's
+        and northern Europe's: spires."""
+        kinds = set()
+        for k in range(40):
+            c = bld.plan(rect(37 * k, 11 * k, 30, 14), {"class": "church"}, 0, 41.889, 12.469)
+            kinds.add(c.steeple)
+            if c.steeple:
+                P, _UV, _T, M = bld.build([(c, 0.0, 0.0)])[:4]
+                self.assertIn(bld.MATERIALS.index(bld.ROOF_TILES), set(M.tolist()), "a tiled tower roof")
+        self.assertIn("campanile", kinds)
+        self.assertIn(False, kinds, "some without a tower")
+        self.assertNotIn("spire", kinds)
+        self.assertEqual(bld.plan(rect(0, 0, 30, 14), {"class": "church"}, 0, 39.28, -76.6).steeple, "spire")
 
     def test_dense_core_small_buildings_are_row_houses(self):
         s = bld.plan(rect(0, 0, 8, 12), {"class": "house"}, 0, 39.28, -76.59, dense=True)
@@ -372,7 +981,17 @@ class SplitTest(unittest.TestCase):
 class MeshTest(unittest.TestCase):
     def check_outward(self, ring, attrs):
         spec = bld.plan(ring, attrs)
-        P, UV, T, M, mats, C = bld.build([(spec, 0.0, 0.0)])
+        import shells
+        with unittest.mock.patch.object(shells, "ON", True):       # (BNE_WATERTIGHT on: a closed solid)
+            P, UV, T, M, mats, C = bld.build([(spec, 0.0, 0.0)])
+        self.assertEqual(shells.open_loops(P, T), [], "a closed solid")
+        self.assertAlmostEqual(P[:, 2].min(), -bld.SKIRT_M)      # its bottom closed at the skirt's foot
+        close = shells.close        # the faces as drawn before closing (the closing's own caps face the backs)
+        shells.close = lambda P, T, TM=None, per_vertex=(), **k: (P, T, TM, list(per_vertex))
+        try:
+            P, UV, T, M, mats, C = bld.build([(spec, 0.0, 0.0)])
+        finally:
+            shells.close = close
         c = np.append(ring.mean(0), spec.height / 2)
         n = np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]])
         mid = P[T].mean(1)
@@ -399,6 +1018,228 @@ class MeshTest(unittest.TestCase):
             spec, P = self.check_outward(rect(0, 0, 12, 8), {"class": "house", "roof_shape": shape})
             self.assertEqual(spec.roof, shape)
             self.assertGreater(P[:, 2].max(), spec.height + 1.5, "a ridge above the eaves")
+
+
+    # domes from the map's roof:shape (#593's thread: landmarks from the map data, not hand-made); a gable before
+    @staticmethod
+    def circle(r, n=24):
+        a = np.linspace(0.0, 2 * math.pi, n, endpoint=False)
+        return np.column_stack((r * np.cos(a), r * np.sin(a)))
+
+    def test_a_mapped_dome_is_a_dome(self):
+        ring = self.circle(10.0)
+        spec, P = self.check_outward(ring, {"class": "church", "height": 30.0, "roof_shape": "dome",
+                                            "roof_height": 9.0})
+        self.assertEqual(spec.roof, "dome")
+        self.assertAlmostEqual(spec.height, 21.0, delta=0.01)            # the drum: the mapped height less the roof's
+        self.assertAlmostEqual(P[:, 2].max(), 30.0, delta=0.05)          # its top where the map puts it
+        top = P[P[:, 2] > spec.height + 0.01]
+        r = np.hypot(top[:, 0], top[:, 1])
+        self.assertLessEqual(r.max(), 10.0 + 0.01)                       # never wider than its drum
+        # a sphere's quarter: at half the rise its radius is ~cos(asin(0.5)) of the drum's
+        mid = top[np.abs(top[:, 2] - (spec.height + 4.5)) < 1.2]
+        self.assertTrue(len(mid))
+        far = bld.build([(spec, 0.0, 0.0)], lite=True)[0]
+        self.assertAlmostEqual(far[:, 2].max(), 30.0, delta=0.05)        # far away the same dome
+
+    def test_an_onion_dome_bulges_and_comes_to_a_point(self):
+        ring = self.circle(4.0)
+        spec, P = self.check_outward(ring, {"class": "church", "height": 20.0, "roof_shape": "onion"})
+        self.assertEqual(spec.roof, "onion")
+        rise = 20.0 - spec.height
+        self.assertAlmostEqual(rise, bld.DOME_RISE["onion"] * 4.0, delta=0.4)   # no roof:height: 1.6 x its radius
+        top = P[P[:, 2] > spec.height + 0.01]
+        self.assertGreater(np.hypot(top[:, 0], top[:, 1]).max(), 4.0 * 1.1)     # the bulge over the drum
+        self.assertAlmostEqual(P[:, 2].max(), 20.0, delta=0.05)
+
+    def test_a_dome_in_the_skyline(self):
+        spec = bld.plan(self.circle(12.0), {"class": "church", "height": 40.0, "roof_shape": "dome"})
+        P = bld._sky_mesh([(spec, 0.0, 0.0)])[0]
+        self.assertAlmostEqual(P[:, 2].max(), 40.0, delta=0.05)
+
+    def test_a_round_roof_is_a_barrel_not_a_dome(self):
+        spec = bld.plan(rect(0, 0, 12, 8), {"class": "house", "roof_shape": "round"})
+        self.assertEqual(spec.roof, "round")            # (OSM's round: a barrel vault along the ridge, RoundRoofTest)
+        self.assertNotIn(spec.roof, bld.DOME_ROOFS)
+
+
+class NightWindowsTest(unittest.TestCase):
+    """Each lit window its own brightness at night (the user 2026-11-08; S-moreo's PR #916 reworked): a floor of a
+    window sheet's band starts at a hashed cell of it, near tiles in runs; one material per sheet; far tiles' quads as
+    many as before; the same every build."""
+
+    class _Mats(dict):
+        def __missing__(self, k):
+            return bld._Looks(1.0)[k]
+
+    def _wall(self, w=30.0, lite=False, **kw):
+        ring = rect(0, 0, w, 14)
+        args = dict(ring=ring, floors=6, floor_h=3.0, roof="flat", facade="bne_bld_fac_white", band=bld.BAND_BRICK,
+                    shop=False, plain=False, wall=None, door=(0, 10.0), windows=None, front=0, seed=0.37)
+        args.update(kw)
+        m = bld.Mesh()
+        bld._walls(m, bld.Spec(**args), ring, 0.0, args["floors"] * 3.0, self._Mats(), lite=lite)
+        return m
+
+    def _plain(self, w, lite, band, facade="bne_bld_fac_white", floors=6, shop=False):
+        """The kernel's quads without the cells (the walls as they were)."""
+        P, UV, mid = bld.fast._ef.building_walls(
+            rect(0, 0, w, 14), 0.0, floors * 3.0, False, False, band[0], band[1], [], floors, 3.0, shop, 0, 10.0,
+            True, 0.37, False, 0, lite, bld._WALL_CONSTS, [], [])
+        return np.array(P).reshape(-1, 4, 3), np.array(UV).reshape(-1, 8), list(mid)
+
+    def test_shop_front_on_street_walls_only(self):
+        """A shop's ground floor is a shopfront on the walls facing a street (spec.street: doors()), its other walls
+        drawn as its upper floors; no street known: every wall, as before."""
+        shop = bld.MATERIALS.index(bld.SHOP)
+
+        def shop_tris(street):
+            m = self._wall(shop=True, street=street, door=None)
+            M = np.asarray(m.M)
+            P = np.asarray(m.P, np.float64).reshape(-1, 3)
+            T = np.asarray(m.T).reshape(-1, 3)
+            return P[T[M == shop]].reshape(-1, 3)
+        every = shop_tris(None)
+        front = shop_tris((0,))
+        self.assertGreater(len(every), len(front))
+        self.assertGreater(len(front), 0)
+        e0 = rect(0, 0, 30.0, 14)[:2]                   # (edge 0 of the ring)
+        d = e0[1] - e0[0]
+        n = np.array([-d[1], d[0]]) / np.hypot(*d)
+        self.assertLess(float(np.abs((front[:, :2] - e0[0]) @ n).max()), 1e-6, "shopfronts only on edge 0")
+
+    @staticmethod
+    def _area(P):
+        q = np.asarray(P).reshape(-1, 4, 3)
+        return float(np.linalg.norm(np.cross(q[:, 1] - q[:, 0], q[:, 3] - q[:, 0]), axis=1).sum())
+
+    def _floors(self, m, band):
+        """{(wall, floor): [u0 of each quad of the band]} of the walls' sheet quads of whole bays (not the door's plain
+        strip), wall: its direction (the rect's four)."""
+        P = np.array(m.P).reshape(-1, 4, 3)
+        uv = np.array(m.UV).reshape(-1, 8)
+        v1 = 1.0 - band[0] / bld.BANDS - 1.5 / 1024
+        out = {}
+        for q, u in zip(P, uv):
+            span = (u[2] - u[0]) * band[1]
+            if abs(u[5] - v1) < 1e-6 and abs(u[1] - (v1 - 1.0 / bld.BANDS + 3.0 / 1024)) < 1e-6 \
+                    and abs(span - round(span)) < 1e-6:
+                d = q[1, :2] - q[0, :2]
+                out.setdefault((tuple(np.sign(np.round(d, 3)).tolist()), round(float(q[0, 2]) / 3.0)),
+                               []).append(float(u[0]))
+        return out
+
+    def test_one_material_per_sheet(self):
+        """The window sheets stay one material each (#916's three per sheet cost 9 % of the frame rate)."""
+        for kw in ({}, dict(facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=20, shop=True)):
+            for lite in (False, True):
+                names = {bld.MATERIALS[i] for i in self._wall(lite=lite, **kw).M}
+                self.assertLessEqual(names, {bld.FACADE, bld.OFFICE, bld.SHOP, bld.LOBBY}, names)
+        self.assertFalse([n for n in bld.MATERIALS if n.endswith(("_b", "_c")) and n.startswith("bne_bld_")])
+
+    def test_floors_start_apart(self):
+        """A wall's floors start at cells of their band hashed apart, whole bays (every floor began at the band's
+        first: a lit window lit from street to roof)."""
+        for kw, band in (({}, bld.BAND_BRICK), (dict(facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=20),
+                                                  bld.BAND_OFFICE)):
+            for lite in (False, True):
+                fl = self._floors(self._wall(lite=lite, **kw), band)
+                first = [us[0] for (d, _), us in sorted(fl.items()) if d == (1.0, 0.0)]
+                self.assertGreater(len(set(first)), 2, first)
+                for us in fl.values():
+                    for u in us:
+                        self.assertAlmostEqual(u * band[1], round(u * band[1]), 6)
+            self.assertEqual(self._wall(**kw).UV, self._wall(**kw).UV)
+
+    def test_same_cells_in_every_frame_and_tile(self):
+        """A building's cells hashed from its seed, wall, floor and bay: the same in another tile's frame (a near and a
+        far tile's), and a far tile's floor starting where the near tile's does (no lit windows jumping as a
+        building's tile changes)."""
+        band, facade = bld.BAND_OFFICE, f"{bld.OFFICE}|1"
+        ring = rect(0, 0, 61.0, 14)
+
+        def build(r, lite):
+            m = bld.Mesh()
+            bld._walls(m, bld.Spec(ring=r, floors=8, floor_h=3.0, roof="flat", facade=facade, band=band, shop=False,
+                                   plain=False, wall=None, door=None, windows=None, front=0, seed=0.61),
+                       r, 0.0, 24.0, self._Mats(), lite=lite)
+            return m
+        self.assertEqual(build(ring, False).UV, build(ring + (1234.5, -678.25), False).UV)
+        near, far = self._floors(build(ring, False), band), self._floors(build(ring, True), band)
+        self.assertEqual(near.keys(), far.keys())
+        self.assertTrue(all(near[k][0] == far[k][0] for k in near), (near, far))
+
+    def test_tall_band_as_it_was(self):
+        """The plaster sheet's tall band (bays of uneven width) left starting at its first cell."""
+        m = self._wall(band=bld.BAND_TALL)
+        _, UV0, _ = self._plain(30.0, False, bld.BAND_TALL)
+        self.assertTrue(np.allclose(np.array(m.UV).reshape(-1, 8), UV0))
+
+    def test_far_tiles_as_many_quads(self):
+        """Far tiles (lite) keep a floor one quad: the same quads, the same corners, only their cells."""
+        for w in (30.0, 61.0):
+            for band, facade in ((bld.BAND_BRICK, "bne_bld_fac_white"), (bld.BAND_OFFICE, f"{bld.OFFICE}|1")):
+                m = self._wall(w=w, lite=True, band=band, facade=facade)
+                P0, _, mid0 = self._plain(w, True, band)
+                self.assertEqual(len(m.M), 2 * len(mid0))
+                self.assertTrue(np.allclose(np.array(m.P).reshape(-1, 4, 3), P0))
+
+    def test_runs_keep_the_wall(self):
+        """Near tiles: a floor wider than two band lengths cut into runs that cover it exactly, at the sheet's scale,
+        a run no longer than two band lengths; a narrow wall's floors not cut."""
+        band = bld.BAND_BRICK
+        m = self._wall(w=61.0, band=band)
+        P0, _, mid0 = self._plain(61.0, False, band)
+        self.assertGreater(len(m.M), 2 * len(mid0))
+        self.assertAlmostEqual(self._area(m.P), self._area(P0), 6)
+        q, uv = np.array(m.P).reshape(-1, 4, 3), np.array(m.UV).reshape(-1, 8)
+        sel = (np.abs(uv[:, 5] - (1.0 - band[0] / bld.BANDS - 1.5 / 1024)) < 1e-6) & (uv[:, 2] - uv[:, 0] > 1e-6)
+        m_per_u = np.linalg.norm(q[sel, 1, :2] - q[sel, 0, :2], axis=1) / (uv[sel, 2] - uv[sel, 0])
+        self.assertTrue(np.all(np.abs(m_per_u / bld.TILE_PX_M - 1.0) < 0.15), m_per_u)
+        bays = np.round((uv[sel, 2] - uv[sel, 0]) * band[1]).astype(int)
+        self.assertGreater(len(set(bays.tolist())), 1)
+        narrow = self._wall(w=20.0, band=band)
+        self.assertEqual(len(narrow.M), 2 * len(self._plain(20.0, False, band)[2]))
+
+    def test_shopfront_bays_apart(self):
+        """A shopfront's bays (two a sheet) each a hashed one: some bays bright, some dim (SHOP_LEVELS)."""
+        m = self._wall(w=61.0, facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=8, shop=True, cls="retail")
+        fl = self._floors(m, bld.BAND_SHOP)
+        self.assertTrue(any(len(us) > 1 for us in fl.values()), fl)
+
+    def test_office_tower_lobby(self):
+        """An office tower's street floor is the corporate lobby sheet's lower half (LOBBY_BAND), whole repeats; a
+        retail one keeps its shopfront."""
+        lobby, shop = bld.MATERIALS.index(bld.LOBBY), bld.MATERIALS.index(bld.SHOP)
+        m = self._wall(w=34.0, facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=12, shop=True)
+        M = np.asarray(m.M)
+        self.assertIn(lobby, M)
+        self.assertNotIn(shop, M)
+        uv = np.asarray(m.UV).reshape(-1, 8)
+        q = np.asarray(m.M)[::2] == lobby
+        self.assertTrue(np.all((uv[q][:, 1::2] >= bld.LOBBY_BAND[0] - 1e-9) & (uv[q][:, 1::2] <= bld.LOBBY_BAND[1] + 1e-9)))
+        r = self._wall(w=34.0, facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=12, shop=True, cls="retail")
+        self.assertIn(shop, np.asarray(r.M))
+
+    def test_laid_over_windows_take_the_sash_cells(self):
+        m = self._wall(floors=2, roof="gable", band=(2, 1), plain=True, wall="siding", door=(0, 0.5))
+        uv = np.array(m.UV).reshape(-1, 8)
+        win = uv[np.isclose(uv[:, 1], bld.WIN_UV[2]) & np.isclose(uv[:, 5], bld.WIN_UV[3])]
+        self.assertGreater(len(win), 6)
+        cells = {(round(a, 6), round(b, 6)) for a, b in bld.WIN_CELLS}
+        got = {(round(a, 6), round(b, 6)) for a, b in win[:, [0, 2]].tolist()}
+        self.assertTrue(got <= cells and len(got) > 1, got)
+
+    def test_skyline_buildings_start_apart(self):
+        ring = rect(0, 0, 40, 30)
+        starts = set()
+        for seed in (0.1, 0.2, 0.3, 0.4, 0.5):
+            sp = bld.Spec(ring=ring, floors=10, floor_h=3.0, roof="flat", facade="bne_bld_fac_white", cls="office",
+                          seed=seed, min_h=0.0, height=30.0, windows=None, roof_mat=None)
+            UV = np.asarray(bld._sky_mesh([(sp, 0.0, 0.0)])[1])
+            starts.add((round(float(UV[0, 0]), 6), round(float(UV[0, 1] % 1.0), 6)))
+            self.assertAlmostEqual(UV[0, 0] * bld.SKY_WIN_BAYS, round(UV[0, 0] * bld.SKY_WIN_BAYS), 6)
+        self.assertGreater(len(starts), 3)
 
 
 class DoorTest(unittest.TestCase):
@@ -583,6 +1424,40 @@ class PartsTest(unittest.TestCase):
         self.assertEqual(len(items), 1, "the part alone")
         self.assertEqual(len(self._items((60, 60, 21, 22), height=1.0)), 1, "(an outline mapped as a base: its part)")
 
+    def _dome(self, num_floors, part_rect=(-6, -6, 12, 12)):
+        """A 60 x 40 m building, height 54 to its lantern, with a dome part mapped without a height."""
+        import geodesy
+        f = geodesy.EnuFrame(38.9787, -76.491)
+
+        def ll(x, y, w, d):
+            e = np.array([x, x + w, x + w, x, x]); n = np.array([y, y, y + d, y + d, y])
+            la, lo, _ = f.enu_to_geodetic(e, n, 0.0)
+            return np.stack([lo, la], 1)
+        b = Feats(["B"], [ll(-30, -20, 60, 40)], **{"class": ["civic"], "height": [54.0], "has_parts": [1.0],
+                                                     "num_floors": [num_floors], "min_height": [np.nan]})
+        parts = Feats(["p1"], [ll(*part_rect)], building_id=["B"], height=[np.nan], min_height=[np.nan],
+                      num_floors=[np.nan], min_floor=[np.nan], roof_shape=["dome"])
+        return bld.tile_buildings(f, -256, -256, 256, 256, [b], lambda la, lo: np.zeros(np.shape(la)),
+                                  part_layers=[parts])
+
+    def test_parts_without_heights_rise_from_a_body_of_its_levels(self):
+        """The Maryland State House (OSM w50319294): height 54.31 m, 3 levels, and its dome's parts mapped without
+        heights. Drawn as its outline at full height it was a 54 m block; the dome goes up to the building's height,
+        the outline stays at its levels."""
+        items = self._dome(3.0)
+        by_area = sorted(items, key=lambda it: abs(bld._area2(it[0].ring)))
+        dome, body = by_area[0][0], by_area[-1][0]
+        self.assertEqual(len(items), 2, "the dome and the body")
+        self.assertGreater(dome.height + (dome.min_h or 0.0), 45.0, "(its walls; its roof on them up to 54)")
+        self.assertLessEqual(dome.height + (dome.min_h or 0.0), 54.0)
+        self.assertLess(body.height + (body.min_h or 0.0), 12.0)
+        self.assertAlmostEqual(abs(bld._area2(body.ring)) / 2, 2400.0, delta=30.0)
+
+    def test_parts_without_heights_and_no_levels_keep_the_outline(self):
+        """Without levels there is no body height to go by: the outline at the building's height, as before."""
+        items = self._dome(np.nan)
+        self.assertEqual([round(s.height + (s.min_h or 0.0)) for s, _, _ in items], [54])
+
 
 class OverRoadTest(unittest.TestCase):
     def setUp(self):
@@ -614,6 +1489,37 @@ class OverRoadTest(unittest.TestCase):
         self.assertEqual(house.min_h, 0.0)
         self.assertAlmostEqual(bld.road_through(over.ring, [street - 0]), 80.0, delta=2.5)
 
+    def test_a_footprint_mapped_over_the_ground_is_lifted_over_a_road_at_its_edge(self):
+        # Noranda Station over Tonkin Highway (Perth, GitHub #914): OSM layer 1, no min_height, one carriageway runs
+        # 6 m through its corner; at ground level it stood across the lanes. Mapped over the ground, LEVEL_THROUGH_M of
+        # road in it lifts it; the same footprint without a level, or a road outside it, stays on the ground
+        ring = self.ll(10, 10, 80, 60)
+        corner = np.array([[0.0, 68.0], [16.0, 68.0]])            # 6 m inside it, by its (10, 70) corner
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        self.assertLess(bld.road_through(np.array([[10, 10], [90, 10], [90, 70], [10, 70], [10, 10]], float),
+                                         [corner]), bld.ROAD_THROUGH_M)
+
+        def min_h(level, roads):
+            b = Feats(["N"], [ring], **{"class": ["train_station"], "height": [8.0], "level": [level]})
+            return bld.tile_buildings(self.f, 0, 0, 256, 256, [b], ground, roads_xy=roads)[0][0].min_h
+        self.assertEqual(min_h(1.0, [corner]), bld.OVER_ROAD_CLEAR_M)
+        self.assertEqual(min_h(1.0, [corner - [3.0, 0.0]]), 0.0, "a road clipping it by under LEVEL_THROUGH_M: mapping slack")
+        self.assertEqual(min_h(np.nan, [corner]), 0.0, "no level: a road at its edge is no road through it")
+        self.assertEqual(min_h(1.0, [np.array([[0.0, 200.0], [256.0, 200.0]])]), 0.0, "no road in it")
+
+    def test_a_huge_footprint_with_streets_in_it_is_a_site_left_out(self):
+        # OSM's 1.35 km2 "Blueberry Commons" by I-94 (Huntley MT, 2026-11-05): a planned development tagged building,
+        # its streets inside, lifted over them as a 15 m wall over the prairie. A footprint over SITE_M2 that public
+        # roads run through is left out; the same size without a road in it (a real warehouse) stays
+        side = 400.0                                            # 16 ha
+        b = Feats(["S"], [self.ll(-72, -72, side, side)], **{"class": ["retail"], "height": [15.0]})
+        street = np.array([[-100.0, 128.0], [400.0, 128.0]])
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        self.assertGreater(side * side, bld.SITE_M2)
+        self.assertEqual(bld.tile_buildings(self.f, 0, 0, 256, 256, [b], ground, roads_xy=[street]), [])
+        far = np.array([[-100.0, 600.0], [400.0, 600.0]])
+        self.assertEqual(len(bld.tile_buildings(self.f, 0, 0, 256, 256, [b], ground, roads_xy=[far])), 1)
+
     def test_a_geosearch_hit_is_returned_as_custom(self):
         # a 3dmr.eu model found by geo-search (road_tile_items, threedmr.search_ids/model_info): the footprints
         # stay procedural, the model is returned alongside them as custom
@@ -628,7 +1534,7 @@ class OverRoadTest(unittest.TestCase):
         mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
 
         def model_position(mid, cache_dir, iface=None, timeout=30.0):
-            return (float(mlat), float(mlon), False)
+            return (float(mlat), float(mlon), False, "api")
 
         ground = lambda la, lo: np.zeros(np.shape(la))
         with mock.patch("threedmr.region_ids", return_value=[24]), \
@@ -690,7 +1596,7 @@ class OverRoadTest(unittest.TestCase):
         mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
         ground = lambda la, lo: np.zeros(np.shape(la))
         with mock.patch("threedmr.region_ids", return_value=[22]), \
-             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), True)):
+             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), True, "desc")):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
             self.assertEqual(len(custom), 1)
             x, y = custom[0]["xy"]
@@ -698,11 +1604,13 @@ class OverRoadTest(unittest.TestCase):
             self.assertAlmostEqual(y, my, places=4)
             self.assertAlmostEqual(custom[0]["latlon"][0], float(mlat))
             self.assertAlmostEqual(custom[0]["latlon"][1], float(mlon))
+            self.assertEqual(custom[0]["source"], "desc")
 
     def test_geosearch_falls_back_to_the_wide_corrected_search(self):
         # id 22 (Dragon Bridge, Da Nang): its api point sits ~26 km from the real bridge, outside any tile's
         # own small search_ids radius, so the first (tile-radius) search never finds it at all - only the
-        # second, threedmr.SEARCH_CORRECT_R_M-radius one does, and only because model_position corrects it
+        # region's own search, reaching threedmr.SEARCH_CORRECT_R_M past its corners, does, and only because
+        # model_position corrects it
         b = Feats(["H"], [self.ll(100, 100, 12, 10)], **{"class": ["house"], "height": [6.0]})
 
         class MD:
@@ -715,7 +1623,7 @@ class OverRoadTest(unittest.TestCase):
 
         # (the region's search reaches SEARCH_CORRECT_R_M past its corners: id 22 is in it, placed where corrected)
         with mock.patch("threedmr.region_ids", return_value=[22]), \
-             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), True)):
+             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), True, "desc")):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
             self.assertEqual(len(custom), 1)
             self.assertEqual(custom[0]["id"], 22)
@@ -740,7 +1648,7 @@ class OverRoadTest(unittest.TestCase):
         # is not in this tile)
         flat, flon, _ = self.f.enu_to_geodetic(20000.0, 0.0, 0.0)
         with mock.patch("threedmr.region_ids", return_value=[22]), \
-             mock.patch("threedmr.model_position", return_value=(float(flat), float(flon), False)):
+             mock.patch("threedmr.model_position", return_value=(float(flat), float(flon), False, "api")):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
             self.assertEqual(custom, [], "a region model far from the tile is not this tile's")
 
@@ -762,7 +1670,7 @@ class OverRoadTest(unittest.TestCase):
             return [24]
 
         with mock.patch("threedmr.region_ids", side_effect=region_ids), \
-             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), False)):
+             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), False, "api")):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
             self.assertEqual(len(custom), 1, "added once")
             self.assertEqual(len(seen_ranges), 1, "one region search")
@@ -979,8 +1887,6 @@ class CustomModelSuppressionTest(unittest.TestCase):
         self.assertEqual(len(radii), 1)
 
 
-
-
 class CustomModelTextureSurvivesSweepTest(unittest.TestCase):
     """The "NO MATERIAL" bug: a session's out_dir (<user_dir>/temp/beamngEarth/<sid>) is wiped whenever the
     anchor changes (sweep_sessions), and a tile that later comes back from the revisit cache restores only
@@ -1084,6 +1990,137 @@ class BridgePassageTest(unittest.TestCase):
         R3, *_ = bld._passages([ring], [{"bridge_masonry": "stone", "height": 10.0}], ["k"], [47.0], road)
         self.assertEqual(len(R3), 1)
 
+    def test_a_double_deck_bridge_s_way_spans_both_decks(self):
+        """The Bay Bridge's W6 tower (bridge_structure, 160 m): its upper deck 64 m up got the way through it, the lower
+        one 9 m under it ran into the solid foot under that way (Discord 2026-11-10). With both decks through it the way
+        reaches from under the lower one to PASSAGE_CLEAR over the upper one."""
+        ring = np.array([[-15, -3], [15, -3], [15, 3], [-15, 3], [-15, -3]], float)
+        road = [np.array([[0.0, -50.0], [0.0, 50.0]])]
+        decks = [(road[0], np.array([64.0, 64.0]), 20.0), (road[0] + [0.5, 0.0], np.array([55.0, 55.0]), 18.0)]
+        R, A, L, M = bld._passages([ring], [{"height": 160.0}], [None], [0.0], road, decks, lambda c: 0.0)
+        whole = [(m, a["height"]) for r, a, m in zip(R, A, M) if np.ptp(r[:, 0]) > 29.0]
+        sides = [(r, m) for r, m in zip(R, M) if np.ptp(r[:, 0]) < 29.0]
+        self.assertEqual([m for m, _h in whole if m == 0.0], [0.0], "one solid foot")
+        self.assertLessEqual(dict(whole)[0.0], 55.0 - 1.0, "the foot stops under the lower deck")
+        self.assertIn(64.0 + bld.PASSAGE_CLEAR, M, "the whole footprint again over the upper deck's way")
+        self.assertEqual(len(sides), 2)
+        for r, m in sides:              # (beside both decks, from under the lower one)
+            self.assertGreaterEqual(np.abs(r[:, 0]).min(), 10.0 - 1e-6)
+            self.assertLessEqual(m, 55.0 - 1.0)
+
+    def test_a_wide_deck_s_passage_is_as_wide_as_the_deck(self):
+        """GitHub #1032: the Golden Gate Bridge's north tower, a strut mapped 73-75 m over its base 4 m over the six-lane
+        deck: through an 11 m passage its two halves stood over the outer lanes. With the deck's width the way is the
+        whole deck and PASSAGE_MARGIN_M either side."""
+        ring = np.array([[-20, -12], [20, -12], [20, 12], [-20, 12], [-20, -12]], float)
+        road = [np.array([[0.0, -50.0], [0.0, 50.0]])]
+        deck = [(road[0], np.array([70.0, 70.0]), 22.0)]
+        R, A, L, M = bld._passages([ring], [{"height": 1.7}], ["k"], [73.0], road, deck, lambda c: 0.0)
+        sides = [r for r in R if np.abs(r[:, 0]).min() > 1.0]
+        self.assertEqual(len(sides), 2)
+        for r in sides:
+            self.assertGreaterEqual(np.abs(r[:, 0]).min(), 11.0 + bld.PASSAGE_MARGIN_M - 1e-6)
+        # a slab at the deck's own level poking up to 0.6 m over it (the Golden Gate's roadway in its tower): cut too
+        R3, A3, L3, M3 = bld._passages([ring], [{"height": 1.6}], ["k"], [69.0], road, deck, lambda c: 0.0)
+        self.assertGreater(len(R3), 1)
+        self.assertFalse(any(np.abs(r[:, 0]).min() < 11.0 for r, m in zip(R3, M3) if m < 70.6 and len(R3) > 1
+                             and np.abs(r[:, 0]).max() > 11.0 and np.abs(r[:, 0]).min() < 1.0))
+        # two carriageways side by side: one way over both
+        deck2 = [(road[0] + [-6.0, 0.0], np.array([70.0, 70.0]), 10.0), (road[0] + [6.0, 0.0], np.array([70.0, 70.0]), 10.0)]
+        R2, *_ = bld._passages([ring], [{"height": 1.7}], ["k"], [73.0], [d[0] for d in deck2], deck2, lambda c: 0.0)
+        for r in [r for r in R2 if np.abs(r[:, 0]).min() > 1.0]:
+            self.assertGreaterEqual(np.abs(r[:, 0]).min(), 11.0 + bld.PASSAGE_MARGIN_M - 1e-6)
+
+    def test_a_tunnel_through_a_portal_building_gets_its_way(self):
+        """Fort Pitt Tunnel's east portal building (2026-11-09): on the hill over the mouth, from its lowest ground (a
+        portal building's base) up past the tube's floor, it closed the tunnel 20 m before the bridge. With the tube's
+        floor as a deck: solid under the floor, the sides of a way over it. Measured from its highest ground (another
+        building's base) the floor was under it and it stayed whole."""
+        ring = np.array([[-10, -15], [10, -15], [10, 15], [-10, 15], [-10, -15]], float)
+        road = [np.array([[0.0, -60.0], [0.0, 60.0]])]
+        tube = [(road[0], np.array([244.0, 244.0]), 11.0)]
+        ground = lambda c, lowest=False: 200.0 if lowest else 260.0      # (a hillside: 60 m across the footprint)
+        R, A, L, M = bld._passages([ring], [{"height": 50.0, "portal": True}], [None], [2.0], road, tube, ground)
+        self.assertGreater(len(R), 1)
+        self.assertIn(44.0 - 1.5, M)                    # the way's sides from just under the floor
+        for r, m in zip(R, M):
+            if m >= 42.0:                               # nothing over the floor across the tube
+                self.assertGreaterEqual(np.abs(r[:, 0]).min(), 5.5 + bld.PASSAGE_MARGIN_M - 1e-6)
+        R2, *_ = bld._passages([ring], [{"height": 50.0}], [None], [2.0], road, tube, ground)
+        self.assertEqual(len(R2), 1)                    # (not a portal building: on its highest ground, over the tube)
+
+    def test_ground_pieces(self):
+        import geodesy
+        f = geodesy.EnuFrame(37.41, -122.21)
+
+        def elev_of(fn):        # ground by the point's east (m) in f
+            def elev(la, lo):
+                e = f.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)[0]
+                return fn(np.asarray(e, np.float64))
+            return elev
+        gallery = np.array([[0, 0], [1000, 0], [1000, 11], [0, 11], [0, 0]], float)
+        trench = elev_of(lambda e: np.where(np.abs(e - 500) < 40, 89.6, 99.7))
+        pieces, drop = bld.ground_pieces(f, gallery, 0.0, 0.0, trench)
+        self.assertAlmostEqual(drop, 10.1, places=3)       # (the slope its mapped height spans)
+        self.assertGreater(len(pieces), 2)
+        self.assertAlmostEqual(sum(bld._area2(r) / 2 for r in pieces), 11000.0, delta=1.0)    # the whole of it, no overlap
+        for r in pieces:            # at most PIECE_LEN_M long
+            self.assertLessEqual(float(np.ptp(r[:, 0])), bld.PIECE_LEN_M + 1.0 + 1e-6)
+        # the same cuts whichever tile asks (its rings relative to another corner) and however its outline is drawn
+        cuts = sorted(round(float(r[:, 0].max()), 6) for r in pieces)
+        shifted, _ = bld.ground_pieces(f, gallery - [512.0, 256.0], 512.0, 256.0, trench)
+        self.assertEqual(sorted(round(float(r[:, 0].max()) + 512.0, 6) for r in shifted), cuts)
+        redrawn = np.roll(gallery[:-1], 2, axis=0)      # (clean_ring's: counter-clockwise, no closing point)
+        flipped, _ = bld.ground_pieces(f, redrawn, 0.0, 0.0, trench)
+        self.assertEqual(sorted(round(float(r[:, 0].max()), 6) for r in flipped), cuts)
+        # longer than a road tile: in pieces on flat ground too (its far ends are other tiles')
+        self.assertGreater(len(bld.ground_pieces(f, gallery, 0.0, 0.0, elev_of(lambda e: 0.002 * e))[0]), 2)
+        # left whole: shorter than a tile on flat ground, short, or wide
+        mid = np.array([[0, 0], [200, 0], [200, 11], [0, 11], [0, 0]], float)
+        self.assertEqual(bld.ground_pieces(f, mid, 0.0, 0.0, elev_of(lambda e: 0.002 * e)), ([mid], 0.0))
+        short = np.array([[0, 0], [80, 0], [80, 11], [0, 11], [0, 0]], float)
+        self.assertEqual(len(bld.ground_pieces(f, short, 0.0, 0.0, elev_of(lambda e: 0.5 * e))[0]), 1)
+        wide = np.array([[0, 0], [1000, 0], [1000, 60], [0, 60], [0, 0]], float)
+        self.assertEqual(len(bld.ground_pieces(f, wide, 0.0, 0.0, trench)[0]), 1)
+
+    def test_long_building_on_a_grade_keeps_its_height_over_its_ground(self):
+        # the SLAC Klystron Gallery: 18.3 m mapped (lowest ground to top) over a steady grade along it; in pieces, each
+        # on its own ground, its height is what is left of that over the grade (~3 m), not 18.3 m over every piece
+        import geodesy
+        import mapgeom
+        f = geodesy.EnuFrame(37.41, -122.21)
+        e = np.array([-372.0, 628.0, 628.0, -372.0, -372.0]); n = np.array([120.0, 120.0, 131.0, 131.0, 120.0])
+        la, lo, _ = f.enu_to_geodetic(e, n, 0.0)
+        cell = mapgeom.Features(layer="buildings", ids=np.array(["w162058026"]), kind=np.full(1, mapgeom.POLYGON, np.uint8),
+                                part_off=np.arange(2, dtype=np.int64), ring_off=np.arange(2, dtype=np.int64),
+                                coord_off=np.array([0, 5], np.int64), lonlat=np.stack([lo, la], 1).astype(np.float64),
+                                attrs={"height": np.array([18.3])})
+
+        def elev(lat, lon):         # 102.6 m at the west end, 0.5 % down to the east (the linac's grade)
+            ee = f.geodetic_to_enu(np.asarray(lat), np.asarray(lon), 0.0)[0]
+            return 100.74 - 0.015 * (np.asarray(ee, np.float64) + 372.0) + 1.86
+        items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [cell], elev)
+        self.assertGreater(len(items), 2)
+        for spec, gmin, gmax in items:
+            self.assertAlmostEqual(spec.height, 18.3 - 15.0, delta=0.1)
+            self.assertLessEqual(gmax - gmin, 0.015 * bld.PIECE_LEN_M + 0.2)
+        # every tile it crosses draws the pieces whose centre is its own (the one by I-280 collidable there, its
+        # centre's tile 1.1 km off): each piece once, all of it
+        area, n = 0.0, 0
+        for tx in range(-2, 3):
+            got = bld.tile_buildings(f, 256.0 * tx, 0.0, 256.0 * (tx + 1), 256.0, [cell], elev)
+            for spec, _g0, _g1 in got:
+                c = spec.ring.mean(0)
+                self.assertFalse(np.allclose(spec.ring[0], spec.ring[-1]), "a clean ring, not closed")
+                # its whole roof: a closed ring triangulated to half of it (a hole the car's front dropped into)
+                self.assertAlmostEqual(sum(bld._area2(spec.ring[list(t)]) / 2 for t in bld.triangulate(spec.ring)),
+                                       bld._area2(spec.ring) / 2, delta=0.01)
+                self.assertTrue(0 <= c[0] < 256 and 0 <= c[1] < 256, (tx, c))
+                area += bld._area2(spec.ring) / 2
+            n += len(got)
+        self.assertGreaterEqual(n, 1000 / bld.PIECE_LEN_M)
+        self.assertAlmostEqual(area, 1000.0 * 11.0, delta=2.0)
+
 
 class MachineLearnedFootprintTest(unittest.TestCase):
     """Microsoft's machine-learned footprints on a road bridge or on water are its deck or a boat (Tower Bridge's
@@ -1108,6 +2145,27 @@ class MachineLearnedFootprintTest(unittest.TestCase):
         self.assertTrue(bld._ml_false(lorry, None, None, road))
         self.assertFalse(bld._ml_false(house, None, None, road))
         self.assertFalse(bld._ml_false(lorry, None, None, None))
+
+    def test_vehicle_in_a_wide_roads_outer_lane(self):
+        """I-280 at Cupertino (2026-11-08, Overture aed44c00-9b91-4017-848a-55432a14efa4): Microsoft's 8 x 30 m outline
+        of a lorry 7.0 m from the centre line of a 5-lane, 26 m wide carriageway stood as a house in the fast lane
+        (ML_ROAD_M alone reached its middle two lanes). With the road's drawn half-width it is on the lanes; a house
+        past the road's edge stays, and so does everything ML_ROAD_M did not reach on a road without a width."""
+        road = bld.RoadLines([np.array([[0.0, 0.0], [200.0, 0.0]])])
+        road.half.append(13.0)
+        lorry = np.array([[50, 2.95], [80.1, 2.95], [80.1, 11.05], [50, 11.05]], float)     # centre 7.0 m out
+        self.assertTrue(bld._ml_false(lorry, None, None, road))
+        house = np.array([[50, 15], [62, 15], [62, 25], [50, 25]], float)                  # centre 20 m out
+        self.assertFalse(bld._ml_false(house, None, None, road))
+        edge = np.array([[50, 13.0], [62, 13.0], [62, 15.4], [50, 15.4]], float)           # centre 14.2 m out
+        self.assertFalse(bld._ml_false(edge, None, None, road), "past half-width + ML_ROAD_EDGE_M")
+        self.assertFalse(bld._ml_false(lorry, None, None, [road[0]]), "(no width known: ML_ROAD_M as before)")
+        lane = bld.RoadLines([road[0]])
+        lane.half.append(2.5)                                                           # a 5 m lane: ML_ROAD_M still
+        car = np.array([[50, 1.5], [55, 1.5], [55, 5.5], [50, 5.5]], float)                # centre 3.5 m out
+        self.assertTrue(bld._ml_false(car, None, None, lane))
+        lane.half[0] = None
+        self.assertTrue(bld._ml_false(car, None, None, lane), "(a line without a spec: ML_ROAD_M)")
 
 
     def test_in_a_median(self):
@@ -1160,7 +2218,6 @@ class BridgeStructureTest(unittest.TestCase):
         spec = bld.plan(self.ring(3.0, 2.0), {"class": "bridge_structure", "height": 12.0})
         P = bld.build([(spec, 0.0, 0.0)])[0]
         self.assertAlmostEqual(P[:, 2].max(), 12.0, places=3)
-
 
 
 class StoopTest(unittest.TestCase):
@@ -1220,7 +2277,6 @@ class TollBoothTest(unittest.TestCase):
         self.assertIsNone(bld.build([(island, 1.0, 1.2)]), "the island itself not built")
 
 
-
 class RoadLinesTest(unittest.TestCase):
     def test_a_road_with_a_bridge_in_it_keeps_its_ground_pieces(self):
         """A motorway segment with a short overpass in it (the A7, GitHub #239): its pieces on the ground are public
@@ -1234,7 +2290,21 @@ class RoadLinesTest(unittest.TestCase):
         self.assertFalse(((xs > 110) & (xs < 120)).any(), "nothing on the bridge's stretch")
         ring = np.array([[20, 126.8], [35, 126.8], [35, 129.2], [20, 129.2], [20, 126.8]], np.float64)
         self.assertTrue(bld._ml_false(ring, [], [], lines), "a lorry-sized outline on its lanes: not a building")
+        self.assertEqual(len(lines.half), len(lines), "a half-width per line")
 
+    def test_lines_carry_the_drawn_half_width(self):
+        """road_lines' half-widths are road_specs' width / 2 (a 26 m carriageway: 13 m), and the I-280 lorry's outline
+        7 m off its centre line is left out with them (ML_ROAD_EDGE_M)."""
+        from test_roads import FRAME, features
+        f = features([[(-100, 128), (356, 128)], [(-100, 60), (356, 60)]], ["motorway", "residential"],
+                     widths=[(0, 26.0)])
+        lines = bld.road_lines(FRAME, [f], 0.0, 0.0)
+        self.assertEqual(len(lines), 2)
+        self.assertAlmostEqual(lines.half[0], 13.0, places=3)
+        self.assertLess(lines.half[1], 13.0, "the street its own (narrower) width")
+        lorry = np.array([[20, 131], [50.1, 131], [50.1, 139.1], [20, 139.1], [20, 131]], np.float64)
+        self.assertTrue(bld._ml_false(lorry, [], [], lines))
+        self.assertFalse(bld._ml_false(lorry, [], [], list(lines)), "(the plain lines: ML_ROAD_M alone missed it)")
 
 
 class SteepMachineLearnedTest(unittest.TestCase):
@@ -1254,8 +2324,6 @@ class SteepMachineLearnedTest(unittest.TestCase):
         self.assertFalse(bld._ml_steep(r, steep30, near), "30 deg beside a path: kept (a hut on the trail)")
         self.assertTrue(bld._ml_steep(r, steep40, near), "40 deg: out wherever it is")
         self.assertTrue(bld._ml_steep(r, steep30, []), "no ways at all")
-
-
 
 
 class FarLampTest(unittest.TestCase):
@@ -1290,6 +2358,181 @@ class FarLampTest(unittest.TestCase):
         self.assertIn(wall, set(M.tolist()), "the walls take the night window map")
         self.assertGreater(float(np.ptp(UV[:, 0])), 0.1, "spread along the walls")
 
+
+class MappedRoofShapesTest(unittest.TestCase):
+    """roof:shape forms drawn as what they are, not bent to a gable or a hip."""
+    SHAPES = ("skillion", "half-hipped", "pyramidal", "mansard", "gambrel")
+
+    def spec(self, shape, seed=None):
+        ring = np.array([[0.0, 0.0], [14.0, 0.0], [14.0, 9.0], [0.0, 9.0]])
+        return bld.plan(ring, {"class": "house", "roof_shape": shape, "height": 11.0}, lat=50.0, lon=9.0, look=seed)
+
+    def faces(self, spec):
+        P, _, T, *_ = bld.build([(spec, 0.0, 0.0)])
+        return P[T]
+
+    def test_the_mapped_shape_is_kept(self):
+        for shape in self.SHAPES:
+            self.assertEqual(self.spec(shape).roof, shape)
+
+    def test_the_mapped_height_is_the_ridge(self):
+        for shape in self.SHAPES + ("gabled",):
+            s = self.spec(shape)
+            rise = bld.roof_rise(s.roof, bld.oriented_box(s.ring)[3], bld.roof_pitch(s))
+            self.assertAlmostEqual(s.height + rise, 11.0, delta=0.01, msg=shape)
+            self.assertAlmostEqual(self.faces(s)[:, :, 2].max(), 11.0, delta=0.15, msg=shape)
+
+    # (the faces as drawn: shells.close's bottom caps face down by design, the watertight PR)
+    @unittest.mock.patch("shells.close", lambda P, T, TM=None, per_vertex=(), **k: (P, T, TM, list(per_vertex)))
+    def test_every_face_looks_outwards(self):
+        for shape in self.SHAPES:
+            for seed in (0.2, 0.8):
+                s = self.spec(shape, seed)
+                f = self.faces(s)
+                f = f[f[:, :, 2].min(1) >= s.height - 0.5]          # the roof and the walls under it
+                n = np.cross(f[:, 1] - f[:, 0], f[:, 2] - f[:, 0])
+                f, n = f[np.linalg.norm(n, axis=1) > 1e-6], n[np.linalg.norm(n, axis=1) > 1e-6]
+                out = (f.mean(1) - np.array([7.0, 4.5, 0.0]))[:, :2]
+                ok = (n[:, 2] > 1e-6) | ((n[:, :2] * out).sum(1) > 0)
+                self.assertTrue(ok.all(), f"{shape}: {int((~ok).sum())} of {len(ok)} faces look inwards")
+
+    def test_each_form_is_its_own_shape(self):
+        tops = {}
+        for shape in self.SHAPES + ("gabled", "hipped"):
+            f = self.faces(self.spec(shape, 0.2))
+            v = np.unique(np.round(f.reshape(-1, 3), 2), axis=0)
+            tops[shape] = len(v)
+        self.assertEqual(len({tops[s] for s in ("pyramidal", "mansard", "half-hipped")}), 3, tops)
+
+    def test_a_lean_to_rises_from_one_wall_to_the_other(self):
+        lows = []
+        for seed in (0.2, 0.8):
+            s = self.spec("skillion", seed)
+            f = self.faces(s).reshape(-1, 3)
+            top = f[np.argmax(f[:, 2])]
+            lows.append(top[1] > 4.5)
+        self.assertEqual(set(lows), {True, False}, "the high side differs from building to building")
+
+    def test_a_nearly_square_house_can_be_a_pyramid(self):
+        ring = np.array([[0.0, 0.0], [9.0, 0.0], [9.0, 9.0], [0.0, 9.0]])
+        s = bld.plan(ring, {"class": "house", "roof_shape": "pyramidal"}, lat=50.0, lon=9.0)
+        f = self.faces(s).reshape(-1, 3)
+        top = f[np.argmax(f[:, 2])]
+        self.assertAlmostEqual(top[0], 4.5, delta=0.01)
+        self.assertAlmostEqual(top[1], 4.5, delta=0.01)
+
+
+class IndustrialLandTest(unittest.TestCase):
+    """Plain buildings on industrial / port land are industrial (a refinery's stores, not houses with porches)."""
+
+    def test_land_makes_plain_buildings_industrial(self):
+        ring = np.array([[0, 0], [14, 0], [14, 10], [0, 10]], float)
+        def pitched(attrs):
+            return sum(bld.plan(ring + k * 0.37, dict(attrs), 1, 51.88, 4.37).roof not in ("flat", "dome")
+                       for k in range(60))
+        self.assertGreater(pitched({}), 0, "a small unclassified building: some pitched roofs")
+        self.assertEqual(pitched({"_land": "industrial"}), 0, "on industrial land: flat, industrial")
+        self.assertGreater(pitched({"class": "house", "_land": "industrial"}), 0, "a mapped house stays a house")
+
+    def test_rings_and_tile_tagging(self):
+        class Land:
+            kind = np.array([3, 3])
+            ids = np.array([1, 2])
+            attrs = {"class": np.array(["industrial", "residential"], object)}
+            def parts(self, i):
+                return [[np.zeros((4, 2))]]
+        import mapgeom
+        sq = np.array([[-100, -100], [400, -100], [400, 400], [-100, 400]], float)
+        orig = mapgeom.enu_xy
+        mapgeom.enu_xy = lambda f, frame, pts: (sq[:, 0], sq[:, 1])
+        try:
+            rings = bld.industrial_rings(None, [Land()], 0.0, 0.0)
+        finally:
+            mapgeom.enu_xy = orig
+        self.assertEqual(len(rings), 1, "the industrial area only")
+
+
+class GreenhouseTest(unittest.TestCase):
+    """A greenhouse is glazing: a Venlo block 6 m to the gutter under a flat roof, a garden one a small glass gable."""
+
+    def test_venlo_block_and_garden_greenhouse(self):
+        big = np.array([[0, 0], [200, 0], [200, 120], [0, 120]], float)
+        sp = bld.plan(big, {"class": "greenhouse"}, 0, 52.01, 4.26)
+        self.assertEqual((sp.cls, sp.roof, sp.height), ("greenhouse", "flat", bld.GREENHOUSE_H))
+        self.assertTrue(sp.facade.startswith(bld.GLASSHOUSE) and sp.roof_mat == sp.facade)
+        self.assertFalse(sp.windows)
+        small = np.array([[0, 0], [6, 0], [6, 3.5], [0, 3.5]], float)
+        g = bld.plan(small, {"class": "greenhouse"}, 0, 52.01, 4.26)
+        self.assertEqual((g.roof, g.height), ("gabled", bld.GREENHOUSE_SMALL_H))
+        self.assertEqual(bld.plan(big, {"class": "greenhouse", "height": 7.5}, 0, 52.01, 4.26).height, 7.5)
+
+    def test_the_aerial_sets_the_tone(self):
+        big = np.array([[0, 0], [200, 0], [200, 120], [0, 120]], float)
+        dark = bld.plan(big, {"class": "greenhouse", "_roof_photo": (0.30, 0.32, 0.33)}, 0, 52.01, 4.26)
+        white = bld.plan(big, {"class": "greenhouse", "_roof_photo": (0.85, 0.86, 0.86)}, 0, 52.01, 4.26)
+        self.assertLess(bld.LOOKS[dark.facade][1][0], 0.5)
+        self.assertGreater(bld.LOOKS[white.facade][1][0], 0.95)
+        self.assertIn(bld.GLASSHOUSE, bld.MATERIALS)
+
+
+class SpireTest(unittest.TestCase):
+    """A slender steel part is a mast; a pyramidal roof rising several times its half span is a spire at full height
+    (One World Trade Center's mast: 5 x 5 m, 121 m, roof:height 80); the skyline keeps parts and pyramidal crowns."""
+
+    def test_mast_and_spire(self):
+        ring = np.array([[0, 0], [5, 0], [5, 5], [0, 5]], float)
+        sp = bld.plan(ring, {"class": "commercial", "height": 121.0, "facade_material": "metal",
+                             "roof_shape": "pyramidal", "roof_height": 80.0}, 0, 40.713, -74.013)
+        self.assertEqual((sp.cls, sp.roof, sp.windows), ("mast", "pyramidal", False))
+        self.assertAlmostEqual(sp.height + 2.5 * math.tan(math.radians(sp.pitch)), 121.0, places=1)
+        stone = bld.plan(np.array([[0, 0], [6, 0], [6, 6], [0, 6]], float),
+                         {"class": "church", "height": 30.0, "facade_material": "stone"}, 0, 48.1, 11.5)
+        self.assertNotEqual(stone.cls, "mast", "a stone bell tower is not steel")
+        house = bld.mapped_pitch("gabled", 4.0, 30.0)
+        self.assertEqual(house, bld.MAPPED_PITCH[1], "a 30 m gable on a house: still capped")
+
+    def test_skyline_pyramid(self):
+        ring = np.array([[0, 0], [5, 0], [5, 5], [0, 5]], float)
+        sp = bld.plan(ring, {"class": "commercial", "height": 121.0, "facade_material": "metal",
+                             "roof_shape": "pyramidal", "roof_height": 80.0}, 0, 40.713, -74.013)
+        P = bld._sky_mesh([(sp, 0.0, 0.0)])[0]
+        self.assertAlmostEqual(float(np.max(np.asarray(P)[:, 2])), 121.0, places=0)
+
+
+class WaterTankTest(unittest.TestCase):
+    """New York's mid-rise flat roofs carry cedar water tanks on steel legs (water_tank / _water_tank); nowhere else."""
+
+    def test_rule_and_mesh(self):
+        ring = np.array([[0, 0], [30, 0], [30, 20], [0, 20]], float)
+        specs = [bld.plan(ring + i * 0.37, {"class": "apartments", "num_floors": 12, "seed_id": str(i)}, 1,
+                          40.718, -73.999) for i in range(120)]
+        share = np.mean([bld.water_tank(sp, 40.718, -73.999, 600.0) for sp in specs])
+        self.assertTrue(0.35 < share < 0.75, share)
+        self.assertFalse(any(bld.water_tank(sp, 48.85, 2.35, 600.0) for sp in specs), "Paris: none")
+        low = bld.plan(ring, {"class": "house", "num_floors": 2}, 0, 40.718, -73.999)
+        self.assertFalse(bld.water_tank(low, 40.718, -73.999, 600.0), "two storeys: none")
+        glass = bld.plan(ring, {"class": "office", "num_floors": 20, "facade_material": "glass"}, 0, 40.718, -73.999)
+        self.assertFalse(bld.water_tank(glass, 40.718, -73.999, 600.0), "a curtain wall: none")
+        sp = next(sp for sp in specs if bld.water_tank(sp, 40.718, -73.999, 600.0))
+        sp.min_h, sp.tank = 0.0, True
+        (row,) = bld.tank_rows([(sp, 10.0, 10.5)], 100.0, 200.0)
+        self.assertEqual(row[0], "rooftank")
+        self.assertAlmostEqual(row[3], bld.base_z(sp, 10.0, 10.5) + sp.height, places=1)
+        self.assertTrue(100.0 < row[1] < 131.0 and 200.0 < row[2] < 221.0, row)
+
+
+class TowerMetalTest(unittest.TestCase):
+    """A tower's metal is a curtain wall, a supertall with no material one too (New York by Gehry was a brown plaster
+    sheet and a corrugated shed); a shed's metal stays sheeting."""
+
+    def test_tower_metal(self):
+        ring = np.array([[0, 0], [40, 0], [40, 30], [0, 30]], float)
+        def look(**at):
+            return bld.plan(ring, dict(at, **{"class": "apartments"}), 0, 40.711, -74.0058, dense=True).facade
+        self.assertTrue(look(facade_material="metal", height=200.0).startswith(bld.OFFICE))
+        self.assertTrue(look(height=271.0).startswith(bld.OFFICE))
+        self.assertTrue(look(facade_material="metal", height=8.0).startswith(bld.METALWALL))
+        self.assertFalse(look(height=40.0).startswith(bld.OFFICE))
 
 
 if __name__ == "__main__":
@@ -1433,7 +2676,11 @@ class PhotoMaskTest(unittest.TestCase):
 class RealTagsTest(unittest.TestCase):
     def test_parse_color(self):
         self.assertEqual(bld.parse_color("#fff"), (1.0, 1.0, 1.0))
-        self.assertEqual(bld.parse_color("#00ff00"), (0.0, 1.0, 0.0))
+        self.assertEqual(bld.parse_color("#10ee20"), (16 / 255, 238 / 255, 32 / 255))   # (a mapper's own hex)
+        # (Overture's canonical hexes of OSM's names read as those names: grey #778899 was a blue slate)
+        self.assertEqual(bld.parse_color("#00ff00"), bld.COLOR_NAMES["lime"])
+        self.assertEqual(bld.parse_color("#778899"), bld.COLOR_NAMES["grey"])
+        self.assertEqual(bld.parse_color("#FF0000"), bld.COLOR_NAMES["red"])
         self.assertEqual(bld.parse_color("red"), (0.75, 0.15, 0.15))
         self.assertEqual(bld.parse_color("terracotta"), (0.78, 0.40, 0.26))
         self.assertEqual(bld.parse_color("copper"), (0.55, 0.75, 0.65))
@@ -1473,12 +2720,24 @@ class RealTagsTest(unittest.TestCase):
         self.assertLess(rgba[2], 80)
 
         # Hex color
-        s2 = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_color": "#00ff00"}, 0, 39.2, -76.6)
+        s2 = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_color": "#10ee20"}, 0, 39.2, -76.6)
         mat_idx2 = bld._Looks(s2.seed)
         _, rgba2 = mat_idx2[s2.facade]
-        self.assertLess(rgba2[0], 50)
+        # (a saturated mapped colour muted toward its grey, facade_tone: still a strong green)
+        self.assertLess(rgba2[0], 90)
         self.assertGreater(rgba2[1], 200)
-        self.assertLess(rgba2[2], 50)
+        self.assertLess(rgba2[2], 90)
+
+    def test_roof_tiles_own_repeat(self):
+        """Clay roof tiles repeat every ROOF_TILES_UV_M (about four tiles across), the other roofs every ROOF_UV_M."""
+        m = bld.Mesh()
+        looks = bld._Looks(0.5)
+        quad = ((0, 0, 0), (6, 0, 0), (6, 6, 0), (0, 6, 0)), ((0, 0), (1, 0), (1, 1), (0, 1))
+        m.quad(*quad[0], *quad[1], looks[f"{bld.ROOF_TILES}|0"])
+        m.quad(*quad[0], *quad[1], looks[f"{bld.ROOF_SLATE}|0"])
+        _P, UV, _T, M, _C = m.arrays()
+        self.assertAlmostEqual(float(UV[:4].max()), bld.ROOF_UV_M / bld.ROOF_TILES_UV_M)
+        self.assertAlmostEqual(float(UV[4:].max()), 1.0)
 
     def test_roof_material_and_color(self):
         # Metal roof
@@ -1494,9 +2753,7 @@ class RealTagsTest(unittest.TestCase):
 
         # Tile roof
         st = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "tile"}, 0, 39.2, -76.6)
-        self.assertTrue(str(st.roof_mat).startswith(bld.ROOF_SLATE))
-        k = int(st.roof_mat.split("|")[1])
-        self.assertGreaterEqual(k, 4)
+        self.assertTrue(str(st.roof_mat).startswith(bld.ROOF_TILES), "clay tiles, not tinted slate")
 
         # Slate roof
         ss = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "slate"}, 0, 39.2, -76.6)
@@ -1526,19 +2783,19 @@ class RealTagsTest(unittest.TestCase):
                                                     "facade_color": ["#ff0000"], "roof_color": ["#0000ff"]})
         parts = Feats(["P1", "P2"], [ll(10, 10, 20, 20), ll(12, 12, 16, 16)],
                       **{"building_id": ["B1", "B1"], "height": [10.0, 30.0], "min_height": [0.0, 10.0],
-                         "roof_shape": ["flat", "hipped"], "facade_color": ["#ff0000", "#00ff00"],
+                         "roof_shape": ["flat", "hipped"], "facade_color": ["#ff0000", "#10ee20"],
                          "roof_color": ["#0000ff", "#ffff00"]})
         items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la, lo: np.zeros(np.shape(la)),
                                    part_layers=[parts])
         self.assertEqual(len(items), 2)
         p1_spec, p2_spec = items[0][0], items[1][0]
-        # P1 has red facade and blue roof
+        # P1 has red facade and blue roof (Overture's #ff0000: the muted red of "red")
         _, p1_rgba = bld._Looks(p1_spec.seed)[p1_spec.facade]
-        self.assertGreater(p1_rgba[0], 200)
+        self.assertGreater(p1_rgba[0], 130)     # (pure red muted toward its grey: facade_tone)
         self.assertLess(p1_rgba[1], 50)
         # P2 has green facade (overridden on the part) and yellow roof
         _, p2_rgba = bld._Looks(p2_spec.seed)[p2_spec.facade]
-        self.assertLess(p2_rgba[0], 50)
+        self.assertLess(p2_rgba[0], 90)         # (muted toward its grey: facade_tone)
         self.assertGreater(p2_rgba[1], 200)
         self.assertEqual(p2_spec.roof, "hipped")
 
@@ -1638,3 +2895,724 @@ class ModelBridgeTest(unittest.TestCase):
         self.assertEqual(got, {})       # (the parts are near the origin, the model at x 1000: none under it)
         got = bld.bridge_road_ends([(self.FP, (0.0, 0.0), 22)], b, [])
         self.assertEqual(got, {22: [(-80.0, 2.0, 1.0), (90.0, 2.0, 2.0)]})
+
+
+class QldStoreysBrickAwningTest(unittest.TestCase):        # fork
+    """Queensland: single-storey houses by default, one brick scale on every face, footpath awnings kept off the road."""
+    LAT, LON = -23.129, 150.749         # Yeppoon
+
+    def plan(self, ring, attrs, i):
+        return bld.plan(ring, dict(attrs, seed_id=i), lat=self.LAT, lon=self.LON)
+
+    def test_untagged_houses_are_mostly_single_storey_tagged_ones_are_left(self):
+        specs = [self.plan(rect(0, 0, 10, 13), {"class": "house"}, i) for i in range(600)]
+        self.assertAlmostEqual(sum(s.floors == 1 for s in specs) / len(specs), bld.QLD_ONE_STOREY, delta=0.06)
+        for s in (self.plan(rect(0, 0, 10, 13), {"class": "house", "num_floors": 2}, i) for i in range(40)):
+            self.assertEqual(s.floors, 2)
+        apart = [self.plan(rect(0, 0, 30, 40), {"class": "apartments"}, i).floors for i in range(60)]
+        self.assertGreaterEqual(min(apart), 3)
+        self.assertEqual(self.plan(rect(0, 0, 10, 13), {"class": "house"}, 5).floors,
+                         self.plan(rect(0, 0, 10, 13), {"class": "house"}, 5).floors)      # (stable)
+        other = bld.plan(rect(0, 0, 10, 13), {"class": "house", "seed_id": 1}, lat=40.0, lon=-75.0)
+        self.assertIsNone(other.awn)
+
+    def shop(self, gap, i):
+        spec = self.plan(rect(0, 0, 12, 10), {"class": "retail"}, i)
+        road = (np.array([(-50.0, -4.0 - gap), (50.0, -4.0 - gap)]), 4.0, "tertiary", True)      # carriageway edge at y = -gap
+        spec.gring = np.array([0.0, 0.0, 0.0, 0.0])
+        bld.doors([(spec, 0.0, 0.0)], [road], 0.0, 0.0)
+        return spec
+
+    def test_shop_awnings_stay_off_the_carriageway(self):
+        for gap, depth in ((4.5, bld.QLD_AWN_MAX_D), (2.3, bld.QLD_AWN_MIN_D)):
+            shops = [self.shop(gap, i) for i in range(30)]
+            got = [s for s in shops if s.awn]
+            self.assertTrue(got, gap)
+            self.assertAlmostEqual(len(got) / 30, bld.QLD_AWN_SHARE, delta=0.2)
+            for s in got:
+                self.assertEqual(s.awn["D"], depth)
+                self.assertGreaterEqual(s.awn["L"], bld.QLD_AWN_MIN_L)
+                m = bld.build([(s, 0.0, 0.0)])
+                self.assertGreaterEqual(float(m[0][:, 1].min()), -(gap - bld.QLD_AWN_KERB_M) - 1e-6)    # (nothing past the clear edge)
+                self.assertLess(float(m[0][:, 1].min()), -0.5)                                             # (and it does reach out)
+        self.assertFalse(any(self.shop(2.0, i).awn for i in range(30)))     # a footpath under 2.1 m: no awning
+        self.assertFalse(any(self.shop(1.0, i).awn for i in range(30)))
+
+
+def _turn(xy, deg):
+    a = math.radians(deg)
+    xy = np.asarray(xy, np.float64)
+    return np.c_[xy[:, 0] * math.cos(a) - xy[:, 1] * math.sin(a), xy[:, 0] * math.sin(a) + xy[:, 1] * math.cos(a)]
+
+
+class ModelBridgeAlignTest(unittest.TestCase):
+    """GitHub #1071 (Perth): a model bridge is told by its 3dmr.eu record or its turned bounding box, laid onto its
+    mapped bridge (its upload's point ~18 m off along it: the deck ended short of the road leaving it), and baked
+    where every tile round it leaves the procedural bridge out."""
+
+    FP = {"bridge": True, "ax": 0, "u0": -100.0, "du": 2.0, "cols": [[-10.0, 10.0]] * 101}    # (u -100..100)
+
+    def test_a_bridge_by_its_record_or_its_turned_box(self):
+        box = lambda w, h, deg=0.0: np.c_[_turn([[x, y] for x in (-w / 2, w / 2) for y in (-h / 2, h / 2)], deg),
+                                          np.zeros(4)]
+        s_curve = box(88.0, 60.0)               # (Elizabeth Quay Bridge, id 55: an S, its box no deck's shape)
+        self.assertFalse(bld._is_bridge(s_curve))
+        self.assertTrue(bld._is_bridge(s_curve, {"tags": {"bridge": "yes", "highway": "cycleway"}}))
+        self.assertTrue(bld._is_bridge(s_curve, {"tags": {}, "categories": ["Bridge", "Foot Bridge"]}))
+        self.assertFalse(bld._is_bridge(s_curve, {"tags": {"building": "office"}}))
+        self.assertTrue(bld._is_bridge(box(690.0, 45.0, 63.0)), "Mount Henry Bridge (id 53): 28 degrees off north")
+        self.assertTrue(bld._is_bridge(box(370.0, 65.0, 81.0)))
+        self.assertFalse(bld._is_bridge(box(200.0, 150.0, 30.0)), "a building")
+        self.assertFalse(bld._is_bridge(box(60.0, 8.0, 10.0)), "a wall (short)")
+
+    def test_shift_along_onto_the_mapped_bridge(self):
+        line = np.c_[np.arange(-82.0, 119.0, 4.0), np.zeros(51)]          # (the mapped bridge: 18 m on)
+        du, dv = bld.bridge_shift(self.FP, (0.0, 0.0), [line, line + [0.0, 6.0]])
+        self.assertAlmostEqual(du, 18.0, delta=1.0)
+        self.assertAlmostEqual(dv, 0.0, delta=0.5)
+
+    def test_no_shift_when_the_deck_covers_it(self):
+        line = np.c_[np.arange(-90.0, 91.0, 4.0), np.full(46, 3.0)]
+        self.assertEqual(bld.bridge_shift(self.FP, (0.0, 0.0), [line]), (0.0, 0.0))
+        self.assertEqual(bld.bridge_shift(self.FP, (0.0, 0.0), []), (0.0, 0.0))
+        far = np.c_[np.arange(-90.0, 91.0, 4.0), np.full(46, 60.0)]     # (another bridge, 50 m beside it)
+        self.assertEqual(bld.bridge_shift(self.FP, (0.0, 0.0), [far]), (0.0, 0.0))
+
+    def test_shift_across_and_a_longer_mapped_bridge_centred(self):
+        line = np.c_[np.arange(-90.0, 91.0, 4.0), np.full(46, 16.0)]      # (its deck's side at 10)
+        du, dv = bld.bridge_shift(self.FP, (0.0, 0.0), [line])
+        self.assertAlmostEqual(du, 0.0, delta=1.0)
+        self.assertAlmostEqual(dv, 6.0 - threedmr.BRIDGE_FOOT_MARGIN_M, delta=0.6)   # (onto its side)
+        longer = np.c_[np.arange(-106.0, 127.0, 4.0), np.zeros(59)]       # (232 m: past both ends)
+        du, _dv = bld.bridge_shift(self.FP, (0.0, 0.0), [longer])
+        self.assertAlmostEqual(du, 10.0, delta=2.5)
+
+    def test_shift_of_a_turned_deck(self):
+        fp = dict(self.FP, ang=math.radians(63.0))
+        line = _turn(np.c_[np.arange(-83.0, 118.0, 4.0), np.zeros(51)], 63.0) + [500.0, 200.0]
+        du, dv = bld.bridge_shift(fp, (500.0, 200.0), [line])
+        self.assertAlmostEqual(du, 17.0, delta=1.0)
+        self.assertAlmostEqual(dv, 0.0, delta=0.5)
+
+    def test_align_moves_the_centre_once_per_model_and_place_bakes_it_there(self):
+        import geodesy
+        f = geodesy.EnuFrame(-31.9635, 115.8469)
+        line = np.c_[np.arange(-82.0, 119.0, 4.0) + 100.0, np.full(51, 50.0)]
+        bld._ALIGN_MEMO.clear()
+        key = (54, -31.9631, 115.8479)
+        with mock.patch.object(bld, "mapped_bridge_lines", return_value=[line]) as lines:
+            x, y = bld.bridge_align(f, self.FP, (100.0, 50.0), key, lambda k: None)
+            self.assertAlmostEqual(x, 118.0, delta=1.0)
+            self.assertAlmostEqual(y, 50.0, delta=0.5)
+            self.assertEqual(bld.bridge_align(f, self.FP, (100.0, 50.0), key, lambda k: []), (x, y))
+            self.assertEqual(lines.call_count, 2, "a map cell not had: asked again")
+            self.assertEqual(bld.bridge_align(f, self.FP, (100.0, 50.0), key, lambda k: []), (x, y))
+            self.assertEqual(lines.call_count, 2, "the other tiles take the same answer")
+        bld._ALIGN_MEMO.clear()
+        custom = [{"id": 54, "xy": (100.0, 50.0), "source": "api"}, {"id": 52, "xy": (0.0, 0.0)},
+                  {"id": 54, "xy": (1.0, 1.0), "local": {"file": "x.stl"}}]
+        got = bld.place_bridge_models(custom, [(self.FP, (x, y), 54)])
+        self.assertEqual(got[0]["xy"], (x, y))
+        self.assertEqual(got[0]["source"], "api")
+        self.assertIs(got[1], custom[1])
+        self.assertIs(got[2], custom[2], "a player's own model stays where they put it")
+
+    def test_a_footbridge_s_ends_on_the_ground_when_no_road_crosses(self):
+        """Perth's Elizabeth Quay Bridge (id 55): no road bridge under it, its deck was leaned onto the ground at its
+        own ends (the inlet's water); now onto the walkway's ends on the quays."""
+        from test_roads import FRAME, features
+
+        class NoRoads:
+            def parts(self, cells, box):
+                return []
+        walk = features([[(-90.0, 0.0), (90.0, 0.0)]], ["footway"], subtypes=["road"], flags=[(0, "is_bridge")])
+        got = bld.bridge_road_ends([(self.FP, (0.0, 0.0), 55)], NoRoads(), [walk], FRAME,
+                                   lambda x, y: 2.0 + 0.01 * np.asarray(x))
+        self.assertEqual(sorted((round(x), round(z, 1)) for x, _y, z in got[55]), [(-90, 1.1), (90, 2.9)])
+        self.assertEqual(bld.bridge_road_ends([(self.FP, (0.0, 0.0), 55)], NoRoads(), [walk]), {},
+                         "without a ground: none (the deck's own ends then)")
+
+    def test_mapped_bridge_lines_of_roads_rails_and_walkways(self):
+        from test_roads import FRAME, features
+        roads_ = features([[(0.0, 0.0), (100.0, 0.0)], [(0.0, 30.0), (100.0, 30.0)], [(0.0, 60.0), (100.0, 60.0)],
+                           [(0.0, 90.0), (100.0, 90.0)]], ["primary", "standard_gauge", "footway", "primary"],
+                          subtypes=["road", "rail", "road", "road"], flags=[(0, "is_bridge"), (1, "is_bridge"),
+                                                                            (2, "is_bridge")])
+        got = bld.mapped_bridge_lines(FRAME, [roads_, roads_], (-10.0, -10.0, 110.0, 100.0))
+        self.assertEqual(sorted(round(float(xy[:, 1].mean())) for xy in got), [0, 30, 60],
+                         "the bridges of a road, a railway and a walkway, once each; no ground road")
+        self.assertEqual(bld.mapped_bridge_lines(FRAME, [roads_], (500.0, 500.0, 600.0, 600.0)), [])
+
+
+class RoadPassageTest(unittest.TestCase):
+    """A road mapped inside a building with no tunnel tag is a passage through it (Ülemiste keskus, Tallinn: the
+    service roads at the back of the mall run in under it, and the wall stood across them)."""
+
+    def setUp(self):
+        import geodesy
+        self.f = geodesy.EnuFrame(59.42, 24.79)
+        self.ground = lambda la, lo: np.zeros(np.shape(la))
+
+    def ll(self, x, y, w, d):
+        e = np.array([x, x + w, x + w, x, x]); n = np.array([y, y, y + d, y + d, y])
+        la, lo, _ = self.f.enu_to_geodetic(e, n, 0.0)
+        return np.stack([lo, la], 1)
+
+    def items(self, road, height=10.0, **kw):
+        b = Feats(["B"], [self.ll(20, 20, 100, 60)], **{"class": ["retail"], "height": [height]})
+        return bld.tile_buildings(self.f, 0, 0, 256, 256, [b], self.ground, passage_xy=[np.asarray(road, float)], **kw)
+
+    @staticmethod
+    def covers(items, x, y, z):
+        """Is the point (x, y, z) inside one of the drawn pieces?"""
+        from polygon import Path
+        for s, _, _ in items:
+            lo = s.min_h or 0.0
+            if lo <= z <= lo + s.height and Path(s.ring).contains_points(np.array([[x, y]]))[0]:
+                return True
+        return False
+
+    def test_a_road_through_a_building_is_left_open_under_a_lintel(self):
+        items = self.items([[0.0, 50.0], [256.0, 50.0]])
+        self.assertTrue(self.covers(items, 40, 60, 2.0), "the building stands beside the way")
+        self.assertFalse(self.covers(items, 70, 50, 2.0), "nothing across the road")
+        self.assertFalse(self.covers(items, 70, 52.5, 3.0), "the way is as wide as ROAD_PASSAGE_W")
+        self.assertTrue(self.covers(items, 70, 50, 6.0), "the building goes on over it")
+        self.assertFalse(self.covers(items, 70, 50, 10.5), "to its own top")
+        area = sum(abs(bld._area2(s.ring)) / 2 for s, _, _ in items if not s.min_h)
+        lintel = sum(abs(bld._area2(s.ring)) / 2 for s, _, _ in items if s.min_h)
+        self.assertAlmostEqual(area + lintel, 6000.0, delta=10.0, msg="the footprint's own area, cut not lost")
+        self.assertAlmostEqual(lintel, 100.0 * bld.ROAD_PASSAGE_W, delta=20.0)
+
+    def test_a_low_building_is_open_all_through(self):
+        items = self.items([[0.0, 50.0], [256.0, 50.0]], height=bld.ROAD_PASSAGE_H + 0.5)
+        self.assertFalse(self.covers(items, 70, 50, 1.0))
+        self.assertFalse(self.covers(items, 70, 50, 4.0), "no room for a lintel over the clearance")
+        self.assertTrue(self.covers(items, 40, 60, 1.0))
+
+    def test_a_road_along_its_edge_cuts_nothing(self):
+        """Mapped lines are metres off the buildings' edges: a road just inside the outline is the outline's slop."""
+        self.assertEqual(len(self.items([[0.0, 21.0], [256.0, 21.0]])), 1)
+        self.assertEqual(len(self.items([[0.0, 50.0], [25.0, 50.0]])), 1, "a road 5 m into it: a driveway")
+
+    def test_a_winding_way_leaves_the_building_whole(self):
+        """The aisles of a lot wind about; a footprint they would cut to pieces is left as it is."""
+        road = [[30, 30], [60, 30], [60, 40], [90, 40], [90, 50], [60, 50], [60, 60], [100, 60]]
+        self.assertEqual(len(self.items(road)), 1)
+
+    def test_a_building_that_holds_a_car_park_still_gets_its_passage(self):
+        """Ulemiste keskus holds a multi-storey car park, so its footprint is flagged a garage: a 51,000 m2 building
+        is not a car park (its way was left whole). A car park's own, small footprint still has none."""
+        garage = np.array([[100.0, 40.0], [140.0, 40.0], [140.0, 70.0], [100.0, 70.0], [100.0, 40.0]])
+        road = np.array([[0.0, 90.0], [256.0, 90.0]])
+
+        def run(w, d):
+            b = Feats(["B"], [self.ll(20, 20, w, d)], **{"class": ["retail"], "height": [10.0]})
+            return bld.tile_buildings(self.f, 0, 0, 256, 256, [b], self.ground, passage_xy=[road], garages_xy=[garage])
+        self.assertGreater(len(run(220, 120)), 1, "a big building holding a car park: a passage")
+        self.assertEqual(len(run(100, 100)), 1, "a car park's own footprint: whole")
+
+    def test_the_switch_gives_the_old_wall(self):
+        with unittest.mock.patch.object(bld, "ROAD_PASSAGE_ON", False):
+            self.assertEqual(len(self.items([[0.0, 50.0], [256.0, 50.0]])), 1)
+
+    def test_roads_of_the_passage_classes_only(self):
+        """A service road is looked for, not a car park's aisle (road_lines' classes, not the through classes)."""
+        from test_roads import FRAME, features
+        f = features([[(0, 128), (256, 128)]], ["service"])
+        self.assertEqual(bld.road_lines(FRAME, [f], 0.0, 0.0), [], "a service road is not a through road")
+        self.assertEqual(len(bld.road_lines(FRAME, [f], 0.0, 0.0, classes=bld.ROAD_PASSAGE_CLASSES)), 1)
+        self.assertEqual(bld.road_lines(FRAME, [f], 0.0, 0.0, classes={"residential"}), [])
+
+
+class MappedRoofTest(unittest.TestCase):
+    """Research 2026-11-10: Overture's half_hipped, mapped roof heights, roof:orientation and roof:direction."""
+
+    def test_overtures_half_hipped_is_drawn(self):
+        s = bld.plan(rect(0, 0, 12, 8), {"class": "house", "roof_shape": "half_hipped"}, 0, 48.1, 11.5)
+        self.assertEqual(s.roof, "half-hipped")
+
+    def test_a_mapped_roof_height_sets_the_roof_top(self):
+        # 12 x 8 m house, 12 m tall with a 6 m roof: walls 6 m, the ridge at 12 m (was: the region's pitch on 6 m walls)
+        attrs = {"class": "house", "height": 12.0, "roof_shape": "gabled", "roof_height": 6.0}
+        s = bld.plan(rect(0, 0, 12, 8), attrs, 0, 48.1, 11.5)
+        self.assertAlmostEqual(s.height, 6.0, delta=0.01)
+        self.assertAlmostEqual(math.tan(math.radians(s.pitch)) * 4.0, 6.0, delta=0.05)
+        m = bld.Mesh()
+        mat = bld._Looks(s.seed)
+        bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, mat)
+        zs = np.asarray(m.P).reshape(-1, 3)[:, 2]
+        self.assertAlmostEqual(zs.max(), 12.0, delta=0.05)
+
+    def test_across_turns_the_ridge(self):
+        def ridge_axis(attrs):
+            s = bld.plan(rect(0, 0, 12, 8), dict({"class": "house", "roof_shape": "gabled"}, **attrs), 0, 48.1, 11.5)
+            m = bld.Mesh()
+            bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, bld._Looks(s.seed))
+            P = np.asarray(m.P).reshape(-1, 3)
+            top = P[P[:, 2] > P[:, 2].max() - 1e-6]
+            return np.ptp(top[:, 0]), np.ptp(top[:, 1])
+        dx, dy = ridge_axis({})
+        self.assertGreater(dx, dy)                      # (along the 12 m side: x)
+        dx, dy = ridge_axis({"roof_orientation": "across"})
+        self.assertGreater(dy, dx)                      # (across: along y)
+
+    def test_a_lean_to_slopes_toward_its_direction(self):
+        for d, low_south in ((180.0, True), (0.0, False)):
+            s = bld.plan(rect(0, 0, 12, 8), {"class": "house", "roof_shape": "skillion", "roof_direction": d},
+                         0, 48.1, 11.5)
+            m = bld.Mesh()
+            bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, bld._Looks(s.seed))
+            P = np.asarray(m.P).reshape(-1, 3)
+            south, north = P[P[:, 1] < 1.0], P[P[:, 1] > 7.0]
+            self.assertEqual(south[:, 2].min() < north[:, 2].min(), low_south, d)
+
+
+class OutlineRoofTest(unittest.TestCase):
+    """An L-shaped house: its pitched roof on its own outline (heightfield_roof), not flat (box fill under 0.8)."""
+    L = np.array([[0, 0], [12, 0], [12, 8], [5, 8], [5, 14], [0, 14]], float)
+
+    def test_an_l_house_keeps_its_gabled_roof_on_its_outline(self):
+        s = bld.plan(self.L, {"class": "house", "roof_shape": "gabled"}, 0, 48.1, 11.5)
+        self.assertEqual(s.roof, "gabled")
+        self.assertTrue(s.hf)
+        self.assertEqual(len(bld.drawn_ring(s)), len(self.L))          # (its walls on the outline, not a box)
+        m = bld.Mesh()
+        bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, bld._Looks(s.seed))
+        P = np.asarray(m.P).reshape(-1, 3)
+        self.assertGreater(P[:, 2].max(), s.height + 1.0)              # (a pitched roof over the eave)
+        self.assertGreaterEqual(P[:, 2].min(), s.height - 1e-6)        # (nothing under the eave)
+        xy = P[:, :2]                                                   # (inside the outline's box, no overhang)
+        self.assertTrue((xy.min(0) >= -1e-6).all() and (xy.max(0) <= [12 + 1e-6, 14 + 1e-6]).all())
+
+    def test_a_rectangle_keeps_the_box_roof(self):
+        s = bld.plan(np.array([[0, 0], [12, 0], [12, 8], [0, 8]], float), {"class": "house", "roof_shape": "gabled"},
+                     0, 48.1, 11.5)
+        self.assertFalse(s.hf)
+
+
+class CanopyTest(unittest.TestCase):
+    """building=roof / carport / shelter: a roof on posts, driven under (they were walled sheds)."""
+
+    def test_a_fuel_canopy_is_open_underneath(self):
+        ring = np.array([[0, 0], [24, 0], [24, 12], [0, 12]], float)
+        s = bld.plan(ring, {"class": "roof"}, 0, 39.2, -76.6)
+        self.assertEqual(s.roof, "flat")
+        self.assertAlmostEqual(s.height, bld.CANOPY_H["roof"])
+        for mesh in (bld.build([(s, 0.0, 0.0)]), bld.collision_mesh([(s, 0.0, 0.0)])):
+            P = np.asarray(mesh[0], np.float64).reshape(-1, 3)
+            T = np.asarray(mesh[2], np.int64).reshape(-1, 3)
+            # nothing at a car's height (0.5-1.5 m) except the posts: every such vertex within a post of one
+            mid = P[(P[:, 2] > 0.5) & (P[:, 2] < 1.5)]
+            posts = bld.canopy_posts(ring)
+            for p in mid:
+                self.assertLess(np.hypot(*(posts - p[:2]).T).min(), bld.CANOPY_POST_HALF_M * 1.5 + 1e-6)
+            self.assertGreater(len(T), 0)
+            self.assertAlmostEqual(P[:, 2].max(), bld.CANOPY_H["roof"], delta=0.01)
+        self.assertEqual(len(bld.canopy_posts(ring)), 4 + 2 * 3 + 2 * 1)    # (corners; 24 m edges: 3 more, 12 m: 1)
+
+    def test_a_mapped_height_and_a_carport(self):
+        ring = np.array([[0, 0], [6, 0], [6, 5], [0, 5]], float)
+        self.assertAlmostEqual(bld.plan(ring, {"class": "carport"}, 0, 39.2, -76.6).height, bld.CANOPY_H["carport"])
+        self.assertAlmostEqual(bld.plan(ring, {"class": "roof", "height": 7.0}, 0, 39.2, -76.6).height, 7.0)
+
+
+class TileRoofAttrsTest(unittest.TestCase):
+    def test_the_maps_ridge_orientation_reaches_plan(self):
+        import geodesy
+        f = geodesy.EnuFrame(48.1, 11.5)
+        e = np.array([20.0, 32.0, 32.0, 20.0, 20.0]); n = np.array([20.0, 20.0, 28.0, 28.0, 20.0])
+        la, lo, _ = f.enu_to_geodetic(e, n, 0.0)
+        b = Feats(["B1"], [np.stack([lo, la], 1)], **{"class": ["house"], "roof_shape": ["gabled"],
+                                                       "roof_orientation": ["across"]})
+        items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la_, lo_: np.zeros(np.shape(la_)))
+        self.assertEqual(len(items), 1)
+        self.assertTrue(items[0][0].across)
+
+
+class HoledFeats(Feats):
+    def parts(self, i):
+        return [[np.asarray(r, np.float64) for r in self.rings[i]]]
+
+
+class CourtyardTest(unittest.TestCase):
+    """A city block round a yard: its inner ring kept open, walls facing the yard (only the outer ring was drawn)."""
+
+    def test_a_block_keeps_its_courtyard(self):
+        import geodesy
+        f = geodesy.EnuFrame(52.52, 13.40)
+
+        def ll(pts):
+            pts = np.asarray(pts, float)
+            la, lo, _ = f.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+            return np.stack([lo, la], 1)
+        outer = ll([[20, 20], [60, 20], [60, 50], [20, 50], [20, 20]])
+        yard = ll([[30, 28], [50, 28], [50, 42], [30, 42], [30, 28]])
+        b = HoledFeats(["B"], [[outer, yard]], **{"class": ["apartments"], "height": [18.0], "roof_shape": ["flat"]})
+        items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la_, lo_: np.zeros(np.shape(la_)))
+        self.assertEqual(len(items), 1)
+        spec = items[0][0]
+        self.assertTrue(spec.holes)
+        for mesh in (bld.build([(spec, 0.0, 0.0)]), bld.collision_mesh([(spec, 0.0, 0.0)])):
+            P = np.asarray(mesh[0], np.float64).reshape(-1, 3)
+            T = np.asarray(mesh[2], np.int64).reshape(-1, 3)
+            # the lid: up-facing triangles at the top cover the block less its yard (40 x 30 - 20 x 14 = 920 m2)
+            top = spec.height                                           # (the lid: at the eave; cornices stand over it)
+            A = P[T]
+            up = (np.abs(A[:, :, 2] - top) < 1e-6).all(1)
+            a = 0.5 * ((A[:, 1, 0] - A[:, 0, 0]) * (A[:, 2, 1] - A[:, 0, 1]) - (A[:, 2, 0] - A[:, 0, 0]) * (A[:, 1, 1] - A[:, 0, 1]))
+            self.assertAlmostEqual(float(a[up & (a > 0)].sum()), 920.0, delta=15.0)
+            # nothing over the yard's middle
+            self.assertFalse(((np.abs(P[:, 0] - 40.0) < 5) & (np.abs(P[:, 1] - 35.0) < 3)).any())
+
+
+class RoundRoofTest(unittest.TestCase):
+    def test_a_barrel_roof(self):
+        s = bld.plan(rect(0, 0, 30, 12), {"class": "hangar", "roof_shape": "round", "height": 10.0}, 0, 48.1, 11.5)
+        self.assertEqual(s.roof, "round")
+        m = bld.Mesh()
+        bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, bld._Looks(s.seed))
+        P = np.asarray(m.P).reshape(-1, 3)
+        self.assertAlmostEqual(P[:, 2].max(), 10.0, delta=0.05)        # (its top at the mapped height)
+        self.assertAlmostEqual(P[:, 2].min(), s.height, delta=1e-6)
+        mid = P[np.abs(P[:, 1] - 6.0) < 0.7]                           # (the crown along the middle)
+        self.assertAlmostEqual(mid[:, 2].max(), 10.0, delta=0.05)
+
+
+class MlHeightTest(unittest.TestCase):
+    def test_mapped_floors_overrule_an_implausible_ml_height(self):
+        r = np.array([[0, 0], [20, 0], [20, 15], [0, 15]], float)
+        ml = bld.plan(r, {"class": "apartments", "height": 9.4, "num_floors": 6,
+                          "height_src": "Microsoft ML Buildings"}, 0, 40.7, -74.0)
+        self.assertGreater(ml.height, 15.0)                         # (6 floors, not 1.57 m each)
+        osm = bld.plan(r, {"class": "apartments", "height": 9.4, "num_floors": 6, "height_src": "OpenStreetMap"},
+                       0, 40.7, -74.0)
+        self.assertAlmostEqual(osm.height, 9.4, delta=0.01)         # (the map's own height kept)
+        ok = bld.plan(r, {"class": "apartments", "height": 19.0, "num_floors": 6,
+                          "height_src": "Microsoft ML Buildings"}, 0, 40.7, -74.0)
+        self.assertAlmostEqual(ok.height, 19.0, delta=0.01)         # (a plausible one kept)
+
+
+class SkeletonRoofTest(unittest.TestCase):
+    """The straight skeleton's roofs: an L house hipped over its own outline, a pitched block round its yard."""
+
+    def test_an_l_house_hipped_to_its_mapped_top(self):
+        L = np.array([[0, 0], [12, 0], [12, 8], [5, 8], [5, 14], [0, 14]], float)
+        s = bld.plan(L, {"class": "house", "roof_shape": "hipped", "height": 9.0, "roof_height": 3.0}, 0, 48.1, 11.5)
+        self.assertTrue(s.skel)
+        m = bld.Mesh()
+        bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, bld._Looks(s.seed))
+        P = np.asarray(m.P).reshape(-1, 3)
+        self.assertAlmostEqual(s.height, 6.0, delta=0.01)               # (walls to the eave)
+        self.assertAlmostEqual(P[:, 2].max(), 9.0, delta=0.05)          # (the roof's top at the mapped height)
+        self.assertAlmostEqual(P[:, 2].min(), 6.0, delta=1e-6)
+
+    def test_a_pitched_block_keeps_its_yard(self):
+        import geodesy
+        f = geodesy.EnuFrame(52.52, 13.40)
+
+        def ll(pts):
+            pts = np.asarray(pts, float)
+            la, lo, _ = f.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+            return np.stack([lo, la], 1)
+        outer = ll([[20, 20], [60, 20], [60, 50], [20, 50], [20, 20]])
+        yard = ll([[30, 28], [50, 28], [50, 42], [30, 42], [30, 28]])
+        b = HoledFeats(["B"], [[outer, yard]], **{"class": ["apartments"], "height": [20.0], "roof_shape": ["hipped"]})
+        items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la_, lo_: np.zeros(np.shape(la_)))
+        spec = items[0][0]
+        self.assertTrue(spec.skel and spec.holes)
+        P = np.asarray(bld.build([(spec, 0.0, 0.0)])[0], np.float64).reshape(-1, 3)
+        self.assertGreater(P[:, 2].max(), spec.height + 1.0)             # (pitched)
+        self.assertFalse(((np.abs(P[:, 0] - 40.0) < 5) & (np.abs(P[:, 1] - 35.0) < 3)).any())     # (the yard open)
+
+
+class SkeletonGableTest(unittest.TestCase):
+    def test_an_l_house_mapped_gabled_has_gables(self):
+        L = np.array([[0, 0], [12, 0], [12, 8], [5, 8], [5, 14], [0, 14]], float)
+        s = bld.plan(L, {"class": "house", "roof_shape": "gabled", "height": 9.0, "roof_height": 3.0}, 0, 48.1, 11.5)
+        self.assertTrue(s.skel)
+        looks = bld._Looks(s.seed)
+        m = bld.Mesh()
+        bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, looks)
+        fac = looks[s.facade][0]
+        M = np.asarray(m.M)
+        self.assertGreaterEqual(int((M == fac).sum()), 2)               # (two gable walls: the arms' ends)
+        P = np.asarray(m.P).reshape(-1, 3)
+        self.assertAlmostEqual(P[:, 2].max(), 9.0, delta=0.05)
+
+
+class RoofPhotoTest(unittest.TestCase):
+    """Roof colours from the aerial photo (RoofPhoto, native roof_photo_colours)."""
+
+    def photo(self, roof=(180, 70, 50), tree=None):
+        rgb = np.full((100, 100, 3), (90, 90, 90), np.uint8)           # 1 m pixels over [0, 100] x [0, 100]
+        rgb[40:60, 30:70] = roof                                       # a 40 x 20 m roof: x 30..70, y 40..60
+        if tree is not None:
+            rgb[40:60, 30:30 + tree] = (40, 110, 40)
+        return bld.RoofPhoto(rgb, 0.0, 0.0, 100.0)
+
+    def test_the_roof_s_median_colour(self):
+        ring = np.array([[30, 40], [70, 40], [70, 60], [30, 60]], float)
+        c = self.photo().colours([ring])
+        np.testing.assert_allclose(c[0], np.array([180, 70, 50]) / 255.0, atol=1e-9)
+
+    def test_the_outline_s_edge_and_a_tree_left_out(self):
+        # (an outline 2 m too big still reads the roof inside its inset; a tree over a third of it is left out)
+        ring = np.array([[28, 38], [72, 38], [72, 62], [28, 62]], float)
+        c = self.photo(tree=12).colours([ring])
+        self.assertTrue(np.isfinite(c[0]).all())
+        self.assertGreater(c[0][0], c[0][1] + 0.2, "the red roof, not the tree or the street")
+
+    def test_a_roof_under_trees_has_none(self):
+        ring = np.array([[30, 40], [70, 40], [70, 60], [30, 60]], float)
+        self.assertTrue(np.isnan(self.photo(tree=30).colours([ring])[0]).all())
+
+    def test_the_tint_shows_the_photo_s_colour(self):
+        t = bld.photo_tint(bld.ROOF_SHINGLE, (0.5, 0.29, 0.23))
+        mean = bld.ROOF_TEX_MEAN[bld.ROOF_SHINGLE]
+        shown = [a * b for a, b in zip(t, mean)]
+        np.testing.assert_allclose(shown, (0.5, 0.29, 0.23), atol=0.02)
+        self.assertEqual(bld.photo_tint(bld.ROOF_FLAT, (0.95, 0.95, 0.95)), (1.0, 1.0, 1.0), "at most the texture")
+
+    def test_a_mapped_colour_wins(self):
+        ring = np.array([[0, 0], [12, 0], [12, 9], [0, 9]], float)
+        mapped = bld.plan(ring, {"class": "house", "roof_color": "red", "_roof_photo": (0.2, 0.2, 0.6)})
+        photo = bld.plan(ring, {"class": "house", "_roof_photo": (0.2, 0.2, 0.6)})
+        self.assertNotEqual(mapped.roof_mat, photo.roof_mat)
+        self.assertIn("|c_", photo.roof_mat)
+
+    def test_a_white_flat_roof_takes_the_light_texture(self):
+        ring = np.array([[0, 0], [40, 0], [40, 30], [0, 30]], float)
+        white = bld.plan(ring, {"class": "retail", "roof_shape": "flat", "_roof_photo": (0.9, 0.9, 0.9)})
+        dark = bld.plan(ring, {"class": "retail", "roof_shape": "flat", "_roof_photo": (0.3, 0.3, 0.32)})
+        self.assertTrue(white.roof_mat.startswith(bld.ROOF_BRIGHT_MAT + "|c_"), white.roof_mat)
+        self.assertTrue(dark.roof_mat.startswith(bld.ROOF_FLAT + "|c_"), dark.roof_mat)
+
+
+class TankTest(unittest.TestCase):
+    """Round tanks and silos (TANK_CLASSES): painted steel or concrete with a shallow dome, not a shed."""
+
+    def ring(self, r=10.0, n=24):
+        t = np.linspace(0, 2 * np.pi, n + 1)[:-1]
+        return np.c_[r * np.cos(t), r * np.sin(t)]
+
+    def test_a_round_tank(self):
+        sp = bld.plan(self.ring(), {"class": "storage_tank"})
+        self.assertEqual((sp.cls, sp.roof, sp.windows), ("tank", "dome", False))
+        self.assertLess(sp.pitch, 20.0, "a shallow dome")
+        P, UV, T, M, mats, C = bld.build([(sp, 0.0, 0.0)])
+        top = float(np.asarray(P)[:, 2].max())
+        self.assertAlmostEqual(top, sp.height + 0.12 * 20.0, delta=0.6)
+        self.assertIsNotNone(bld.collision_mesh([(sp, 0.0, 0.0)]))
+
+    def test_a_silo_and_what_is_not_a_tank(self):
+        silo = bld.plan(self.ring(4.0), {"class": "silo"})
+        self.assertEqual(silo.cls, "tank")
+        self.assertGreater(silo.height, 8.0, "a silo is tall")
+        square = np.array([[0, 0], [20, 0], [20, 20], [0, 20]], float)
+        self.assertNotEqual(bld.plan(square, {"class": "storage_tank"}).cls, "tank")
+        self.assertNotEqual(bld.plan(self.ring(), {"class": "storage_tank", "roof_shape": "flat"}).cls, "tank",
+                            "a mapped roof shape: as mapped")
+
+
+class ChimneyTest(unittest.TestCase):
+    """Pitched-roof houses: CHIMNEY_SHARE of them have a stack over the ridge; never sheds or barns."""
+
+    def test_some_houses_have_one(self):
+        ring = np.array([[0, 0], [12, 0], [12, 8], [0, 8]], float)
+        over, n = 0, 0
+        for k in range(60):
+            sp = bld.plan(ring + k * 0.37, {"class": "house", "roof_shape": "gabled", "height": 7.0,
+                                            "roof_height": 2.5})
+            if sp.roof != "gabled":
+                continue
+            n += 1
+            P = np.asarray(bld.build([(sp, 0.0, 0.0)])[0])
+            ridge = 7.0 + 0.1           # (the ridge 7 m up, the eave's overhang aside)
+            over += P[:, 2].max() > ridge + 0.5
+        self.assertGreater(n, 40)
+        self.assertTrue(0.35 * n < over < 0.75 * n, f"{over} of {n} with a chimney")
+
+    def test_not_on_a_barn(self):
+        ring = np.array([[0, 0], [12, 0], [12, 8], [0, 8]], float)
+        for k in range(20):
+            sp = bld.plan(ring + k * 0.37, {"class": "barn", "roof_shape": "gabled", "height": 7.0, "roof_height": 2.5})
+            P = np.asarray(bld.build([(sp, 0.0, 0.0)])[0])
+            self.assertLessEqual(P[:, 2].max(), 7.0 + 0.5)
+
+
+class TankInfraTest(unittest.TestCase):
+    """Storage tanks mapped as infrastructure (tank_rings, _tank_items)."""
+
+    def ring(self, r=10.0, n=24):
+        t = np.linspace(0, 2 * np.pi, n + 1)[:-1]
+        return np.c_[r * np.cos(t), r * np.sin(t)]
+
+    def test_a_mapped_tank_with_no_building_is_drawn(self):
+        # (tank_rings: a storage tank mapped as infrastructure; one a building stands over is that building's)
+        import geodesy
+        frame = geodesy.EnuFrame(51.884, 4.3765)
+        ring = self.ring(12.0) + [100.0, 100.0]
+        elev = lambda la, lo: np.full(np.shape(la), 2.0)
+        got = bld._tank_items(frame, 0.0, 0.0, 256.0, 256.0, elev, [(ring, {"class": "storage_tank", "height": 14.0})],
+                              set())
+        self.assertEqual(len(got), 1)
+        sp, g0, g1 = got[0]
+        self.assertEqual((sp.cls, sp.roof), ("tank", "dome"))
+        self.assertAlmostEqual(sp.height + 0.12 * 24.0, 14.0, delta=0.3)
+        self.assertEqual(bld._tank_items(frame, 0.0, 0.0, 256.0, 256.0, elev,
+                                         [(ring, {"class": "storage_tank"})], {0}), [], "used by a building: not again")
+        self.assertEqual(bld._tank_items(frame, 0.0, 0.0, 256.0, 256.0, elev,
+                                         [(ring + [300.0, 0.0], {"class": "storage_tank"})], set()), [],
+                         "another tile's")
+
+
+class EraTest(unittest.TestCase):
+    """A known construction year (3DBAG's, OSM's start_date) biases the facade: old brick, post-war panels."""
+
+    def share(self, year, test):
+        ring = np.array([[0, 0], [40, 0], [40, 14], [0, 14]], float)
+        n = 0
+        for k in range(150):
+            sp = bld.plan(ring + k * 0.31, {"class": "apartments", "num_floors": 6, "_year": year}, 1, 52.37, 4.89)
+            n += test(str(sp.facade))
+        return n / 150.0
+
+    def test_eras(self):
+        self.assertEqual(bld.era(1890), "old")
+        self.assertEqual(bld.era(1972), "postwar")
+        self.assertEqual(bld.era("2015"), "new")
+        self.assertIsNone(bld.era(1940))
+        self.assertIsNone(bld.era(None))
+        brick = lambda f: "brick" in f
+        self.assertGreater(self.share(1890, brick), self.share(None, brick) + 0.1, "old: more brick")
+        self.assertGreater(self.share(1970, lambda f: f.startswith(bld.PANEL)), 0.4, "post-war: panel slabs")
+        self.assertEqual(self.share(None, lambda f: f.startswith(bld.PANEL)), 0.0)
+
+
+class TurbineBaseTest(unittest.TestCase):
+    """A wind turbine's base mapped as a building is left out (GitHub #1085: Herzogenrath's R90004, a 10 m round
+    building=yes round the tower, stood in the turbine)."""
+
+    def setUp(self):
+        import geotiles
+        self.f = geotiles.WorldFrame(50.8949989, 6.1405846)     # (OSM node 251685395, in the bundled index)
+
+    def ring(self, cx, cy, r, k):
+        a = np.linspace(0, 2 * np.pi, k, endpoint=False)
+        return np.c_[cx + r * np.cos(a), cy + r * np.sin(a)]
+
+    def feats(self, rings):
+        import mapgeom
+        coords, off = [], [0]
+        for r in rings:
+            r = np.vstack([r, r[:1]])
+            la, lo, _ = self.f.enu_to_geodetic(r[:, 0], r[:, 1], 0.0)
+            coords.extend(zip(lo, la))
+            off.append(len(coords))
+        k = len(rings)
+        return mapgeom.Features(layer="buildings", ids=np.array([f"w{i}" for i in range(k)]),
+                                kind=np.full(k, mapgeom.POLYGON, np.uint8),
+                                part_off=np.arange(k + 1, dtype=np.int64), ring_off=np.arange(k + 1, dtype=np.int64),
+                                coord_off=np.array(off, np.int64), lonlat=np.array(coords, np.float64),
+                                attrs={"height": np.full(k, np.nan)})
+
+    def kept(self, rings):
+        items = bld.tile_buildings(self.f, -128, -128, 128, 128, [self.feats(rings)],
+                                   lambda la, lo: np.zeros(np.shape(la)))
+        return len(items)
+
+    def test_the_base_round_the_tower_is_left_out_a_hut_beside_it_kept(self):
+        base = self.ring(0.0, 0.0, 4.8, 10)                 # (the mapped base: 10 nodes, 9.6 m across)
+        hut = self.ring(14.0, 6.0, 2.5, 4)                  # (a transformer hut beside it)
+        self.assertEqual(self.kept([base]), 0)
+        self.assertEqual(self.kept([hut]), 1)
+        self.assertEqual(self.kept([base, hut]), 1)
+
+    def test_a_large_footprint_round_a_turbine_and_the_switch_off_keep_it(self):
+        self.assertEqual(self.kept([self.ring(0.0, 0.0, 15.0, 4)]), 1)     # (450 m²: a building, not a base)
+        old = bld.TURBINE_BASE_ON
+        bld.TURBINE_BASE_ON = False
+        try:
+            self.assertEqual(self.kept([self.ring(0.0, 0.0, 4.8, 10)]), 1)
+        finally:
+            bld.TURBINE_BASE_ON = old
+
+    def test_a_small_turbine_on_a_house_leaves_the_house(self):
+        import windturbines
+        t = windturbines.Turbine("osm:node:1", 50.8949989, 6.1405846, {"rotor:diameter": "3"}, 0)
+        real = windturbines.near
+        windturbines.near = lambda *a: (t,)
+        try:
+            self.assertEqual(self.kept([self.ring(0.0, 0.0, 6.0, 4)]), 1)
+        finally:
+            windturbines.near = real
+
+
+class MappedRoofTest(unittest.TestCase):
+    """A roof shape the map gives on a part is drawn, not downgraded (streets.gl study, 2026-11-11: One World Trade
+    Center's corner triangles, skillions 362 m tall facing roof:direction)."""
+
+    def test_tall_walls_above_a_sloped_eave_have_floors_of_windows(self):
+        # One World Trade Center's corner walls rise 362 m over their eave: floors of the window sheet, not the plain
+        # sliver (streets.gl study proposal 3); a house's gable stays plain
+        tri = np.array([(0.0, 0.0), (32.0, 0.0), (0.0, 32.0)])
+        attrs = {"class": "", "height": 417.0, "roof_shape": "skillion", "roof_height": 362.0,
+                 "roof_direction": 225.0, "seed_id": 7}
+        spec = bld.plan(tri, attrs, lat=40.713, lon=-74.013, dense=True)
+        spec.plain, spec.wall = False, False
+        fac = (bld._FACADE_MI, (255, 255, 255, 255))
+        m = bld.Mesh()
+        bld._hf_roof(m, spec, tri, 55.0, (bld._TILES_MI, (255, 255, 255, 255)), fac)
+        P, UV = m.arrays()[:2]
+        T, M = np.asarray(m.T).reshape(-1, 3), np.asarray(m.M)
+        wall = np.zeros(len(P), bool)
+        wall[T[M == bld._FACADE_MI].ravel()] = True
+        high = wall & (P[:, 2] > 55.0 + 10.0)
+        self.assertTrue(high.any())
+        self.assertFalse(np.any(UV[high, 1] > 0.99), "no sliver strip up the tall walls")
+        self.assertGreater(np.ptp(UV[high, 0]), 1.0, "bays along the wall")
+        house = bld.plan(rect(0, 0, 12, 8), {"class": "house", "roof_shape": "skillion", "roof_direction": 180.0},
+                         0, 48.1, 11.5)
+        self.assertFalse(bld._slope_floors(bld.Mesh(), house, np.zeros((1, 6)), 6.0, fac))
+
+    def test_triangle_skillion_kept_and_sloped_along_its_direction(self):
+        tri = np.array([(0.0, 0.0), (32.0, 0.0), (0.0, 32.0)])          # a right triangle, legs along the axes
+        for d in (225.0, 45.0):
+            attrs = {"class": "", "height": 417.0, "roof_shape": "skillion", "roof_height": 362.0,
+                     "roof_direction": d, "seed_id": 7}
+            spec = bld.plan(tri, attrs, lat=40.713, lon=-74.013, dense=True)
+            self.assertEqual(spec.roof, "skillion", d)
+            self.assertTrue(spec.hf)
+            self.assertAlmostEqual(spec.slope_dir, d)
+            m = bld.Mesh()
+            bld._hf_roof(m, spec, tri, 55.0, (0, (255, 255, 255, 255)), (1, (255, 255, 255, 255)))
+            P = m.arrays()[0]
+            top = P[np.argmax(P[:, 2])]
+            self.assertAlmostEqual(float(P[:, 2].max()), 55.0 + 362.0, delta=0.5, msg="the mapped rise")
+            # (faces 225, south-west: high at the north-east corner(s), the hypotenuse; faces 45: high at the origin)
+            if d == 225.0:
+                self.assertGreater(float(top[0] + top[1]), 30.0)
+            else:
+                self.assertLess(float(top[0] + top[1]), 2.0)
+
+    def test_slender_crown_fin_keeps_its_skillion(self):
+        fin = np.array([(0.0, 0.0), (18.0, 0.0), (18.0, 2.6), (0.0, 2.6)])
+        attrs = {"class": "", "height": 40.0, "roof_shape": "skillion", "roof_height": 6.0, "roof_direction": 119.0,
+                 "seed_id": 3}
+        spec = bld.plan(fin, attrs, lat=40.75, lon=-73.98, dense=True)
+        self.assertEqual(spec.roof, "skillion")
+        self.assertNotEqual(spec.cls, "mast")
+
+    def test_skyline_keeps_the_skillion_slope(self):
+        tri = np.array([(0.0, 0.0), (32.0, 0.0), (0.0, 32.0)])
+        attrs = {"class": "", "height": 417.0, "roof_shape": "skillion", "roof_height": 362.0,
+                 "roof_direction": 225.0, "seed_id": 7}
+        spec = bld.plan(tri, attrs, lat=40.713, lon=-74.013, dense=True)
+        rise = bld.skillion_rise(spec, tri)
+        self.assertAlmostEqual(float(rise.min()), 0.0)
+        self.assertAlmostEqual(float(rise.max()), 362.0, delta=0.5)
+        self.assertAlmostEqual(float(rise[0]), 0.0, msg="low at the corner it faces (south-west)")
+        mesh = bld._sky_mesh([(spec, 0.0, 0.0)])
+        P = mesh[0]
+        self.assertAlmostEqual(float(P[:, 2].max() - spec.height - spec.min_h), 362.0, delta=1.5)

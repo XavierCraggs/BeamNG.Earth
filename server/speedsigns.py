@@ -3,7 +3,8 @@ missing data"): the glue of the native kernels earthfast.speed_sign_place (where
 past major junctions, past motorway entrances, reminders on long stretches) and speed_sign_mesh (MUTCD R2-1 in the
 US, Rb-1 in Canada, the Vienna Convention's red ring elsewhere); the rules and their sources are there
 (native/earthfast/src/speedsigns.rs). Sweden's C31 stands where the Vienna signs do but is drawn here (sweden_mesh):
-the agency's own artwork of the sign on a disc.
+the agency's own artwork of the sign on a disc. Germany's zones (the German junction signs on, near Germany:
+dezones.py): Zeichen 274.1 / 274.2 where a mapped zone begins and ends, in place of the round 274 there.
 
 The value is the AI's (navgraph.road_mph: OpenStreetMap's / Overture's limit, else the class default the traffic
 drives), in the units posted there (mph rounded to 5, km/h rounded to 5). Built in the sign tiles (signstream.py,
@@ -22,11 +23,16 @@ import roads
 import signroads
 
 KERNEL = 98                     # earthfast VERSION with speed_sign_place / speed_sign_mesh
+GENERAL_KERNEL = 171            # ... with speed_sign_general and speed_sign_place's kind, limit before and rank
+# m ahead of a speed-limit sign a German town makes a 50 its Ortstafel's (general: the mapped Ortstafel may stand
+# up to MAPPED_REACH_M before the estimate's town)
+GENERAL_AHEAD_M = (100.0, 200.0, 300.0)
 RANK = {"motorway": 7, "trunk": 6, "primary": 5, "secondary": 4, "tertiary": 3, "unclassified": 2, "residential": 1}
 MARGIN_M = 900.0                # the roads this far round a tile: its junctions and the nearby signs that thin it out
 REPEAT_M = (1609.344, 3218.688)  # a reminder about every mile in town and every two out of it (PR #363's 2 miles)
 CELL_FRAMES = 4                 # anchors a cell keeps its rows for
 STYLE_MUTCD, STYLE_VIENNA, STYLE_CANADA, STYLE_SWEDEN = 0, 1, 2, 3     # (the kernels draw STYLE_SWEDEN as STYLE_VIENNA)
+STYLE_AU = 4                    # fork: drawn here (au_mesh), as STYLE_SWEDEN; the kernels never see it
 # speed_sign_mesh's material indices: white, red, metal, lettering, black (exit.materials.json's)
 MATERIALS = ['bne_exit_white', 'bne_guide_red', 'bne_exit_metal', 'bne_guide_letters_black', 'bne_guide_black']
 # C31 (sweden_mesh): Transportstyrelsen's artwork of the sign, tools/build_swedish_signs.py's sheet of 4 x 4 cells of
@@ -42,6 +48,13 @@ C31_POLE_X = -0.05
 C31_D = (0.60, 0.60, 0.90, 0.90)
 # m from the road to the lower edge: the Vienna mesh's mount(), within 1.0-2.0 m (TSFS 2019:74 1 kap. 13 §)
 C31_MOUNT_RURAL, C31_MOUNT_TOWN, C31_MIN_GROUND = 1.52, 2.0, 1.2
+# fork: Australia's R4-1 (au_mesh): tools/build_au_speedsigns.py's sheet, 4 x 4 cells of 256 px, a 3:4 plate in each;
+# the values the states post (AS 1742.4; 130 only in the NT)
+AU_VALUES = (40, 50, 60, 70, 80, 90, 100, 110, 130)
+AU_COLS, AU_CELL_W, AU_CELL_H, AU_SHEET_W, AU_SHEET_H = 4, 256.0, 256.0, 1024.0, 1024.0
+AU_PLATE_W, AU_PLATE_H = 180.0, 240.0
+MATERIALS_AU = ['bne_au_speed', 'bne_exit_metal']
+AU_W = (0.45, 0.60, 0.90, 1.20)  # m: the plate's width by size class (R4-1 sizes B to E: town, road, highway, motorway)
 _lock = threading.Lock()
 
 
@@ -53,6 +66,8 @@ def posted(mph_value, mph=True, face=STYLE_VIENNA):
     if mph_value is None or not np.isfinite(mph_value) or mph_value <= 0:
         return 0.0
     v = mph_value if mph else mph_value * 1.609344
+    if face == STYLE_AU:            # fork: the nearest value the states post; slower (shared zones): no sign
+        return float(min(AU_VALUES, key=lambda a: (abs(a - round(v, 3)), a))) if v >= 35.0 else 0.0
     if face == STYLE_SWEDEN:
         return min(120.0, float(int(v / 10.0 + 0.5) * 10)) if v >= 25.0 else 0.0
     return float(max(5, int(v / 5.0 + 0.5) * 5))
@@ -62,7 +77,7 @@ def style(country, us):
     """The sign face: MUTCD where a US state is (signstates), Canada's Rb-1, Sweden's C31, else the Vienna's."""
     if us:
         return STYLE_MUTCD
-    return {"CA": STYLE_CANADA, "SE": STYLE_SWEDEN}.get((country or "").upper(), STYLE_VIENNA)
+    return {"CA": STYLE_CANADA, "SE": STYLE_SWEDEN, "AU": STYLE_AU}.get((country or "").upper(), STYLE_VIENNA)
 
 
 def _limits(feats, i, spec, mph, face):
@@ -76,7 +91,7 @@ def _limits(feats, i, spec, mph, face):
                     cuts.add(round(f, 6))
     cuts = sorted(cuts) + [1.0]
     out = []
-    country = "SE" if face == STYLE_SWEDEN else None
+    country = {STYLE_SWEDEN: "SE", STYLE_AU: "AU"}.get(face)
     for a, b in zip(cuts[:-1], cuts[1:]):
         v = posted(navgraph.road_mph(feats, i, spec, mph, at=(a + b) / 2, country=country), mph, face)
         if not out or out[-1][1] != v:
@@ -86,8 +101,10 @@ def _limits(feats, i, spec, mph, face):
 
 def _cell_rows(feats, frame, urban, widths, left_hand, mph, face=STYLE_VIENNA):
     """{fid: (lon/lat line, xy line, meta [half width, dir, rank, urban, link], [(fraction, connector)],
-    [(fraction, value)], [(start, end)] off the ground)} of a decoded map cell in frame (kept on the cell)."""
-    key = (frame.lat0, frame.lon0, frame.h0, bool(left_hand), urban, widths, bool(mph), face)
+    [(fraction, value)], [(start, end)] off the ground, (zone km/h or 0, class without _link))} of a decoded map cell in
+    frame (kept on the cell, made again when the lane shards join it later: their zones, mapdata._lanes)."""
+    key = (frame.lat0, frame.lon0, frame.h0, bool(left_hand), urban, widths, bool(mph), face,
+           feats.__dict__.get("_lanes_built"))
     with _lock:
         memo = feats.__dict__.setdefault('_speed_rows', {})
         got = memo.get(key)
@@ -97,6 +114,10 @@ def _cell_rows(feats, frame, urban, widths, left_hand, mph, face=STYLE_VIENNA):
     bspecs = roads.bridge_specs(feats)
     con = feats.rules.get("connectors")
     sub = feats.rules.get("subclass")
+    zone = feats.attrs.get("osm_zone_maxspeed")
+    zone_kmh = {}
+    if zone is not None:        # (Germany's zones: the lane shards' osm_zone_maxspeed, dezones.py)
+        from dezones import ZONE_KMH as zone_kmh
     picked, lines = [], []
     for i in range(len(feats)):
         sp = specs[i] if specs[i] is not None else bspecs[i]
@@ -114,14 +135,24 @@ def _cell_rows(feats, frame, urban, widths, left_hand, mph, face=STYLE_VIENNA):
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
         xy = np.column_stack([e, n])
         k = 0
+        ring = set()
+        if face == STYLE_AU:            # fork: no speed signs on roundabout rings (islands.ring_fids)
+            import islands
+            ring = islands.ring_fids([(str(feats.ids[i]), sp, np.column_stack([xy[o:o + len(ln)], np.zeros(len(ln))]),
+                                       None) for (i, sp, _), ln, o in
+                                      zip(picked, lines, np.cumsum([0] + [len(ln) for ln in lines[:-1]]))])
         for (i, sp, bridge), line in zip(picked, lines):
             pts = xy[k:k + len(line)]
             k += len(line)
+            if str(feats.ids[i]) in ring:
+                continue
             cons = [(float(con.start[r]), str(con.value[r])) for r in con.rows(i)] if con is not None else []
             skips = [(0.0, 1.0)] if bridge else [(a, b) for a, b, _ in roads.level_ranges(feats, i)]
             meta = (sp.width / 2, (int(sp.dir) or 1) if sp.oneway else 0, RANK.get(sp.cls, 0),
                     1.0 if sp.urban else 0.0, 1.0 if getattr(sp, "link", False) else 0.0)
-            got[str(feats.ids[i])] = (line, pts, meta, cons, _limits(feats, i, sp, mph, face), skips)
+            z = zone_kmh.get(zone[i]) if zone is not None and isinstance(zone[i], str) else None
+            got[str(feats.ids[i])] = (line, pts, meta, cons, _limits(feats, i, sp, mph, face), skips,
+                                      (z or 0, str(sp.cls).removesuffix("_link")))
     with _lock:
         if len(memo) >= CELL_FRAMES:
             memo.pop(next(iter(memo)))
@@ -137,7 +168,7 @@ def _arrays(rows, box):
     lim_at, lim_val, lim_off = [], [], [0]
     skip, skip_off = [], [0]
     ids = {}
-    for line, pts, m, cons, lims, skips in rows:
+    for line, pts, m, cons, lims, skips, *_ in rows:
         if (pts[:, 0].max() < x0 - MARGIN_M or pts[:, 0].min() > x1 + MARGIN_M or
                 pts[:, 1].max() < y0 - MARGIN_M or pts[:, 1].min() > y1 + MARGIN_M):
             continue
@@ -175,12 +206,10 @@ def _outlines(pavements):
     return got
 
 
-def place(frame, box, context, left_hand=False, mph=True, face=STYLE_VIENNA):
-    """The speed-limit signs of box (x0, y0, x1, y1): (k, 9) [x, y, travel x, travel y, value, size class, road x,
-    road y, urban] (speed_sign_place's)."""
-    fast.require(KERNEL, "speed-limit signs")
+def _tile_rows(frame, box, context, left_hand, mph, face, margin=MARGIN_M):
+    """The rows (_cell_rows') of the map cells within margin (m) of box, each feature once."""
     x0, y0, x1, y1 = box
-    m = MARGIN_M
+    m = margin
     la, lo, _ = frame.enu_to_geodetic(np.array([x0 - m, x1 + m]), np.array([y0 - m, y1 + m]), 0.0)
     rows, seen = [], set()
     for key in mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max())):
@@ -191,17 +220,29 @@ def place(frame, box, context, left_hand=False, mph=True, face=STYLE_VIENNA):
             if fid not in seen:         # (a line is whole in every cell it crosses)
                 seen.add(fid)
                 rows.append(row)
+    return rows
+
+
+def place(frame, box, context, left_hand=False, mph=True, face=STYLE_VIENNA):
+    """The speed-limit signs of box (x0, y0, x1, y1): (k, 12) [x, y, travel x, travel y, value, size class, road x,
+    road y, urban, kind (0 a change, 1 a merge, 2 past a junction, 3 a reminder), a change's limit before it (0 not
+    known), the road's rank] (speed_sign_place's)."""
+    fast.require(KERNEL, "speed-limit signs")
+    x0, y0, x1, y1 = box
+    rows = _tile_rows(frame, box, context, left_hand, mph, face)
     arrays = _arrays(rows, box)
     if arrays is None:
-        return np.zeros((0, 9))
+        return np.zeros((0, 12))
     cla, clo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), 0.0)
     poly, poly_off = _outlines(context.pavements(frame, np.c_[clo, cla], left_hand))
-    return fast._ef.speed_sign_place(*arrays, poly, poly_off, [float(v) for v in box], _kernel_style(face),
-                                     bool(left_hand), [float(v) for v in REPEAT_M])
+    import roundabouts
+    got = fast._ef.speed_sign_place(*arrays, poly, poly_off, [float(v) for v in box], _kernel_style(face),
+                                    bool(left_hand), [float(v) for v in REPEAT_M])
+    return roundabouts.drop_on_islands(got, rows)          # (none on a roundabout's island, plan 038)
 
 
 def _kernel_style(face):
-    return STYLE_VIENNA if face == STYLE_SWEDEN else int(face)
+    return STYLE_VIENNA if face in (STYLE_SWEDEN, STYLE_AU) else int(face)
 
 
 @lru_cache(maxsize=1)
@@ -220,6 +261,68 @@ def c31_uv(value, cos, sin):
     u = ((k % 4) + 0.5) * C31_CELL + cos * C31_R
     v = ((k // 4) + 0.5) * C31_CELL - sin * C31_R
     return u / C31_SHEET, 1.0 - v / C31_SHEET
+
+
+def au_uv(value, y, z):
+    """fork: where on the sheet a point of the R4-1 of value is, (y, z) in [-1, 1] across and up its plate."""
+    k = AU_VALUES.index(int(value))
+    cx = ((k % AU_COLS) + 0.5) * AU_CELL_W + y * AU_PLATE_W / 2
+    cy = ((k // AU_COLS) + 0.5) * AU_CELL_H - z * AU_PLATE_H / 2
+    return cx / AU_SHEET_W, 1.0 - cy / AU_SHEET_H
+
+
+def _pole(add, row, top):
+    a = np.arange(9) * np.pi / 4.0
+    around = np.column_stack([C31_POLE_X + C31_POLE * np.cos(a), C31_POLE * np.sin(a)])
+    pole = np.vstack([[(px, py, -0.3), (px, py, top)] for px, py in around])
+    add(pole, np.zeros((18, 2)), [t for k in range(8) for t in ((2 * k, 2 * k + 2, 2 * k + 3),
+                                                                (2 * k, 2 * k + 3, 2 * k + 1))], 1, row)
+
+
+def _adder(origin):
+    P, T, UV, M = [], [], [], []
+    n = [0]
+
+    def add(pts, uvs, tris, mat, row):
+        pts = np.asarray(pts, np.float64)
+        x, y, zg, tx, ty = row
+        world = np.column_stack([x - origin[0] - tx * pts[:, 0] + ty * pts[:, 1],
+                                 y - origin[1] - ty * pts[:, 0] - tx * pts[:, 1], zg - origin[2] + pts[:, 2]])
+        P.append(world)
+        UV.append(np.asarray(uvs, np.float64))
+        T.append(np.asarray(tris, np.int64) + n[0])
+        M.append(np.full(len(tris), mat, np.int64))
+        n[0] += len(pts)
+    return add, (P, T, UV, M, n)
+
+
+def au_mesh(table, origin):
+    """fork: (positions, triangles, uvs, materials, material of each triangle) of R4-1 signs, or None; rows and frame
+    as sweden_mesh's."""
+    add, (P, T, UV, M, n) = _adder(origin)
+    for x, y, zg, zr, tx, ty, value, size, urban in table:
+        value = int(round(value))
+        if value not in AU_VALUES or not np.isfinite([x, y, zg, zr]).all():
+            continue
+        tl = max(np.hypot(tx, ty), 1e-9)
+        row = (x, y, zg, tx / tl, ty / tl)
+        size = int(np.clip(size, 0, 3))
+        w = AU_W[size]
+        h = w * 4.0 / 3.0
+        mount = C31_MOUNT_TOWN if urban or size >= 2 else C31_MOUNT_RURAL
+        zb = max(zr + mount, zg + C31_MIN_GROUND) - zg
+        corners = np.array([(0.0, -w / 2, zb), (0.0, w / 2, zb), (0.0, w / 2, zb + h), (0.0, -w / 2, zb + h)])
+        add(corners, np.column_stack(au_uv(value, np.array([-1.0, 1, 1, -1]), np.array([-1.0, -1, 1, 1]))),
+            [(0, 1, 2), (0, 2, 3)], 0, row)
+        back = corners + (-C31_DEPTH, 0.0, 0.0)
+        add(back, np.zeros((4, 2)), [(0, 2, 1), (0, 3, 2)], 1, row)
+        edge = np.vstack([(back[i], back[(i + 1) % 4], corners[(i + 1) % 4], corners[i]) for i in range(4)])
+        add(edge, np.zeros((16, 2)), [(4 * q + a, 4 * q + b, 4 * q + c) for q in range(4)
+                                      for a, b, c in ((0, 1, 2), (0, 2, 3))], 1, row)
+        _pole(add, row, zb + h - 0.05)
+    if not n[0]:
+        return None
+    return np.vstack(P), np.vstack(T), np.vstack(UV), MATERIALS_AU, np.concatenate(M)
 
 
 def sweden_mesh(table, origin):
@@ -276,10 +379,40 @@ def sweden_mesh(table, origin):
     return np.vstack(P), np.vstack(T), np.vstack(UV), MATERIALS_C31, np.concatenate(M)
 
 
-def build_tile(frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, face=STYLE_VIENNA):
-    """The mesh (signstream.write_tile's) of road tile (tx, ty)'s speed-limit signs, or None (none)."""
+def general(signs, towns):
+    """Which signs (place's rows) to keep where Germany's general limits are not posted (earthfast
+    speed_sign_general: no 50 in or before a town, no 100 out of town but where a lower limit ends; with the town
+    signs on, whose Ortstafeln start and end the 50); towns: townentry.Towns.town_state's."""
+    fast.require(GENERAL_KERNEL, "Germany's general speed limits")
+    xy, travel = signs[:, 0:2], signs[:, 2:4]
+    here = np.asarray(towns(xy), bool).reshape(-1, 2)
+    ahead = np.zeros(len(signs), bool)
+    for d in GENERAL_AHEAD_M:
+        ahead |= np.asarray(towns(xy + travel * d), bool).reshape(-1, 2)[:, 0]
+    town = np.ascontiguousarray(np.c_[here[:, 0], ahead, here[:, 1]])
+    return np.asarray(fast._ef.speed_sign_general(np.ascontiguousarray(signs, np.float64), town), bool)
+
+
+def build_tile(frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, face=STYLE_VIENNA, de_on=False,
+               towns=None):
+    """The mesh (signstream.write_tile's) of road tile (tx, ty)'s speed-limit signs, or None (none). de_on (the German
+    junction signs, designs.enabled's): near Germany its zone signs too, in one mesh, and not the 274s they replace
+    (dezones.tile); otherwise today's. towns: the town signs' towns (townentry.Towns.town_state) when they are on:
+    Germany's general limits are then not posted (general)."""
     box = roads.tile_bbox(tx, ty)
     signs = place(frame, box, context, left_hand, mph, face)
+    if towns is not None and len(signs) and not mph:
+        signs = signs[general(signs, towns)]
+    extra = None
+    if de_on:                   # (Germany's zone signs: dezones.py)
+        import dezones
+        signs, extra = dezones.tile(frame, box, elev, context, signs, decks, left_hand, mph)
+    mesh = _speed_mesh(frame, box, elev, signs, decks, face)
+    return mesh if extra is None else dezones._merged(mesh, extra)
+
+
+def _speed_mesh(frame, box, elev, signs, decks, face):
+    """The mesh of place()'s signs of box, or None."""
     keep = [k for k in range(len(signs)) if not exitsigns._on_deck(signs[k, :2], decks, 1.5)]
     if not keep:
         return None
@@ -292,6 +425,8 @@ def build_tile(frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True
     table = np.column_stack([signs[:, 0:2], z[:n], z[n:], signs[:, 2:4], signs[:, 4:6], signs[:, 8]])
     if face == STYLE_SWEDEN:
         return sweden_mesh(table, (float(box[0]), float(box[1]), 0.0))
+    if face == STYLE_AU:            # fork
+        return au_mesh(table, (float(box[0]), float(box[1]), 0.0))
     cp, glyph, cap = _glyphs()
     p, t, uv, mi = fast._ef.speed_sign_mesh(np.ascontiguousarray(table), _kernel_style(face), cp, glyph, cap,
                                             [float(box[0]), float(box[1]), 0.0])
