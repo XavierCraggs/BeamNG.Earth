@@ -29,6 +29,7 @@ MIN_WIDTH_M = 3.0           # a width tag outside these is a typo (a "2300"), th
 MAX_WIDTH_M = 80.0
 JOIN_SIDES = 8              # the octagon at a way's end and at a sharp bend
 RUNWAY = "runway"
+STOPWAY = "stopway"
 RUNWAY_M = 30.0             # a runway's default width (OSM's runway line: only the fillets read it), code 3 / 4
 RUNWAY_INTL_M = 45.0
 JOIN_TOL_M = 2.0            # a way's end this near another way's or a runway's centreline joins it: a fillet there
@@ -231,13 +232,19 @@ def _feats_pads(feats):
     intl = bool((air & (cls == AERODROME)).any())
     out = []
     ways, runways = [], []                  # (lon, lat (n, 2), half width): the fillets'
-    for i in np.flatnonzero(air & np.isin(cls, (APRON, RUNWAY) + WAYS)):
+    for i in np.flatnonzero(air & np.isin(cls, (APRON, RUNWAY, STOPWAY) + WAYS)):
         tags = _tags(feats, i)
         kind = int(feats.kind[i])
-        if cls[i] == RUNWAY:
-            if kind == 2:                       # (painted from OurAirports: only what a taxiway may end on)
+        if cls[i] in (RUNWAY, STOPWAY):
+            # OurAirports paints the runway between its two ends (airportgrade.runway_pads); the mapped line also
+            # runs on over the pavement past them (a stopway, a blast pad, the turn pad a taxiway joins at the very
+            # end: Brisbane's taxiway stopped ~100 m short of the runway's end), so it is paved too, at its width
+            if kind == 2 and not _unpaved(feats, i, tags):
                 w = width_tag(tags.get("width")) or (RUNWAY_INTL_M if intl else RUNWAY_M)
-                runways += [(np.asarray(ln, np.float64), w / 2.0) for part in feats.parts(i) for ln in part if len(ln) >= 2]
+                lines = [np.asarray(ln, np.float64) for part in feats.parts(i) for ln in part if len(ln) >= 2]
+                runways += [(ln, w / 2.0) for ln in lines]
+                for ln in lines:
+                    out += _buffer(ln[:, 1], ln[:, 0], w)
             continue
         if _unpaved(feats, i, tags):
             continue

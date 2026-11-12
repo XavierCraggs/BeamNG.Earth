@@ -27,6 +27,7 @@ import numpy as np
 import dmath
 import dnp
 
+import aeroways
 import secrossings
 import streetparking
 import blockcache
@@ -1615,7 +1616,14 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     town_faces = {}                     # the town signs' faces the tile's props use (towns_on)
     towns = (town_signs(frame, tx, ty, out_dir, vfs_dir, town_faces)
              if towns_on and props is not None and out_dir is not None else None)
+    try:                                # the airside pavement (aeroways): roads over it get no verge (roads._on_pads)
+        aero_pads = aeroways.pads([_s.md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+                                   for k in roadsmod.cells_of_tile(frame, tx, ty, 50.0)])
+    except Exception as ex:
+        log.debug("airside pavement: %s: %s", type(ex).__name__, ex)
+        aero_pads = None
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
+                                 aero_pads=aero_pads,
                                  sign_obstacles=sign_obstacles,
                                  # (the stations' made-up driveways: no sidewalk across them; nor along a square's
                                  # street-side parking rows, streetparking.plaza_bay_cuts)

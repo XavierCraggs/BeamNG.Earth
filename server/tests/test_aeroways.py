@@ -227,3 +227,16 @@ class Painted(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RoadEdges(unittest.TestCase):
+    def test_edge_strip_stops_on_the_pavement(self):
+        # a service road crossing an apron: its edge strip (gravel / grass decal) is cut where it lies on the paving
+        import roads
+        fr = geodesy.EnuFrame(-27.0, 153.0)
+        la, lo, _ = fr.enu_to_geodetic(np.array([-10.0, 10, 10, -10]), np.array([-10.0, -10, 10, 10]), np.zeros(4))
+        pads = roads._pads_xy(fr, [(np.asarray(la), np.asarray(lo))], (-50, -50, 50, 50))
+        pieces = roads.cut_in_pads(np.array([[-40.0, 0, 0], [40.0, 0, 0]]), pads)
+        self.assertEqual(len(pieces), 2)
+        self.assertTrue(all(abs(p[:, 0]).min() >= 9.0 for p in pieces))
+        self.assertEqual(len(roads.cut_in_pads(np.array([[-40.0, 30, 0], [40.0, 30, 0]]), pads)), 1)

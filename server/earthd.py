@@ -147,6 +147,7 @@ import terrainpatch as terrainpatchmod  # noqa: E402
 import geodesy  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 import gravity as gravitymod  # noqa: E402
+import aeroways  # noqa: E402
 import airportgrade as airportgrademod  # noqa: E402
 import airports as airportsmod  # noqa: E402
 import seacarve as seacarvemod  # noqa: E402
@@ -3262,7 +3263,14 @@ class Server:
             towns = self.towns.maker(anchor.frame, roadsmod.cells_of_tile(anchor.frame, tx, ty,
                                                                           blockworker.TOWNS_MARGIN_M),
                                      self.out_dir, self.vfs_dir, town_faces)
+        try:                            # the airside pavement (aeroways): roads over it get no verge (roads._on_pads)
+            aero_pads = aeroways.pads([self.mapdata.cell(k, layers=("infrastructure",), kind="demand").layers.get(
+                "infrastructure") for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, 50.0)])
+        except Exception as ex:
+            log.debug("airside pavement: %s: %s", type(ex).__name__, ex)
+            aero_pads = None
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
+                                     aero_pads=aero_pads,
                                      sign_obstacles=sign_obstacles,
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
