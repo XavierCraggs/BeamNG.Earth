@@ -38,6 +38,21 @@ M.GLOW_NITS = { 20400, 7970, 3020, 1160, 454, 169, 66.6, 26 }
 for k, nits in ipairs(M.GLOW_NITS) do
   M.MATERIALS['bne_lamp_glow' .. (k - 1)] = { M.MATERIALS.bne_lamp_lens[1], nits }
 end
+-- the airfield lights' glow balls (tools/build_airfield_lights.py: server airfieldlights.py's rows in the groups
+-- afl_<colour>, the same balls as the lamps' glow at 0.35 of their size, bne_afl_<colour>0 ..): each colour's emissive
+-- colour, the balls' light the lamps' by AFL_NITS_FACTOR (a runway's fittings are dimmer than a sodium head, and
+-- there are thousands of them in a row); the groups are on at night with the lamps' glow (AFL_GROUPS, below)
+M.AFL_COLOURS = { white = '1 0.95 0.85', green = '0.2 1 0.35', red = '1 0.12 0.08', blue = '0.2 0.4 1', yellow = '1 0.75 0.15' }
+M.AFL_NITS_FACTOR = 0.7
+-- by colour, on top: a runway's edge, threshold and end lights are high intensity, far brighter than the taxiways'
+-- blue edge lights (Brisbane at dusk, 2026-11-12: the runway's white read fainter than the blue)
+M.AFL_COLOUR_GAIN = { white = 3.5, yellow = 3.5, green = 3.5, red = 3.5, blue = 1.5 }
+M.AFL_GROUPS = { 'afl_white', 'afl_green', 'afl_red', 'afl_blue', 'afl_yellow' }
+for colour, rgb in pairs(M.AFL_COLOURS) do
+  for k, nits in ipairs(M.GLOW_NITS) do
+    M.MATERIALS['bne_afl_' .. colour .. (k - 1)] = { rgb, nits * M.AFL_NITS_FACTOR * (M.AFL_COLOUR_GAIN[colour] or 1) }
+  end
+end
 
 -- Late at night fewer windows are lit (the user, 2026-11-08: "have less lit windows depending on how late it is, peaking
 -- at 5 am"): each window material's emissive map in three steps of the night (tools/build_night_windows.py,
@@ -159,9 +174,13 @@ local function apply(night, step)
     end
   end
   if night ~= M.night then
-    -- the lamps' far glow (trees.lua's lampglow group, off by day)
+    -- the lamps' far glow (trees.lua's lampglow group, off by day) and the airfield lights' (AFL_GROUPS: one refresh)
     local okt, trees = pcall(require, 'beamngEarth/trees')
-    if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow' }, night) end
+    if okt and trees.setGroupEnabled then
+      local on = { 'lampglow' }
+      for _, g in ipairs(M.AFL_GROUPS) do on[#on + 1] = g end
+      pcall(trees.setGroupEnabled, on, night)
+    end
   end
   M.night = night
   M.nightStep = night and step or nil

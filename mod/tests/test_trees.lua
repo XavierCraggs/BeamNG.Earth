@@ -83,6 +83,17 @@ shape, sc = trees.pick('streetlight_double_arm', 13.76, 0)
 T.check(shape == '/art/shapes/objects/pole_light_double' and sc == 1,
         'double-arm lamp: West Coast stock pole at authored scale')
 T.check(trees.NO_COLLIDE.high_mast_light == true, 'high-mast light markers do not collide')
+-- the airfield lights' glow groups (server airfieldlights.py GROUPS; tools/build_airfield_lights.py), as the lamps' glow:
+-- a one-metre shape each, never colliding, drawn far out, off until nightlights.lua turns them on at dusk
+for _, c in ipairs({ 'white', 'green', 'red', 'blue', 'yellow' }) do
+  local g = 'afl_' .. c
+  local e = trees.CATALOG[g]
+  T.check(e and #e == 1 and e[1][1] == '/levels/beamng_earth/art/shapes/beamngEarth/bne_afl_' .. c and e[1][2] == 1.0,
+          g .. ' catalogued: a 1 m glow shape')
+  T.check(trees.NO_COLLIDE[g] == true, g .. ' never collides')
+  T.check(trees.GROUP_MAX_M[g] == 4000, g .. ' shown out to 4 km')
+  T.check(trees.groupOff[g] == true, g .. ' off until night')
+end
 
 -- a tile of 100 items with ranks 0 .. 0.99 at the player: all made; far away: a quarter
 local rows = {}

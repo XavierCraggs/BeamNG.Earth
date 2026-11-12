@@ -108,6 +108,7 @@ import reach as reachmod  # noqa: E402
 import privacyregion as privacyregionmod
 import perfstats  # noqa: E402
 import rails as railsmod  # noqa: E402
+import taxiwaymarks as taxiwaymarksmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
 import urgency as urgencymod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
@@ -3283,6 +3284,12 @@ class Server:
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban)
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
             chunks += self.airports.tile_chunks(anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
+        try:                            # the taxiways' centrelines and runway holding markings (taxiwaymarks)
+            chunks += taxiwaymarksmod.tile_chunks_md(
+                self.mapdata, roadsmod.cells_of_tile(anchor.frame, tx, ty, taxiwaymarksmod.REACH_M),
+                anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
+        except Exception as ex:         # (a marking is not worth the tile)
+            log.debug("taxiway markings: %s: %s", type(ex).__name__, ex)
         x0, y0, _, _ = roadsmod.tile_bbox(tx, ty)
         if items is not None:           # front doors and shopfronts, driveways into the road mesh
             # (no street tree in a house: its own or the next tile's)
@@ -3475,6 +3482,14 @@ class Server:
                 raise
             except Exception as ex:
                 log.warning("lights and fans: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            if self.airports is not None:
+                try:   # (a lit runway's edge / threshold / end lights, the taxiways' blue edge lights: airfieldlights)
+                    import airfieldlights
+                    db = self.airports.db
+                    props.extend(airfieldlights.tile_rows(anchor.frame, box, infra_fn,
+                                                          lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), elev))
+                except Exception as ex:
+                    log.warning("airfield lights: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             try:       # (solar farms, container terminals, marinas, trailer parks, construction sites)
                 props.extend(places.tile_rows(anchor.frame, box, self.mapdata, elev, near_roads, self.country(anchor)))
             except fast.NativeMissing:

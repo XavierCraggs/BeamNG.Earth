@@ -158,4 +158,60 @@ clock = clock + 2; nl.update()
 T.check(mats.bne_bld_facade.fields.emissiveMap == nl.MAPS.bne_bld_facade[1] and nl.status().errors == 0,
   'the evening: its map back')
 nl.reset()
+
+-- The airfield lights' glow (tools/build_airfield_lights.py; server airfieldlights.py's afl_<colour> groups): five shapes
+-- of eight balls each, every ball's material defined and lit in its colour, no brighter than the lamps' glow, and the
+-- groups switched with it (one call: trees.lua refreshes once) at dusk and dawn.
+local nAfl = 0
+for colour, rgb in pairs(nl.AFL_COLOURS) do
+  local fa = io.open(shapes .. 'bne_afl_' .. colour .. '.dae'); local ad = fa:read('*a'); fa:close()
+  local seen = 0
+  for name in ad:gmatch('target="#([%w_]+)"') do
+    seen = seen + 1
+    local m = nl.MATERIALS[name]
+    T.check(m ~= nil and m[1] == rgb,
+            'afl material lit: ' .. name)
+  end
+  T.check(seen == #nl.GLOW_NITS + 1, 'a material per ball and the speck: ' .. colour .. ' ' .. seen)
+  for k = 1, #nl.GLOW_NITS do
+    local name = 'bne_afl_' .. colour .. (k - 1)
+    local m = nl.MATERIALS[name]
+    T.check(m and m[1] == rgb and m[2] == nl.GLOW_NITS[k] * nl.AFL_NITS_FACTOR * nl.AFL_COLOUR_GAIN[colour],
+            'afl ball ' .. name .. ' in its colour, at its colour brightness')
+    T.check(colour == 'blue' or (m and m[2] > nl.MATERIALS['bne_afl_blue' .. (k - 1)][2]),
+            'afl ball ' .. name .. ': a runway light brighter than a blue taxiway light')
+    nAfl = nAfl + 1
+  end
+end
+T.check(nAfl == 40, 'five colours of eight balls: ' .. nAfl)
+local fm = io.open(shapes .. 'airfield_lights.materials.json'); local aflJson = fm:read('*a'); fm:close()
+for colour in pairs(nl.AFL_COLOURS) do
+  for k = 0, #nl.GLOW_NITS - 1 do
+    T.check(aflJson:find('"bne_afl_' .. colour .. k .. '": {', 1, true) ~= nil, 'defined in the json: ' .. colour .. k)
+  end
+end
+T.check(#nl.AFL_GROUPS == 5, 'five groups')
+local set, enabled = {}, {}
+package.loaded['beamngEarth/trees'] = { setGroupEnabled = function(gs, on)
+  set[#set + 1] = { gs = gs, on = on }
+  for _, g in ipairs(gs) do enabled[g] = on end
+  return true
+end }
+core_environment = { getLightState = function() return { isNight = true } end }
+nl.reset()
+clock = clock + 2; nl.update()
+T.check(#set == 1 and set[1].on == true, 'dusk: one switch call')
+T.check(enabled.lampglow == true, 'dusk: the lamp glow on')
+for colour in pairs(nl.AFL_COLOURS) do
+  T.check(enabled['afl_' .. colour] == true, 'dusk: afl_' .. colour .. ' on')
+end
+core_environment.getLightState = function() return { isNight = false } end
+clock = clock + 2; nl.update()
+T.check(#set == 2 and set[2].on == false, 'dawn: one switch call')
+T.check(enabled.lampglow == false, 'dawn: the lamp glow off')
+for colour in pairs(nl.AFL_COLOURS) do
+  T.check(enabled['afl_' .. colour] == false, 'dawn: afl_' .. colour .. ' off')
+end
+package.loaded['beamngEarth/trees'] = nil
+nl.reset()
 T.done('test_nightlights')

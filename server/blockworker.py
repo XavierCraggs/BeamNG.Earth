@@ -47,6 +47,7 @@ import roadwear
 import seacarve as seacarvemod
 import staging
 import surface as surfacemod
+import taxiwaymarks
 import terraincache
 import townentry as townsignsmod      # (PR #597; townsigns.py is PR #505's town boards)
 import xproc
@@ -1643,6 +1644,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("rails")
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
+    try:                                # the taxiways' centrelines and runway holding markings (taxiwaymarks)
+        chunks += taxiwaymarks.tile_chunks_md(_s.md, roadsmod.cells_of_tile(frame, tx, ty, taxiwaymarks.REACH_M),
+                                              frame, tx, ty, elev, roadsmod.tile_bbox)
+    except Exception as ex:             # (a marking is not worth the tile)
+        log.debug("taxiway markings: %s: %s", type(ex).__name__, ex)
     mark("airports")
     x0, y0, _, _ = box
     if items is not None:               # front doors and shopfronts, driveways into the road mesh
@@ -1866,6 +1872,14 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             raise
         except Exception as ex:
             log.warning("lights and fans: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        if _s.airports is not None:
+            try:       # (a lit runway's edge / threshold / end lights, the taxiways' blue edge lights: airfieldlights)
+                import airfieldlights
+                db = _s.airports.db
+                props.extend(airfieldlights.tile_rows(frame, box, infra_fn,
+                                                      lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), elev))
+            except Exception as ex:
+                log.warning("airfield lights: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         try:           # (solar farms, container terminals, marinas, trailer parks, construction sites)
             props.extend(places.tile_rows(frame, box, _s.md, elev, near_roads, country))
         except fast.NativeMissing:

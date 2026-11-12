@@ -30,6 +30,7 @@ from runtimeprofiler import ThreadPoolExecutor
 import numpy as np
 from PIL import Image, ImageDraw
 
+import aeroways
 import beaches
 import fast
 import dmath
@@ -1050,10 +1051,12 @@ def paint_grass(idx, lat, lon, feats_list):
 def paint_lots(idx, lat, lon, feats_list, us_looks=None):
     """idx with the squares and pedestrian areas (land_use polygons of subtype "pedestrian") of feats_list painted
     (paint_plazas), then the parking lots (polygons of class "parking") as asphalt (Lancaster County's photos: the
-    grass layer's ground cover grew on lots), the substations' yards as gravel. Pure given us_looks."""
+    grass layer's ground cover grew on lots), the substations' yards as gravel, and the airports' aprons and taxiways
+    as asphalt (aeroways.pads, paint_pads; GitHub #607). Pure given us_looks."""
     idx = paint_plazas(idx, lat, lon, feats_list, us_looks)
     idx = _paint(idx, lat, lon, feats_list, _yards, LOOSE)
-    return _paint(idx, lat, lon, feats_list, _parking, ASPHALT)
+    idx = _paint(idx, lat, lon, feats_list, _parking, ASPHALT)
+    return paint_pads(idx, lat, lon, aeroways.pads(feats_list))
 
 
 # The squares' layers by their look (plazas.paving's material): asphalt and concrete the asphalt layer, flat-topped
@@ -1256,7 +1259,8 @@ def pads_mask(frame, x0, y0, size, px, pads):
 
 
 def lot_pads(feats_list):
-    """Parking-lot outer rings as (lat, lon) pads for the photo painters (class parking, not grass or gravel)."""
+    """Parking-lot outer rings as (lat, lon) pads for the photo painters (class parking, not grass or gravel), and the
+    airports' aprons and taxiways (aeroways.pads: a taxiway read as dirt, GitHub #607)."""
     pads = []
     for feats in feats_list:
         if feats is None or len(feats) == 0:
@@ -1270,7 +1274,7 @@ def lot_pads(feats_list):
                     continue
                 ring = np.asarray(part[0], np.float64)
                 pads.append((ring[:, 1], ring[:, 0]))
-    return pads
+    return pads + aeroways.pads(feats_list)
 
 
 def photo_lots(rgb, frame, x0, y0, size, feats_list):

@@ -41,7 +41,7 @@ M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = tr
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
 M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
-  sub_transformer = 500, sub_fence = 200, lamplens = 800, high_mast_light = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
+  sub_transformer = 500, sub_fence = 200, lamplens = 800, high_mast_light = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, afl_white = 4000, afl_green = 4000, afl_red = 4000, afl_blue = 4000, afl_yellow = 4000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, rrbuffer = 400, rrwalk = 250, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, bench_metal = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, signal_left = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
@@ -80,7 +80,7 @@ M.BEHIND_HYST_M = 30
 -- ahead) ride the next rebuild, as before: a deadline for each of them doubled a Steam Deck drive's rebuilds (52 against
 -- 23-27 in Fells Point at 45 mph).
 M.CLOSE_M = 120
-M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, afl_white = true, afl_green = true, afl_red = true, afl_blue = true, afl_yellow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true, rooftank = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
@@ -282,6 +282,13 @@ M.CATALOG = {
   -- the street lamps' lenses (furniture.py G_LENS; lit at night: nightlights.lua)
   lamplens = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_lamp_lens', 1.0 } },
   lampglow = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_lamp_glow', 1.0 } },
+  -- the airfield lights (server airfieldlights.py; tools/build_airfield_lights.py: the same glow balls, small, a shape per
+  -- colour; night only: nightlights.lua)
+  afl_white = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_afl_white', 1.0 } },
+  afl_green = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_afl_green', 1.0 } },
+  afl_red = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_afl_red', 1.0 } },
+  afl_blue = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_afl_blue', 1.0 } },
+  afl_yellow = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_afl_yellow', 1.0 } },
   -- level crossings' equipment (server railways.crossing_props; tools/build_rail_crossing_props.py): a crossbuck or a
   -- St Andrew's cross on its post, a mast with lamps, a gate (its arm raised; _l mirrored for left-hand traffic)
   rrcross = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_crossbuck', 3.263 } }, rrcross_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_cross_eu', 3.263 } },
@@ -647,8 +654,8 @@ M.forests = 0
 
 -- Groups the player turned off (settings: Rocks off, GitHub #5): not shown, removed where made. (After
 -- MihneaTeodorStoica's PR #321.)
--- (lampglow: the lamps' far glow, night only: nightlights.lua turns it on after dusk)
-M.groupOff = { lampglow = true }
+-- (lampglow: the lamps' far glow, and afl_*: the airfield lights, night only: nightlights.lua turns them on after dusk)
+M.groupOff = { lampglow = true, afl_white = true, afl_green = true, afl_red = true, afl_blue = true, afl_yellow = true }
 -- The settings' tree density (settings.lua 'trees', the quality presets): scales of the rings' ranks (how many of a
 -- tile's items show at a distance) and of the tiles' item caps; and the tree draw distance (settings 'treeDistance',
 -- split from the density 2026-10-28, the user: "give player much more control in the graphics settings"): the rings'
