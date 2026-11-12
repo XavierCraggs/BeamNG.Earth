@@ -925,6 +925,29 @@ do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is
     'golfflag: its model at 1:1')
   T.check(not trees.isBarrier('golfflag'), 'a pin flag is not a barrier')
 end
+do -- an airfield windsock (server windsocks.py): its model at 1:1 (6.47 m), never solid, one spelling, shown out to 1.5 km
+  local shape, sc = trees.pick('windsock', 6.47, 0.7)
+  T.check(trees.CATALOG.windsock and #trees.CATALOG.windsock == 1 and shape == trees.CATALOG.windsock[1][1]
+    and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_windsock' and math.abs(sc - 1) < 1e-9,
+    'windsock: its model at 1:1')
+  T.check(trees.NO_COLLIDE.windsock == true and trees.ONE_SPELLING.windsock == true, 'a windsock never collides, one spelling')
+  T.check(trees.GROUP_MAX_M.windsock == 1500 and not trees.isBarrier('windsock') and not trees.groupOff.windsock,
+    'a windsock shows out to 1.5 km, by day, and is no barrier')
+end
+do -- parked aircraft (server parkedaircraft.py): four models at 1:1 (the tail fin's height), never solid, one spelling
+  for _, a in ipairs({ { 'ac_light', 2.7, 800 }, { 'ac_turboprop', 7.6, 1500 }, { 'ac_narrow', 11.8, 2500 },
+                       { 'ac_wide', 17.5, 3000 } }) do
+    local g, h, far = a[1], a[2], a[3]
+    local shape, sc = trees.pick(g, h, 0.7)
+    T.check(trees.CATALOG[g] and #trees.CATALOG[g] == 1 and shape == trees.CATALOG[g][1][1]
+      and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9,
+      g .. ': its model at 1:1')
+    T.check(trees.CATALOG[g][1][2] == h, g .. ': the catalogue height is the tail fin height')
+    T.check(trees.NO_COLLIDE[g] == true and trees.ONE_SPELLING[g] == true, g .. ' never collides, one spelling')
+    T.check(trees.GROUP_MAX_M[g] == far and not trees.isBarrier(g) and not trees.groupOff[g],
+      g .. ' shows out to ' .. far .. ' m, by day, and is no barrier')
+  end
+end
 
 T.check(countChecks > 50 and #countMiss == 0, 'the running item count matches a full count at each of '
   .. countChecks .. ' checks' .. (#countMiss > 0 and (' (' .. table.concat(countMiss, '; ') .. ')') or ''))

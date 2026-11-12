@@ -16,6 +16,9 @@ aeroways reads it (airport subtype, class, unpaved surfaces skipped, kind-2 line
 Features of every cell it touches: those are read once (by id) and the strokes of a list of Features are memoized on its
 first (bounded), so every tile of a block shares them. Pure: no ground, no frame.
 
+scene(feats_list) -> Scene: the same read (the ways with their `ref`, the runways with theirs, the runway holding
+positions) in one local metre frame, for the airfield signs (airfieldsigns: a runway's signs stand at those positions).
+
 tile_chunks(feats_list, frame, tx, ty, elev, tile_bbox) -> road chunks ({"m", "w", "tl", "p", "n"}) of the tile, as
 AirportGrader.tile_chunks draws the runway markings (airportgrade.MARK_LOOK, MARK_PIECE_M, MARK_NODE_M): a centreline
 is one polyline cut into pieces (so its bends are one road), each piece in the tile of its midpoint.
@@ -47,13 +50,15 @@ CACHE_MAX = 8               # strokes kept per first Features (one per list of c
 HOLD_POINT = "holding_position"
 _RAW = "_taxiway_raw"
 _MEMO = "_taxiway_marks"
+_SCENE = "_taxiway_scene"
 _EPS = 1e-9
 
 
 def _raw(feats):
     """What of feats' airport features the markings read, kept on it: [(id, lonlat (n, 2), class, width tag or None,
-    unpaved)] of its way lines, [(id, lonlat, width tag or None)] of the runway lines, [(id, lon, lat)] of the holding
-    positions, and whether an international aerodrome is in it."""
+    ref)] of its way lines, [(id, lonlat, width tag or None, ref)] of the runway lines (ref: the `ref` tag, "" when
+    none: the airfield signs' designators), [(id, lon, lat)] of the holding positions, and whether an international
+    aerodrome is in it."""
     got = feats.__dict__.get(_RAW)
     if got is not None:
         return got
@@ -74,11 +79,11 @@ def _raw(feats):
                               for part in feats.parts(i) for ln in part if len(ln)]
             elif kind == 2 and c == aeroways.RUNWAY:
                 w = aeroways.width_tag(tags.get("width"))
-                runways += [(str(feats.ids[i]), np.asarray(ln, np.float64), w)
+                runways += [(str(feats.ids[i]), np.asarray(ln, np.float64), w, str(tags.get("ref") or "").strip())
                             for part in feats.parts(i) for ln in part if len(ln) >= 2]
             elif kind == 2 and c in aeroways.WAYS and not aeroways._unpaved(feats, i, tags):
                 w = aeroways.width_tag(tags.get("width"))
-                ways += [(str(feats.ids[i]), np.asarray(ln, np.float64), c, w)
+                ways += [(str(feats.ids[i]), np.asarray(ln, np.float64), c, w, str(tags.get("ref") or "").strip())
                          for part in feats.parts(i) for ln in part if len(ln) >= 2]
     got = feats.__dict__[_RAW] = (ways, runways, holds, intl)
     return got
@@ -303,9 +308,19 @@ def _way_width(cls, tag, intl):
     return aeroways.TAXILANE_INTL_M if intl else aeroways.TAXILANE_M
 
 
-def _build(feats_list):
-    """(lines, boxes): lines [(lat (k,), lon (k,), width, kind, color)], each a polyline (a hold marking's stroke is of
-    two points), and boxes (n, 4) their lat0, lat1, lon0, lon1 extents."""
+class Scene:
+    """What the markings and the airfield signs (airfieldsigns) read of a list of Features, in one local metre frame:
+    frame (geodesy.EnuFrame), ways [(xy (k, 2), width, ref, class)], runways [(xy, half width, ref)] and sites
+    [(runway, way, point (2,), unit direction (2,))]: the runway holding positions (indexes into runways and ways;
+    the direction runs along the way away from the runway). memo: a dict for what a reader keeps on the scene."""
+    __slots__ = ("frame", "ways", "runways", "sites", "memo")
+
+    def __init__(self, frame, ways, runways, sites):
+        self.frame, self.ways, self.runways, self.sites, self.memo = frame, ways, runways, sites, {}
+
+
+def _scene(feats_list):
+    """The Scene of the Features in feats_list (None for Features with no airport way)."""
     seen, ways, runways, holds, intl = set(), [], [], [], False
     for f in feats_list:
         if f is None or len(f) == 0:
@@ -317,7 +332,7 @@ def _build(feats_list):
         holds += [x for x in h if x[0] not in seen]
         seen.update(x[0] for x in w + r + h)
     if not ways:
-        return [], np.zeros((0, 4))
+        return None
     lon0, lat0 = ways[0][1][0]
     frame = geodesy.EnuFrame(float(lat0), float(lon0), 0.0)       # (metres: the tile's own ellipsoid, not a sphere's)
 
@@ -329,31 +344,68 @@ def _build(feats_list):
     wwidth = [_way_width(x[2], x[3], intl) for x in ways]
     rw = [(to_m(x[1]), (x[2] or (aeroways.RUNWAY_INTL_M if intl else aeroways.RUNWAY_M)) / 2.0) for x in runways]
     hp = list(to_m(np.array([[x[1], x[2]] for x in holds]))) if holds else []
-    out = []                                    # (xy (k, 2), width, kind)
-    blocks = _runway_blocks(wxy, rw, RUNWAY_GAP_M)
-    for xy, blk in zip(wxy, blocks):
-        out += [(run, CENTRE_W_M, CENTRE_KIND) for run in (_free_runs(xy, blk) if blk else [xy])]
     # (the markings across a way where it enters a runway)
     starts = np.r_[0, cuts]
     allm = np.concatenate(wxy)
     wlo, whi = np.minimum.reduceat(allm, starts, axis=0), np.maximum.reduceat(allm, starts, axis=0)
-    for rxy, half in rw:
+    sites = []
+    for ri, (rxy, half) in enumerate(rw):
         lo_, hi_ = rxy.min(axis=0) - aeroways.JOIN_TOL_M, rxy.max(axis=0) + aeroways.JOIN_TOL_M
         rsegs = np.stack([rxy[:-1], rxy[1:]], axis=1)
-        sites = []                              # (a way's end and its crossing find one site: one marking)
+        found = []                              # (a way's end and its crossing find one site: one marking)
         for wi in np.flatnonzero(np.all((whi >= lo_) & (wlo <= hi_), axis=1)):
             xy, w = wxy[wi], wwidth[wi]
             for _p, heads in _joins(xy, rsegs):
                 for head in heads:
                     site = _mapped_hold(head, rsegs, w / 2.0, hp) or _walk(head, rsegs, HOLD_DIST_M)
-                    if site is None or any(float(np.hypot(*(site[0] - s))) < 3.0 for s in sites):
+                    if site is None or any(float(np.hypot(*(site[0] - s))) < 3.0 for s in found):
                         continue
-                    sites.append(site[0])
-                    for x0, y0, x1, y1, lw, kind in _hold_strokes(site[0], site[1], w):
-                        out.append((np.array([[x0, y0], [x1, y1]]), lw, kind))
+                    found.append(site[0])
+                    sites.append((ri, int(wi), site[0], site[1]))
+    return Scene(frame, [(xy, w, x[4], x[2]) for xy, w, x in zip(wxy, wwidth, ways)],
+                 [(xy, half, x[3]) for (xy, half), x in zip(rw, runways)], sites)
+
+
+def _cached(feats, slot, build):
+    """build(feats), memoized on the first of feats under `slot` (CACHE_MAX lists, each checked to still hold the same
+    live Features)."""
+    memo = feats[0].__dict__.setdefault(slot, {})
+    key = tuple(id(f) for f in feats)
+    got = memo.get(key)
+    if got is not None and all(r() is f for r, f in zip(got[0], feats)):
+        return got[1]
+    if len(memo) >= CACHE_MAX:
+        memo.clear()
+    value = build(feats)
+    memo[key] = ([weakref.ref(f) for f in feats], value)
+    return value
+
+
+def scene(feats_list):
+    """The Scene of the airport Features in feats_list (the ways, the runways and the runway holding positions the
+    markings are drawn from), memoized on the first Features; None for Features with no airport way in them."""
+    feats = [f for f in feats_list if f is not None and len(f)]
+    if not any(_raw(f)[0] for f in feats):
+        return None
+    return _cached(feats, _SCENE, _scene)
+
+
+def _build(feats_list):
+    """(lines, boxes): lines [(lat (k,), lon (k,), width, kind, color)], each a polyline (a hold marking's stroke is of
+    two points), and boxes (n, 4) their lat0, lat1, lon0, lon1 extents."""
+    sc = scene(feats_list)
+    if sc is None:
+        return [], np.zeros((0, 4))
+    out = []                                    # (xy (k, 2), width, kind)
+    blocks = _runway_blocks([w[0] for w in sc.ways], [(r[0], r[1]) for r in sc.runways], RUNWAY_GAP_M)
+    for (xy, *_), blk in zip(sc.ways, blocks):
+        out += [(run, CENTRE_W_M, CENTRE_KIND) for run in (_free_runs(xy, blk) if blk else [xy])]
+    for _ri, wi, site, u in sc.sites:
+        for x0, y0, x1, y1, lw, kind in _hold_strokes(site, u, sc.ways[wi][1]):
+            out.append((np.array([[x0, y0], [x1, y1]]), lw, kind))
     lines, boxes = [], []
     for xy, w, kind in out:
-        la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+        la, lo, _ = sc.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
         la, lo = np.asarray(la), np.asarray(lo)
         lines.append((la, lo, w, kind, COLOR))
         boxes.append((la.min(), la.max(), lo.min(), lo.max()))
@@ -366,17 +418,7 @@ def _marks(feats_list):
     feats = [f for f in feats_list if f is not None and len(f)]
     if not any(_raw(f)[0] for f in feats):
         return [], np.zeros((0, 4))
-    first = feats[0]
-    memo = first.__dict__.setdefault(_MEMO, {})
-    key = tuple(id(f) for f in feats)
-    got = memo.get(key)
-    if got is not None and all(r() is f for r, f in zip(got[0], feats)):
-        return got[1]
-    if len(memo) >= CACHE_MAX:
-        memo.clear()
-    value = _build(feats)
-    memo[key] = ([weakref.ref(f) for f in feats], value)
-    return value
+    return _cached(feats, _MEMO, _build)
 
 
 def strokes(feats_list):

@@ -34,8 +34,11 @@ RUNWAY_M = 30.0             # a runway's default width (OSM's runway line: only 
 RUNWAY_INTL_M = 45.0
 JOIN_TOL_M = 2.0            # a way's end this near another way's or a runway's centreline joins it: a fillet there
 FILLET_MIN_DEG = 10.0       # a way leaving the pavement it joins at less than this runs along it: no fillet
-FILLET_RUN_K = 4.0          # a fillet runs this many of the way's half widths past where its edge leaves the other's
-FILLET_MAX_K = 8.0          # and at most this many joined half widths along the way
+FILLET_R_K = 3.0            # a fillet's arc radius: this many of the way's half widths (ICAO: ~ the taxiway's width+)
+FILLET_MAX_K = 8.0          # its tangent run along each edge at most this many of them (a shallow corner's arc tightens)
+FILLET_ARC_N = 9            # points on a fillet's arc
+FILLET_MIN_RUN_M = 2.0      # a fillet with less room than this on an edge is left out
+STRAIGHT_DEG = 20.0         # an edge is straight while it stays within this of its first direction (_straight)
 SHARP_TURN_DEG = 60.0       # a bend sharper than this: the outline breaks there and an octagon holds the join
 UNPAVED = {"grass", "dirt", "gravel", "ground", "sand", "unpaved", "earth", "compacted", "fine_gravel"}
 M_PER_DEG = 6371008.8 * math.pi / 180.0
@@ -159,25 +162,80 @@ def _seg_dist(p, segs):
     return np.hypot(*(a + t[:, None] * ab - p).T)
 
 
-def _fillet(v, head, half, r, t):
-    """The fillet (local metres) where a way leaves the pavement it joins at v: head (n, 2) its line from v on, half its
-    half width, r the joined pavement's half width, t (2,) the joined line's unit direction. None when it leaves
-    along that line (no wedge: a hull there would paint the grass beside it). The way's near edge leaves the joined
-    pavement's edge (r + half cos a) / sin a along it (a its angle to the line), and the acute wedge between the two
-    edges opens from there: the convex hull of a polygon of radius r round v and the way's both edges to FILLET_RUN_K
-    half widths past that point fills the wedge's first part with a straight fillet."""
+def _straight(line, max_deg=STRAIGHT_DEG):
+    """How far a polyline (n, 2) from its first point runs on within max_deg of its first direction."""
+    d = np.diff(line, axis=0)
+    seg = np.hypot(d[:, 0], d[:, 1])
+    ok = seg > 1e-6
+    if not ok.any():
+        return 0.0
+    d, seg = d[ok], seg[ok]
+    u = d / seg[:, None]
+    bent = np.flatnonzero(u @ u[0] < math.cos(math.radians(max_deg)))
+    return float(seg[:bent[0]].sum() if len(bent) else seg.sum())
+
+
+def _from(line, p, direction):
+    """The polyline (n, 2) from the point of `line` nearest p (projected on its nearest segment), on in `direction`."""
+    a, b = line[:-1], line[1:]
+    ab = b - a
+    tt = np.clip(np.einsum("ij,ij->i", p - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0.0, 1.0)
+    q = a + tt[:, None] * ab
+    k = int(np.argmin(np.hypot(*(q - p).T)))
+    fwd, back = np.r_[[q[k]], line[k + 1:]], np.r_[[q[k]], line[k::-1]]
+    return fwd if float(ab[k] @ direction) >= 0 else back
+
+
+def _fillet(v, head, half, r, t, joined=None):
+    """The fillets (local metres) where a way leaves the pavement it joins at v: head (n, 2) its line from v on, half
+    its half width, r the joined pavement's half width, t (2,) the joined line's unit direction. [] when it leaves
+    along that line (no corner). One fillet each side: in the corner between the way's edge and the joined
+    pavement's edge, the area between the corner and an arc tangent to both edges (radius FILLET_R_K of the way's
+    half widths, the tangent run capped at FILLET_MAX_K of them: a shallow rapid exit's acute corner gets a long,
+    tighter arc, an obtuse one a short one). A convex hull's straight edge squared the grass islands off (Brisbane).
+    The tangent points stay on the straight part of each edge (_straight of the way's head and of the joined line,
+    `joined` (n, 2), from v): past a bend or a short way's end an arc spiked into the grass."""
     d = head[1] - head[0]
     u = d / max(float(np.hypot(*d)), 1e-9)
-    sin_a = abs(float(u[0] * t[1] - u[1] * t[0]))
-    if sin_a < math.sin(math.radians(FILLET_MIN_DEG)):
-        return None
-    cos_a = math.sqrt(max(0.0, 1.0 - sin_a * sin_a))
-    length = min((r + half * cos_a) / sin_a + FILLET_RUN_K * half, FILLET_MAX_K * r)
-    head, n = _head(head, length)
-    nv = np.r_[n, n[-1:]]
-    a = (np.arange(JOIN_SIDES) + 0.5) * 2.0 * math.pi / JOIN_SIDES
-    disc = np.c_[np.cos(a), np.sin(a)] * (r / math.cos(math.pi / JOIN_SIDES)) + v
-    return _hull(np.r_[head + nv * half, head - nv * half, disc])
+    if abs(float(u[0] * t[1] - u[1] * t[0])) < math.sin(math.radians(FILLET_MIN_DEG)):
+        return []
+    straight_u = _straight(head)
+    n_u = np.array([-u[1], u[0]])
+    n_t = np.array([-t[1], t[0]])
+    m = n_t if float(n_t @ u) > 0 else -n_t                  # the joined edge facing the way
+    out = []
+    for sg in (1.0, -1.0):
+        tp = t if float(u[0] * t[1] - u[1] * t[0]) * sg > 0 else -t     # the joined line's way on this side
+        p1, p2 = v + sg * half * n_u, v + r * m
+        den = u[0] * tp[1] - u[1] * tp[0]
+        if abs(den) < 1e-9:
+            continue
+        w = p2 - p1
+        c = p1 + u * ((w[0] * tp[1] - w[1] * tp[0]) / den)  # the corner: the two edges' crossing
+        h = math.acos(max(-1.0, min(1.0, float(u @ tp)))) / 2.0          # half the corner's angle
+        if h < 1e-3 or h > math.pi / 2 - 1e-3:
+            continue
+        rf = FILLET_R_K * half
+        run = rf / math.tan(h)
+        # the room on each edge: its straight length from v, less how far the corner already sits along it
+        room_u = straight_u - float((c - v) @ u)
+        room_t = (_straight(_from(joined, v, tp)) if joined is not None else FILLET_MAX_K * half) - float((c - v) @ tp)
+        cap = min(FILLET_MAX_K * half, room_u, room_t)
+        if cap < FILLET_MIN_RUN_M:
+            continue
+        if run > cap:
+            run = cap
+            rf = run * math.tan(h)
+        t1, t2 = c + run * u, c + run * tp
+        bis = (u + tp) / max(float(np.hypot(*(u + tp))), 1e-9)
+        o = c + bis * (rf / math.sin(h))
+        a1 = math.atan2(t1[1] - o[1], t1[0] - o[0])
+        a2 = math.atan2(t2[1] - o[1], t2[0] - o[0])
+        da = (a2 - a1 + math.pi) % (2.0 * math.pi) - math.pi          # the short arc, facing the corner
+        ang = a1 + da * np.linspace(0.0, 1.0, FILLET_ARC_N)
+        arc = o + rf * np.c_[np.cos(ang), np.sin(ang)]
+        out.append(np.r_[[c], arc])
+    return out
 
 
 def _fillets(ways, runways):
@@ -211,9 +269,7 @@ def _fillets(ways, runways):
             t = t / max(float(np.hypot(*t)), 1e-9)
             for head in (xy[k:], xy[k::-1]):
                 if len(head) >= 2:
-                    f = _fillet(xy[k], head, half, r, t)
-                    if f is not None:
-                        out.append(f)
+                    out += _fillet(xy[k], head, half, r, t, others[int(seg_owner[j])][0])
     return out
 
 

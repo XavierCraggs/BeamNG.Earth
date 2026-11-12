@@ -3498,6 +3498,17 @@ class Server:
                                                           lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), elev))
                 except Exception as ex:
                     log.warning("airfield lights: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+                try:   # (a windsock near each runway end: windsocks; along the runway, the wind would freeze in the tile)
+                    import windsocks
+                    props.extend(windsocks.tile_rows(anchor.frame, box, infra_fn,
+                                                     lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), elev))
+                except Exception as ex:
+                    log.warning("windsocks: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+                try:   # (parked aircraft at the terminal gates and on the GA aprons: parkedaircraft)
+                    import parkedaircraft
+                    props.extend(parkedaircraft.tile_rows(anchor.frame, box, infra_fn, bld_fn, elev))
+                except Exception as ex:
+                    log.warning("parked aircraft: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             try:       # (solar farms, container terminals, marinas, trailer parks, construction sites)
                 props.extend(places.tile_rows(anchor.frame, box, self.mapdata, elev, near_roads, self.country(anchor)))
             except fast.NativeMissing:

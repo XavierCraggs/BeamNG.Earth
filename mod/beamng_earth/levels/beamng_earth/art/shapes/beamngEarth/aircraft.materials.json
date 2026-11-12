@@ -1,0 +1,94 @@
+{
+  "bne_ac_white": {
+    "name": "bne_ac_white",
+    "mapTo": "bne_ac_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "31e0400b-cd40-5e36-a449-0a40436ba8a1",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.9,
+          0.9,
+          0.88,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_ac_grey": {
+    "name": "bne_ac_grey",
+    "mapTo": "bne_ac_grey",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "e29e6783-46cd-590a-8b31-c537ddf77809",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.64,
+          0.67,
+          1.0
+        ],
+        "metallicFactor": 0.15,
+        "roughnessFactor": 0.55
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_ac_dark": {
+    "name": "bne_ac_dark",
+    "mapTo": "bne_ac_dark",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6e35d6d5-44ba-5f01-981d-90c85edfb98d",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.05,
+          0.06,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  },
+  "bne_ac_tyre": {
+    "name": "bne_ac_tyre",
+    "mapTo": "bne_ac_tyre",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "5cef315f-b02a-5c7a-af17-d0a6c1c2774a",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.03,
+          0.03,
+          0.03,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true
+  }
+}
