@@ -205,6 +205,27 @@ class TerminalTest(unittest.TestCase):
         self.assertEqual(spec.facade, bld.OFFICE)
         self.assertAlmostEqual(spec.height, 9.0, places=3)
 
+    def lifted(self, name, airport, **lines):
+        """The spec of a 80 x 40 m building named `name`, a line through it, `airport` its context or None."""
+        ctx = ab.context(FRAME, [infra(FIELD, apron(0, 0, 90, 90))], *BOX[:2]) if airport else None
+        got = bld.tile_buildings(FRAME, *BOX, [building(rect(100, 100, 80, 40), name=name)], ELEV, airport=ctx,
+                                 **{k: [np.array([(60.0, 120.0), (220.0, 120.0)])] for k in lines})
+        self.assertEqual(len(got), 1)
+        return got[0][0]
+
+    def test_a_terminal_over_a_tunnel_or_road_stands_on_the_ground(self):
+        """Heathrow's Terminal 1 (62,000 m2, an Airside Road Tunnel mouth and forecourt roads at it) was a portal building
+        / a structure over the roads: a 3 m slab 7.5 m or more over the apron, nothing under it."""
+        for kind in ("tunnels_xy", "roads_xy"):
+            other = self.lifted("Terminal 1", False, **{kind: 1})
+            self.assertGreater(other.min_h, 0.5, "(without an airport: lifted over it as before, " + kind + ")")
+            term = self.lifted("Terminal 1", True, **{kind: 1})
+            self.assertEqual((term.min_h, term.portal, term.terminal), (0.0, False, True), kind)
+            self.assertGreaterEqual(term.height, 12.0)
+        shop = self.lifted("Shopping Hall", True, tunnels_xy=1)
+        self.assertGreater(shop.min_h, 0.5, "(a building that is no terminal at the airport: as before)")
+        self.assertFalse(shop.terminal)
+
 
 class UnchangedTest(unittest.TestCase):
     def snapshot(self, its):

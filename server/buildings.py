@@ -815,7 +815,7 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "terminal", "gring", "ship", "fr_house", "across", "hi",
                  "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml")
 
     def __init__(self, **kw):
@@ -4584,7 +4584,7 @@ def _split_passages(items, split, seg, half, frame, x0, y0, elev, count, drop):
             gs = [next(grounds) for _ in ps]
             tall = (spec.height or 0.0) >= ROAD_CLEAR_PASSAGE_H + ROAD_CLEAR_LINTEL_M
             if failed[j]:
-                if tall:            # (crossed all over: the whole of it over the roads)
+                if tall and not spec.terminal:      # (crossed all over: the whole of it over the roads; not a terminal's)
                     items[k] = (_spec_copy(spec, min_h=ROAD_CLEAR_PASSAGE_H, height=spec.height - ROAD_CLEAR_PASSAGE_H,
                                            door=None, porch=False, stoop=None, sign=None), g0, g1)
                     count(spec, "passage")
@@ -5358,13 +5358,16 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             for ring in kept:           # (a long one on varied ground: its pieces, each on its own ground)
                 at, mh = at0, mh0
                 rings.append(ring)
-                if mh <= 0.5 and roads_xy and (road_through(ring, roads_xy) >= through_m or road_across(ring, roads_xy)):
+                if mh <= 0.5 and roads_xy and (road_through(ring, roads_xy) >= through_m or road_across(ring, roads_xy)) \
+                        and not (airport is not None and airport.terminal(ring, at)):
+                    # (not an airport terminal: its forecourt roads and tunnels under it, Heathrow's Terminal 1 floated
+                    # as a 3 m slab 7.5-15 m over the apron with nothing under it; it stands on the ground)
                     mh = OVER_ROAD_CLEAR_M
                     h = at.get("height")
                     if h is None or not np.isfinite(h) or h < mh + 3.0:
                         at = dict(at, height=mh + 3.0)      # keeps its top; at least a slab's worth over the clearance
                 if mh < OVER_TUNNEL_CLEAR_M and tunnels_xy and road_through(ring, tunnels_xy) >= TUNNEL_THROUGH_M \
-                        and not (deck_lines and road_through(ring, deck_lines) >= TUNNEL_THROUGH_M):
+                        and not (deck_lines and road_through(ring, deck_lines) >= TUNNEL_THROUGH_M)                         and not (airport is not None and airport.terminal(ring, at)):       # (as above: not a terminal)
                     # over a tunnel: its floor OVER_TUNNEL_CLEAR_M over the road at the mouth near it (the lowest ground
                     # along the tunnel's line round it), from its own lowest ground (base_z); none where its ground is
                     # that high already (a house on the hill over the tube: Wabash's floated ~10 m, 2026-10-17). Over
@@ -5547,6 +5550,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 and not spec.deck and not spec.fr_house and spec.cls != landmarks.LANDMARK:
             spec.holes = at["_holes"]
         spec.portal = bool(at.get("portal"))
+        spec.terminal = bool(at.get("_terminal"))      # (an airport terminal: never stood whole over a road, road_clearance)
         spec.ml = bool(at.get("ml"))
         i0, i1 = (ends[k - 1] if k else 0), ends[k]
         if not ok[i0:i1].all():
