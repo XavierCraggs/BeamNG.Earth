@@ -24,8 +24,9 @@ m; trees.lua's catalogue carries the tail height). The right wing is +X. Built f
 
 Four flat colour materials (aircraft.materials.json, double sided): bne_ac_white, bne_ac_grey, bne_ac_dark (windows, engine
 inlets and exhausts), bne_ac_tyre (tyres, propeller blades). No textures, no logos, no livery. Two levels of detail (nodes
-bne_ac_<kind>160 and <kind>16: the engine draws them by pixel size, as the other bne props) and no collision mesh
-(static scenery: trees.lua NO_COLLIDE).
+bne_ac_<kind>160 and <kind>16: the engine draws them by pixel size, as the other bne props) and a low-poly collision mesh
+(Colmesh_bne_ac_<kind>-1, collision() below: a few tapered boxes for the fuselage, wings, fin, tailplane and, where they
+hang low, the engines; the landing gear is left out), so a car or a person is stopped by a parked aircraft.
 """
 import json
 import math
@@ -45,6 +46,8 @@ DIMS = {                        # kind: (length m, wing span m, tail fin top hei
     "narrow": (37.6, 35.8, 11.8),
     "wide": (63.7, 60.1, 17.5),
 }
+COL_FIT = 0.9                   # the collision boxes' half sizes as a fraction of the skin's (a box's corners stand off an ellipse)
+COL_MIN_T = 0.15                # m: the least half thickness of a collision wing, tailplane or fin section
 LODS = (160, 16)                # the pixel sizes the two levels of detail start at (the node names' suffixes)
 MATERIALS = {                   # name -> (baseColorFactor, metallic, roughness)
     "bne_ac_white": ((0.90, 0.90, 0.88, 1.0), 0.0, 0.45),
@@ -383,6 +386,13 @@ def build(kind, lod):
         wheel(0.0, yg, rn, rn, wn)
 
     info.update(root_wing_z=z_root, fin_h=fh)
+    stab_c = lambda x: scr + (sct - scr) * (x - sx0) / (sx1 - sx0)
+    info["col"] = dict(
+        prof=prof, yn=yn, nl=nl, tl=tl, rings_y=(-L / 2.0, -L / 2.0 + tl, yn - nl, yn),
+        wing=(x0, x1, le_y, chord, thick, wz),
+        fin=(fz0, tail_h, fin_le, fin_c),
+        stab=(sx0, sx1, lambda x: sle0 - ssw_t * (x - sx0), stab_c, lambda x: sz + sdh_t * (x - sx0)),
+        engines=[] if kind == "light" else [(xe, yf, ze, R, Ln)])
     return m, info
 
 
@@ -404,37 +414,75 @@ def _f(a):
     return " ".join(f"{float(v):.4f}" for v in np.asarray(a).ravel())
 
 
+def collision(kind):
+    """The collision Mesh (one material, flat faces): a tapered box a part, each a closed convex prism. The fuselage's
+    cross-section a rectangle inside the skin's ellipse (COL_FIT), the wings, tailplane and fin lofted between two
+    rectangular sections, the underwing engines a box each; under 150 triangles."""
+    c = build(kind, 1)[1]["col"]
+    m = Mesh()
+    box = lambda ring_list: m.loft(W, ring_list, caps=(W, W), smooth=False)
+    rect = lambda x, y, z, hw, hh: np.array([[x - hw, y, z - hh], [x + hw, y, z - hh], [x + hw, y, z + hh], [x - hw, y, z + hh]])
+    rings = []
+    for y in c["rings_y"]:
+        a, b, zc = c["prof"](y)
+        rings.append(rect(0.0, y, zc, a * COL_FIT, b * COL_FIT))
+    box(rings)
+    x0, x1, le_y, chord, thick, wz = c["wing"]
+    sx0, sx1, s_le, s_c, s_z = c["stab"]
+    section = lambda x, le, ch, z, t: np.array([[x, le, z - t], [x, le - ch, z - t], [x, le - ch, z + t], [x, le, z + t]])
+    for side in (1.0, -1.0):
+        box([section(side * x, le_y(x), chord(x), wz(x), max(0.5 * thick(x), COL_MIN_T)) for x in (x0, x1)])
+        box([section(side * x, s_le(x), s_c(x), s_z(x), COL_MIN_T) for x in (sx0, sx1)])
+    fz0, top, fin_le, fin_c = c["fin"]
+    box([np.array([[-COL_MIN_T, fin_le(z), z], [COL_MIN_T, fin_le(z), z],
+                   [COL_MIN_T, fin_le(z) - fin_c(z), z], [-COL_MIN_T, fin_le(z) - fin_c(z), z]]) for z in (fz0, top)])
+    for xe, yf, ze, R, Ln in c["engines"]:
+        for side in (1.0, -1.0):
+            box([rect(side * xe, y, ze, R * COL_FIT, R * COL_FIT) for y in (yf, yf - Ln)])
+    return m
+
+
+def _geometry(gid, pt):
+    """One <geometry>: the materials' vertices side by side, a <triangles> block each."""
+    pos = np.concatenate([pt[k][0] for k in sorted(pt)])
+    nrm = np.concatenate([pt[k][1] for k in sorted(pt)])
+    blocks, base = "", 0
+    for k in sorted(pt):
+        v, _, t = pt[k]
+        blocks += (f'<triangles count="{len(t)}" material="{k}-mat">'
+                   f'<input semantic="VERTEX" source="#{gid}-v" offset="0"/>'
+                   f'<input semantic="NORMAL" source="#{gid}-n" offset="0"/>'
+                   f'<input semantic="TEXCOORD" source="#{gid}-uv" offset="0" set="0"/>'
+                   f'<p>{" ".join(str(int(i)) for i in (t + base).ravel())}</p></triangles>\n')
+        base += len(v)
+    n = len(pos)
+    acc = lambda sid, cnt, names: (f'<technique_common><accessor source="#{sid}-a" count="{cnt}" stride="{len(names)}">'
+                                   + "".join(f'<param name="{x}" type="float"/>' for x in names)
+                                   + '</accessor></technique_common>')
+    return (f'<geometry id="{gid}"><mesh>\n'
+            f'<source id="{gid}-p"><float_array id="{gid}-p-a" count="{n * 3}">{_f(pos)}</float_array>{acc(gid + "-p", n, "XYZ")}</source>\n'
+            f'<source id="{gid}-n"><float_array id="{gid}-n-a" count="{n * 3}">{_f(nrm)}</float_array>{acc(gid + "-n", n, "XYZ")}</source>\n'
+            f'<source id="{gid}-uv"><float_array id="{gid}-uv-a" count="{n * 2}">{_f(np.zeros(n * 2))}</float_array>{acc(gid + "-uv", n, "ST")}</source>\n'
+            f'<vertices id="{gid}-v"><input semantic="POSITION" source="#{gid}-p"/></vertices>\n{blocks}</mesh></geometry>\n')
+
+
 def collada(kind):
-    """One .dae: base00 > start01 > a node per level of detail (named <name><pixel size>), one geometry each."""
+    """One .dae: base00 > start01 > a node per level of detail (named <name><pixel size>), one geometry each, and the
+    collision mesh (Colmesh_<name>-1; an empty collision-1 node beside start01, as the other bne props)."""
     name = "bne_ac_" + kind
     geoms, nodes = [], []
     for size, lod in zip(LODS, (0, 1)):
         pt = parts(kind, lod)
-        # one geometry per level: the materials' vertices side by side, a <triangles> block each
-        pos = np.concatenate([pt[k][0] for k in sorted(pt)])
-        nrm = np.concatenate([pt[k][1] for k in sorted(pt)])
-        blocks, base = "", 0
         gid = f"{name}{size}-g"
-        for k in sorted(pt):
-            v, _, t = pt[k]
-            blocks += (f'<triangles count="{len(t)}" material="{k}-mat">'
-                       f'<input semantic="VERTEX" source="#{gid}-v" offset="0"/>'
-                       f'<input semantic="NORMAL" source="#{gid}-n" offset="0"/>'
-                       f'<input semantic="TEXCOORD" source="#{gid}-uv" offset="0" set="0"/>'
-                       f'<p>{" ".join(str(int(i)) for i in (t + base).ravel())}</p></triangles>\n')
-            base += len(v)
-        n = len(pos)
-        acc = lambda sid, cnt, names: (f'<technique_common><accessor source="#{sid}-a" count="{cnt}" stride="{len(names)}">'
-                                       + "".join(f'<param name="{x}" type="float"/>' for x in names)
-                                       + '</accessor></technique_common>')
-        geoms.append(f'<geometry id="{gid}"><mesh>\n'
-                     f'<source id="{gid}-p"><float_array id="{gid}-p-a" count="{n * 3}">{_f(pos)}</float_array>{acc(gid + "-p", n, "XYZ")}</source>\n'
-                     f'<source id="{gid}-n"><float_array id="{gid}-n-a" count="{n * 3}">{_f(nrm)}</float_array>{acc(gid + "-n", n, "XYZ")}</source>\n'
-                     f'<source id="{gid}-uv"><float_array id="{gid}-uv-a" count="{n * 2}">{_f(np.zeros(n * 2))}</float_array>{acc(gid + "-uv", n, "ST")}</source>\n'
-                     f'<vertices id="{gid}-v"><input semantic="POSITION" source="#{gid}-p"/></vertices>\n{blocks}</mesh></geometry>\n')
+        geoms.append(_geometry(gid, pt))
         nodes.append(f'<node id="{name}{size}" name="{name}{size}"><instance_geometry url="#{gid}"><bind_material><technique_common>'
                      + "".join(f'<instance_material symbol="{k}-mat" target="#{k}-mat"/>' for k in sorted(pt))
                      + '</technique_common></bind_material></instance_geometry></node>\n')
+    col = collision(kind).finish()
+    geoms.append(_geometry(f"{name}-col-g", col))
+    nodes.append(f'<node id="Colmesh_{name}-1" name="Colmesh_{name}-1"><instance_geometry url="#{name}-col-g"><bind_material>'
+                 '<technique_common>' + "".join(f'<instance_material symbol="{k}-mat" target="#{k}-mat"/>' for k in sorted(col))
+                 + '</technique_common></bind_material></instance_geometry></node>\n')
     effects = "".join(f'<effect id="{k}-fx"><profile_COMMON><technique sid="common"><lambert><diffuse><color>'
                       f'{" ".join(f"{c:g}" for c in MATERIALS[k][0])}</color></diffuse></lambert></technique></profile_COMMON></effect>\n'
                       for k in MATERIALS)
@@ -451,7 +499,7 @@ def collada(kind):
 {"".join(geoms)}</library_geometries>
 <library_visual_scenes><visual_scene id="scene" name="scene">
 <node id="base00" name="base00"><node id="start01" name="start01">
-{"".join(nodes)}</node></node>
+{"".join(nodes)}</node><node id="collision-1" name="collision-1"/></node>
 </visual_scene></library_visual_scenes>
 <scene><instance_visual_scene url="#scene"/></scene>
 </COLLADA>

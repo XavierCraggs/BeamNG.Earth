@@ -1,0 +1,240 @@
+"""Airport buildings: an air traffic control tower and a terminal told from the map's other buildings (airport
+context, worldwide), and the tower drawn as a tower.
+
+Overture's buildings near airports rarely carry a height, floors or a class, and have no tower or terminal class: a
+tower mapped as one footprint (Brisbane's "Air Traffic Control Tower", 75 m, 219 m2, no parts) was a plain box, a
+terminal not called one ("Bozeman Yellowstone Intl. Airport (BZN)") a house-sized predicted block. The cell's
+infrastructure (subtype airport) says where the airfield is: its gate points (class airport_gate) and its aprons and
+taxiways (aeroways.pads).
+
+context(frame, infra_layers, x0, y0) -> Context or None (no airport in the cells): relative to the tile's (x0, y0)
+like the rings tile_buildings plans. Context.tower_parts(ring, at) / Context.terminal(ring, at) say what a footprint
+is: a tower as the parts of a shaft, a cab and a cap (the renderer draws them as any building's parts), a terminal as
+True (buildings.plan: the terminal look and a height by its size). A building with parts of its own is never asked:
+Heathrow's tower is an OSM stack of parts and was right already. Pure.
+"""
+import math
+import re
+
+import numpy as np
+
+import aeroways
+import dnp
+
+GATE_CLASS = "airport_gate"
+TOWER_CLASS = "control_tower"   # (the class its parts are drawn as: no plant on the roofs, buildings._clutter)
+TOWER_NAME = re.compile(r"control tower|\batc\b|air traffic|torre de control|tour de contr[oô]le|kontrollturm|"
+                        r"flugsicherung|torre di controllo")
+TOWER_WORD = re.compile(r"\btower\b")           # (a "tower" needs an airport word; the names above do not)
+AIRPORT_WORD = re.compile(r"airport|airfield|aerodrome|airstrip|airside|air base|airbase|aeroport|flughafen")
+NOT_TOWER_NAME = ("water", "cooling", "clock", "bell", "church", "hotel", "office", "apartment", "residen",
+                  "hospital", "hangar", "terminal", "parking", "garage", "car park")
+NOT_TOWER_CLASS = {"hotel", "apartments", "residential", "house", "dormitory", "office", "commercial", "retail",
+                   "church", "cathedral", "chapel", "hospital", "parking", "parking_garage", "hangar", "terminal"}
+TERMINAL_NAME = ("terminal", "concourse")       # (buildings.plan's name test)
+NOT_TERMINAL_NAME = ("hangar", "parking", "garage", "car park")
+NOT_TERMINAL_CLASS = {"parking", "parking_garage", "hangar", "garage", "garages", "carport"}
+
+TOWER_NAME_MAX_M2 = 1500.0      # m2: a named tower's footprint at most this (a "Tower" in a big building's name is not)
+TOWER_MIN_M2 = 16.0             # ... and a slender one's: at most TOWER_SLENDER_M2, compact, tall, near a pad
+TOWER_SLENDER_M2 = 600.0
+TOWER_COMPACT = 0.62            # 4 pi A / P^2 of at least this (a square is 0.79, a 2.5 : 1 rectangle 0.64)
+TOWER_MIN_HEIGHT_M = 20.0       # m (or TOWER_MIN_FLOORS storeys) for a tower not named one
+TOWER_MIN_FLOORS = 6
+TOWER_PAD_M = 1000.0            # m: an unnamed tower is within this of an apron or taxiway
+TOWER_H_INTL_M = 40.0           # m: a tower with no height, at an international airport / elsewhere
+TOWER_H_M = 25.0
+TOWER_FLOOR_M = 3.2             # m per storey where only its floors are mapped
+TOWER_MIN_H_M = 15.0            # m: the least the three parts are drawn at (a shorter mapped height is the cab's trouble)
+SHAFT_SHARE = 0.55              # the shaft: the footprint shrunk to this about its centroid ...
+SHAFT_MIN_M = 4.0               # ... and at least this across (a footprint narrower than that is not shrunk)
+CAB_FROM_TOP_M = 9.0            # the cab: from this far under the top ...
+CAP_FROM_TOP_M = 4.0            # ... to this far under it, the cap above (a flat dark roof, 4 m)
+CAB_SMALL_M = 10.0              # a footprint narrower than this: the cab is a regular octagon, this across at least
+CAB_OCTAGON_K = 1.15            # (its across flats: this many of sqrt(area))
+CAP_SHARE = 0.9                 # the cap, slightly smaller than the cab
+SHAFT_COLOUR = "#e6e4de"        # (a tint on the texture; each part its own, else a part takes its siblings': the cap's dark)
+CAB_COLOUR = "#a8c0cc"
+CAB_ROOF = "#4a4d52"
+CAP_COLOUR = "#2e3135"
+GLASS = "glass"
+SHAFT = "concrete"
+TAN_8 = 0.41421356237309503     # tan(22.5 deg): the regular octagon's side, in halves of its across flats
+
+TERMINAL_MIN_M2 = 1500.0        # m2: a terminal's footprint at least this ...
+TERMINAL_GATES = 2              # ... with this many gate points ...
+TERMINAL_GATE_M = 40.0          # ... within this of its outline
+
+_KEY = "_airport_scan"
+
+
+def _scan(f):
+    """(has an airport, an international one, the rows of its gate points) of an infrastructure Features, kept on it."""
+    got = f.__dict__.get(_KEY)
+    if got is None:
+        got = (False, False, np.empty(0, np.int64))
+        sub, cls = f.attrs.get("subtype"), f.attrs.get("class")
+        if sub is not None and cls is not None and len(f.kind):
+            air = np.asarray(sub).astype(str) == aeroways.SUBTYPE
+            cls = np.asarray(cls).astype(str)
+            got = (bool(air.any()), bool((air & (cls == aeroways.AERODROME)).any()),
+                   np.flatnonzero(air & (cls == GATE_CLASS) & (np.asarray(f.kind) == 1)))
+        f.__dict__[_KEY] = got
+    return got
+
+
+def context(frame, infra_layers, x0, y0):
+    """The tile's airport Context from the infrastructure Features of its cells, None when none has an airport."""
+    layers = [f for f in infra_layers if f is not None and len(f.kind) and _scan(f)[0]]
+    return Context(frame, layers, x0, y0) if layers else None
+
+
+def _area(ring):
+    x, y = ring[:, 0], ring[:, 1]
+    return abs(float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))) / 2.0
+
+
+def _perimeter(ring):
+    d = np.roll(ring, -1, axis=0) - ring
+    return float(dnp.hypot(d[:, 0], d[:, 1]).sum())
+
+
+def _short_side(area, perimeter):
+    """The short side of the rectangle of this area and perimeter (its outline's, near enough for a footprint)."""
+    s = perimeter / 2.0
+    return (s - math.sqrt(max(s * s - 4.0 * area, 0.0))) / 2.0
+
+
+def _outline_dist(pts, ring):
+    """The distance from each point of pts (m, 2) to the closed outline ring (k, 2)."""
+    a, ab = ring, np.roll(ring, -1, axis=0) - ring
+    px, py = pts[:, 0, None] - a[None, :, 0], pts[:, 1, None] - a[None, :, 1]
+    t = np.clip((px * ab[None, :, 0] + py * ab[None, :, 1])
+                / np.maximum(ab[:, 0] * ab[:, 0] + ab[:, 1] * ab[:, 1], 1e-12)[None], 0.0, 1.0)
+    return dnp.hypot(px - t * ab[None, :, 0], py - t * ab[None, :, 1]).min(axis=1)
+
+
+def octagon(c, across):
+    """A regular octagon (8, 2), counter-clockwise, about c, `across` m across its flats."""
+    h = across / 2.0
+    t = TAN_8 * h
+    return np.asarray(c, np.float64) + np.array([(h, -t), (h, t), (t, h), (-t, h), (-h, t), (-h, -t), (-t, -h), (t, -h)])
+
+
+def tower_parts(ring, h):
+    """The parts of a control tower on footprint ring (k, 2) (open, counter-clockwise), h m tall: [(ring, (own height,
+    bottom), own attributes)], buildings' part form. A concrete shaft (the footprint shrunk to SHAFT_SHARE about its
+    centroid) to h - CAB_FROM_TOP_M, a glass cab (the footprint itself, or an octagon where it is narrower than
+    CAB_SMALL_M) to h - CAP_FROM_TOP_M, a dark flat cap on it (CAP_SHARE of the cab). The attribute "_tower" (shaft /
+    cab / cap) is buildings.plan's: no mast, no windows on the concrete."""
+    h = max(float(h), TOWER_MIN_H_M)
+    c = ring.mean(0)
+    area, per = _area(ring), _perimeter(ring)
+    short = _short_side(area, per)
+    k = SHAFT_SHARE if short * SHAFT_SHARE >= SHAFT_MIN_M else min(1.0, SHAFT_MIN_M / max(short, 1e-6))
+    shaft = c + (ring - c) * k
+    if short < CAB_SMALL_M:
+        cab = octagon(c, max(CAB_SMALL_M, CAB_OCTAGON_K * math.sqrt(area)))
+    else:
+        cab = ring
+    cap = c + (cab - c) * CAP_SHARE
+    z1, z2 = h - CAB_FROM_TOP_M, h - CAP_FROM_TOP_M
+    return [(shaft, (z1, 0.0), {"facade_material": SHAFT, "facade_color": SHAFT_COLOUR, "roof_shape": "flat",
+                                   "_tower": "shaft"}),
+            (cab, (z2 - z1, z1), {"facade_material": GLASS, "facade_color": CAB_COLOUR, "roof_shape": "flat",
+                                  "roof_color": CAB_ROOF, "_tower": "cab"}),
+            (cap, (h - z2, z2), {"facade_material": SHAFT, "facade_color": CAP_COLOUR, "roof_shape": "flat",
+                                 "roof_color": CAP_COLOUR, "_tower": "cap"})]
+
+
+class Context:
+    """An airport's gates and pads round a tile, in metres relative to (x0, y0), made when asked for."""
+
+    def __init__(self, frame, layers, x0, y0):
+        self.frame, self.layers, self.x0, self.y0 = frame, layers, x0, y0
+        self.intl = any(_scan(f)[1] for f in layers)
+        self._gates = self._pads = None
+
+    def gates(self):
+        """The airport_gate points (m, 2)."""
+        if self._gates is None:
+            ll = [np.asarray(f.parts(int(i))[0][0], np.float64)[0] for f in self.layers for i in _scan(f)[2]]
+            if ll:
+                ll = np.asarray(ll)
+                e, n, _ = self.frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
+                self._gates = np.stack([np.asarray(e) - self.x0, np.asarray(n) - self.y0], 1)
+            else:
+                self._gates = np.empty((0, 2))
+        return self._gates
+
+    def pads(self):
+        """The vertices of the aprons and taxiways (aeroways.pads) (m, 2)."""
+        if self._pads is None:
+            pads = aeroways.pads(self.layers)
+            if pads:
+                la = np.concatenate([np.asarray(p[0], np.float64) for p in pads])
+                lo = np.concatenate([np.asarray(p[1], np.float64) for p in pads])
+                e, n, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
+                self._pads = np.stack([np.asarray(e) - self.x0, np.asarray(n) - self.y0], 1)
+            else:
+                self._pads = np.empty((0, 2))
+        return self._pads
+
+    def near_pad(self, c, within=TOWER_PAD_M):
+        p = self.pads()
+        return bool(len(p)) and float(dnp.hypot(p[:, 0] - c[0], p[:, 1] - c[1]).min()) <= within
+
+    def tower_height(self, at):
+        """The height a tower with attributes `at` is drawn at: its own, its floors', else by the airport's size."""
+        h, nf = at.get("height"), at.get("num_floors")
+        if h is not None and np.isfinite(h) and h > 0:
+            return float(h)
+        if nf is not None and np.isfinite(nf) and nf > 0:
+            return float(nf) * TOWER_FLOOR_M
+        return TOWER_H_INTL_M if self.intl else TOWER_H_M
+
+    def tower_parts(self, ring, at):
+        """tower_parts(ring, height) when the footprint ring (k, 2; relative to the tile) with attributes `at` is a control
+        tower, else None. A named one (control tower, ATC, air traffic; "tower" with an airport word in the name), or a
+        slender, compact, tall one (TOWER_*) within TOWER_PAD_M of a pad. Not one off the ground (a raised part)."""
+        name, cls = str(at.get("name") or "").lower(), str(at.get("class") or "").lower()
+        mh = at.get("min_height")
+        if cls in NOT_TOWER_CLASS or (mh is not None and np.isfinite(mh) and mh > 0.5):
+            return None
+        named = bool(TOWER_NAME.search(name)) or (bool(TOWER_WORD.search(name)) and bool(AIRPORT_WORD.search(name))
+                                                  and not any(w in name for w in NOT_TOWER_NAME))
+        h, nf = at.get("height"), at.get("num_floors")
+        tall = (h is not None and np.isfinite(h) and h >= TOWER_MIN_HEIGHT_M) or \
+               (nf is not None and np.isfinite(nf) and nf >= TOWER_MIN_FLOORS)
+        if not (named or tall):         # (the cheap tests first: most buildings stop here)
+            return None
+        ring = np.asarray(ring, np.float64)[:, :2]
+        area = _area(ring)
+        if named:
+            if not TOWER_MIN_M2 <= area <= TOWER_NAME_MAX_M2:
+                return None
+        else:
+            if not TOWER_MIN_M2 <= area <= TOWER_SLENDER_M2 or any(w in name for w in NOT_TOWER_NAME):
+                return None
+            per = _perimeter(ring)
+            if 4.0 * math.pi * area / max(per * per, 1e-9) < TOWER_COMPACT or not self.near_pad(ring.mean(0)):
+                return None
+        return tower_parts(ring, self.tower_height(at))
+
+    def terminal(self, ring, at):
+        """Is the footprint ring (k, 2; relative to the tile) with attributes `at` an airport terminal: its name's
+        (TERMINAL_NAME), or TERMINAL_MIN_M2 of it with TERMINAL_GATES gate points within TERMINAL_GATE_M of its outline."""
+        name, cls = str(at.get("name") or "").lower(), str(at.get("class") or "").lower()
+        if cls in NOT_TERMINAL_CLASS or any(w in name for w in NOT_TERMINAL_NAME):
+            return False
+        if any(w in name for w in TERMINAL_NAME):
+            return True
+        ring = np.asarray(ring, np.float64)[:, :2]
+        if _area(ring) < TERMINAL_MIN_M2:
+            return False
+        g = self.gates()
+        if len(g) < TERMINAL_GATES:
+            return False
+        lo, hi = ring.min(0) - TERMINAL_GATE_M, ring.max(0) + TERMINAL_GATE_M
+        g = g[((g >= lo) & (g <= hi)).all(axis=1)]
+        return len(g) >= TERMINAL_GATES and int((_outline_dist(g, ring) <= TERMINAL_GATE_M).sum()) >= TERMINAL_GATES

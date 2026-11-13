@@ -3501,7 +3501,8 @@ class Server:
                 try:   # (a windsock near each runway end: windsocks; along the runway, the wind would freeze in the tile)
                     import windsocks
                     props.extend(windsocks.tile_rows(anchor.frame, box, infra_fn,
-                                                     lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), elev))
+                                                     lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), elev,
+                                                     roads_fn=lambda k: self.mapdata.cell(k, layers=("roads",), kind="demand").layers.get("roads")))
                 except Exception as ex:
                     log.warning("windsocks: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
                 try:   # (parked aircraft at the terminal gates and on the GA aprons: parkedaircraft)

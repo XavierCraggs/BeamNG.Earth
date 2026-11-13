@@ -943,7 +943,7 @@ do -- parked aircraft (server parkedaircraft.py): four models at 1:1 (the tail f
       and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9,
       g .. ': its model at 1:1')
     T.check(trees.CATALOG[g][1][2] == h, g .. ': the catalogue height is the tail fin height')
-    T.check(trees.NO_COLLIDE[g] == true and trees.ONE_SPELLING[g] == true, g .. ' never collides, one spelling')
+    T.check(not trees.NO_COLLIDE[g] and trees.ONE_SPELLING[g] == true, g .. ' is solid (a collision mesh in the .dae), one spelling')
     T.check(trees.GROUP_MAX_M[g] == far and not trees.isBarrier(g) and not trees.groupOff[g],
       g .. ' shows out to ' .. far .. ' m, by day, and is no barrier')
   end

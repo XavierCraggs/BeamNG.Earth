@@ -29,6 +29,7 @@ import numpy as np
 
 import aeroways
 import airportgrade
+import dnp
 import geodesy
 import geotiles
 
@@ -115,13 +116,13 @@ def _stadium(a, b, r0, r1, d):
     end) is the whole."""
     dv = b - a
     r = r1 - r0
-    length = float(np.hypot(*r))
+    length = float(dnp.hypot(*r))
     los, his = [], []
     for c in (r0, r1):                          # the discs: |a + t dv - c|^2 <= d^2
         ac = a - c
-        qa = np.einsum("ij,ij->i", dv, dv)
-        qb = 2.0 * np.einsum("ij,ij->i", dv, ac)
-        qc = np.einsum("ij,ij->i", ac, ac) - d * d
+        qa = dnp.vecdot(dv, dv)
+        qb = 2.0 * dnp.vecdot(dv, ac)
+        qc = dnp.vecdot(ac, ac) - d * d
         disc = qb * qb - 4.0 * qa * qc
         ok = (disc >= 0) & (qa > _EPS)
         sq = np.sqrt(np.where(ok, disc, 0.0))
@@ -133,8 +134,8 @@ def _stadium(a, b, r0, r1, d):
     if length > _EPS:                           # the rectangle: along 0..length, across +-d
         ur = r / length
         nr = np.array([-ur[1], ur[0]])
-        ua, du = (a - r0) @ ur, dv @ ur
-        va, dvv = (a - r0) @ nr, dv @ nr
+        ua, du = dnp.matmul(a - r0, ur), dnp.matmul(dv, ur)
+        va, dvv = dnp.matmul(a - r0, nr), dnp.matmul(dv, nr)
         s0, s1 = _slab(ua, du, 0.0, length)
         c0, c1 = _slab(va, dvv, -d, d)
         lo, hi = np.maximum(s0, c0), np.minimum(s1, c1)
@@ -201,7 +202,7 @@ def _free_runs(xy, blocked):
     out = []
     for r in runs:
         r = np.asarray(r)
-        if float(np.hypot(*np.diff(r, axis=0).T).sum()) >= MIN_RUN_M:
+        if float(dnp.hypot(*np.diff(r, axis=0).T).sum()) >= MIN_RUN_M:
             out.append(r)
     return out
 
@@ -248,7 +249,7 @@ def _walk(head, rsegs, target):
             lo = mid
         else:
             hi = mid
-    u = (b - a) / max(float(np.hypot(*(b - a))), _EPS)
+    u = (b - a) / max(float(dnp.hypot(*(b - a))), _EPS)
     return a + hi * (b - a), u
 
 
@@ -257,22 +258,22 @@ def _mapped_hold(head, rsegs, half, holds):
     line under the nearest one and the line's direction there, None when none lies on it (HOLD_SNAP_M, HOLD_MAX_M)."""
     best = None
     seg = np.stack([head[:-1], head[1:]], axis=1)
-    cum = np.r_[0.0, np.cumsum(np.hypot(*np.diff(head, axis=0).T))]
+    cum = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(head, axis=0).T))]
     for hp in holds:
         a, b = seg[:, 0], seg[:, 1]
         ab = b - a
-        t = np.clip(np.einsum("ij,ij->i", hp - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0.0, 1.0)
+        t = np.clip(dnp.vecdot(hp - a, ab) / np.maximum(dnp.vecdot(ab, ab), 1e-12), 0.0, 1.0)
         pr = a + t[:, None] * ab
-        dd = np.hypot(*(pr - hp).T)
+        dd = dnp.hypot(*(pr - hp).T)
         j = int(np.argmin(dd))
         if dd[j] > half + HOLD_SNAP_M:
             continue
         away = float(_pts_dist(pr[j][None], rsegs)[0])
         if not half < away <= HOLD_MAX_M:
             continue
-        at = cum[j] + float(np.hypot(*(pr[j] - a[j])))
+        at = cum[j] + float(dnp.hypot(*(pr[j] - a[j])))
         if best is None or at < best[0]:
-            best = (at, pr[j], ab[j] / max(float(np.hypot(*ab[j])), _EPS))
+            best = (at, pr[j], ab[j] / max(float(dnp.hypot(*ab[j])), _EPS))
     return None if best is None else (best[1], best[2])
 
 
@@ -358,7 +359,7 @@ def _scene(feats_list):
             for _p, heads in _joins(xy, rsegs):
                 for head in heads:
                     site = _mapped_hold(head, rsegs, w / 2.0, hp) or _walk(head, rsegs, HOLD_DIST_M)
-                    if site is None or any(float(np.hypot(*(site[0] - s))) < 3.0 for s in found):
+                    if site is None or any(float(dnp.hypot(*(site[0] - s))) < 3.0 for s in found):
                         continue
                     found.append(site[0])
                     sites.append((ri, int(wi), site[0], site[1]))
@@ -432,7 +433,7 @@ def strokes(feats_list):
 def _pieces(ex, ey, box):
     """The pieces (x (k,), y (k,)) of the polyline ex, ey owned by the tile box: cut into MARK_PIECE_M, each owned by
     the tile of its midpoint, nodes MARK_NODE_M apart and at the polyline's own vertices (so it follows its bends)."""
-    s = np.r_[0.0, np.cumsum(np.hypot(np.diff(ex), np.diff(ey)))]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(np.diff(ex), np.diff(ey)))]
     total = float(s[-1])
     if total < 1e-6:
         return []

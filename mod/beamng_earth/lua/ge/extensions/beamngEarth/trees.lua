@@ -375,14 +375,13 @@ M.ONE_SPELLING.windsock = true
 M.NO_COLLIDE.windsock = true
 -- Parked aircraft on the aprons (server parkedaircraft.py, tools/build_aircraft.py): four unbranded models at 1:1, the
 -- height the tail fin's top, the origin on the ground under the aircraft's centre, the nose along local +Y (the row's yaw
--- turns it). A few a tile and static scenery (no collision for now): one spelling each, shown out to the distance their
--- size is worth (a light single 8 m long to 800 m, a 64 m wide-body to 3 km).
+-- turns it). A few a tile and solid (a low-poly collision mesh each in the .dae, live within SOLID_M like the lamps): one
+-- spelling each, shown out to the distance their size is worth (a light single 8 m long to 800 m, a 64 m wide-body to 3 km).
 for _, a in ipairs({ { 'ac_light', 2.7, 800 }, { 'ac_turboprop', 7.6, 1500 }, { 'ac_narrow', 11.8, 2500 },
                      { 'ac_wide', 17.5, 3000 } }) do
   M.CATALOG[a[1]] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. a[1], a[2] } }
   M.GROUP_MAX_M[a[1]] = a[3]
   M.ONE_SPELLING[a[1]] = true
-  M.NO_COLLIDE[a[1]] = true
 end
 M.GROUP_MAX_M.jersey = 4000
 M.GROUP_MAX_M.jersey_end = 4000

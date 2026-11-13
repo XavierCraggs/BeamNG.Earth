@@ -17,6 +17,9 @@ import re
 
 import numpy as np
 
+import dmath
+import dnp
+
 SUBTYPE = "airport"
 APRON = "apron"
 WAYS = ("taxiway", "taxilane")
@@ -81,23 +84,23 @@ def _buffer(lat, lon, width):
     SHARP_TURN_DEG, an octagon (circumscribed on the half width) at each end and sharp bend. Metric frame: equirectangular about the
     first point (an airfield is a few km: millimetres)."""
     lat0, lon0 = float(lat[0]), float(lon[0])
-    kx = M_PER_DEG * math.cos(math.radians(lat0))
+    kx = M_PER_DEG * dmath.cos(math.radians(lat0))
     x = (np.asarray(lon, np.float64) - lon0) * kx
     y = (np.asarray(lat, np.float64) - lat0) * M_PER_DEG
-    keep = np.r_[True, np.hypot(np.diff(x), np.diff(y)) > 1e-3]       # (a repeated vertex has no direction)
+    keep = np.r_[True, dnp.hypot(np.diff(x), np.diff(y)) > 1e-3]       # (a repeated vertex has no direction)
     x, y = x[keep], y[keep]
     if len(x) < 2:
         return []
     half = width / 2.0
     d = np.c_[np.diff(x), np.diff(y)]
-    nrm = np.c_[-d[:, 1], d[:, 0]] / np.hypot(d[:, 0], d[:, 1])[:, None]      # each segment's left normal
+    nrm = np.c_[-d[:, 1], d[:, 0]] / dnp.hypot(d[:, 0], d[:, 1])[:, None]      # each segment's left normal
     # one outline per run of gentle bends (left side out, right side back, mitred at each vertex); a run breaks at a
     # bend sharper than SHARP_TURN_DEG (its mitre would spike), where an octagon holds the join, as at both ends
-    seg = np.hypot(d[:, 0], d[:, 1])
-    cos_t = np.clip(np.einsum("ij,ij->i", nrm[:-1], nrm[1:]), -1.0, 1.0)      # each interior vertex's bend
+    seg = dnp.hypot(d[:, 0], d[:, 1])
+    cos_t = np.clip(dnp.vecdot(nrm[:-1], nrm[1:]), -1.0, 1.0)      # each interior vertex's bend
     # how far the inner edge's mitre falls back along the segments at a vertex: half * tan(bend / 2)
     back = np.r_[0.0, half * np.sqrt((1.0 - cos_t) / (1.0 + cos_t + 1e-12)), 0.0]
-    sharp = np.r_[False, cos_t < math.cos(math.radians(SHARP_TURN_DEG)), False]
+    sharp = np.r_[False, cos_t < dmath.cos(math.radians(SHARP_TURN_DEG)), False]
     # a vertex also breaks the outline where the inner edge would fold over itself: its fall-back and the next
     # vertex's together longer than the segment between them (a tight bend drawn in short segments); a self-crossing
     # outline is filled even-odd, leaving holes (dirt triangles at Brisbane's runway joins)
@@ -109,15 +112,15 @@ def _buffer(lat, lon, width):
             off = [nrm[start]]
             for j in range(start + 1, k):
                 b = nrm[j - 1] + nrm[j]
-                b = b / np.hypot(*b)
-                off.append(b / float(np.dot(b, nrm[j])))       # the mitre: half / cos(the half bend) along the bisector
+                b = b / dnp.hypot(*b)
+                off.append(b / float(dnp.dot(b, nrm[j])))       # the mitre: half / cos(the half bend) along the bisector
             off.append(nrm[k - 1])
             off = np.asarray(off) * half
             p = np.c_[x[start:k + 1], y[start:k + 1]]
             rings.append(np.r_[p + off, (p - off)[::-1]])
             start = k
     a = (np.arange(JOIN_SIDES) + 0.5) * 2.0 * math.pi / JOIN_SIDES
-    ring = np.c_[np.cos(a), np.sin(a)] * (half / math.cos(math.pi / JOIN_SIDES))
+    ring = np.c_[dnp.cos(a), dnp.sin(a)] * (half / dmath.cos(math.pi / JOIN_SIDES))
     ends = [0, len(x) - 1] + [j for j in range(1, len(x) - 1) if brk[j]]
     rings += [ring + (x[j], y[j]) for j in ends]
     return [(lat0 + r[:, 1] / M_PER_DEG, lon0 + r[:, 0] / kx) for r in rings]
@@ -141,7 +144,7 @@ def _hull(pts):
 
 def _head(xy, length):
     """The first `length` m of a polyline xy (n, 2) (its last point cut there), and its segments' left normals."""
-    seg = np.hypot(*np.diff(xy, axis=0).T)
+    seg = dnp.hypot(*np.diff(xy, axis=0).T)
     cum = np.r_[0.0, np.cumsum(seg)]
     k = int(np.searchsorted(cum, length))
     if k >= len(xy):
@@ -150,7 +153,7 @@ def _head(xy, length):
         f = (length - cum[k - 1]) / max(seg[k - 1], 1e-9)
         out = np.r_[xy[:k], [xy[k - 1] + f * (xy[k] - xy[k - 1])]]
     d = np.diff(out, axis=0)
-    n = np.c_[-d[:, 1], d[:, 0]] / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+    n = np.c_[-d[:, 1], d[:, 0]] / np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
     return out, n
 
 
@@ -158,20 +161,20 @@ def _seg_dist(p, segs):
     """The distance from point p (2,) to each segment (m, 2, 2)."""
     a, b = segs[:, 0], segs[:, 1]
     ab = b - a
-    t = np.clip(np.einsum("ij,ij->i", p - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0.0, 1.0)
-    return np.hypot(*(a + t[:, None] * ab - p).T)
+    t = np.clip(dnp.vecdot(p - a, ab) / np.maximum(dnp.vecdot(ab, ab), 1e-12), 0.0, 1.0)
+    return dnp.hypot(*(a + t[:, None] * ab - p).T)
 
 
 def _straight(line, max_deg=STRAIGHT_DEG):
     """How far a polyline (n, 2) from its first point runs on within max_deg of its first direction."""
     d = np.diff(line, axis=0)
-    seg = np.hypot(d[:, 0], d[:, 1])
+    seg = dnp.hypot(d[:, 0], d[:, 1])
     ok = seg > 1e-6
     if not ok.any():
         return 0.0
     d, seg = d[ok], seg[ok]
     u = d / seg[:, None]
-    bent = np.flatnonzero(u @ u[0] < math.cos(math.radians(max_deg)))
+    bent = np.flatnonzero(dnp.matmul(u, u[0]) < dmath.cos(math.radians(max_deg)))
     return float(seg[:bent[0]].sum() if len(bent) else seg.sum())
 
 
@@ -179,11 +182,11 @@ def _from(line, p, direction):
     """The polyline (n, 2) from the point of `line` nearest p (projected on its nearest segment), on in `direction`."""
     a, b = line[:-1], line[1:]
     ab = b - a
-    tt = np.clip(np.einsum("ij,ij->i", p - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0.0, 1.0)
+    tt = np.clip(dnp.vecdot(p - a, ab) / np.maximum(dnp.vecdot(ab, ab), 1e-12), 0.0, 1.0)
     q = a + tt[:, None] * ab
-    k = int(np.argmin(np.hypot(*(q - p).T)))
+    k = int(np.argmin(dnp.hypot(*(q - p).T)))
     fwd, back = np.r_[[q[k]], line[k + 1:]], np.r_[[q[k]], line[k::-1]]
-    return fwd if float(ab[k] @ direction) >= 0 else back
+    return fwd if float(dnp.matmul(ab[k], direction)) >= 0 else back
 
 
 def _fillet(v, head, half, r, t, joined=None):
@@ -196,13 +199,13 @@ def _fillet(v, head, half, r, t, joined=None):
     The tangent points stay on the straight part of each edge (_straight of the way's head and of the joined line,
     `joined` (n, 2), from v): past a bend or a short way's end an arc spiked into the grass."""
     d = head[1] - head[0]
-    u = d / max(float(np.hypot(*d)), 1e-9)
-    if abs(float(u[0] * t[1] - u[1] * t[0])) < math.sin(math.radians(FILLET_MIN_DEG)):
+    u = d / max(float(dnp.hypot(*d)), 1e-9)
+    if abs(float(u[0] * t[1] - u[1] * t[0])) < dmath.sin(math.radians(FILLET_MIN_DEG)):
         return []
     straight_u = _straight(head)
     n_u = np.array([-u[1], u[0]])
     n_t = np.array([-t[1], t[0]])
-    m = n_t if float(n_t @ u) > 0 else -n_t                  # the joined edge facing the way
+    m = n_t if float(dnp.matmul(n_t, u)) > 0 else -n_t                  # the joined edge facing the way
     out = []
     for sg in (1.0, -1.0):
         tp = t if float(u[0] * t[1] - u[1] * t[0]) * sg > 0 else -t     # the joined line's way on this side
@@ -212,28 +215,28 @@ def _fillet(v, head, half, r, t, joined=None):
             continue
         w = p2 - p1
         c = p1 + u * ((w[0] * tp[1] - w[1] * tp[0]) / den)  # the corner: the two edges' crossing
-        h = math.acos(max(-1.0, min(1.0, float(u @ tp)))) / 2.0          # half the corner's angle
+        h = dmath.acos(max(-1.0, min(1.0, float(dnp.matmul(u, tp))))) / 2.0          # half the corner's angle
         if h < 1e-3 or h > math.pi / 2 - 1e-3:
             continue
         rf = FILLET_R_K * half
-        run = rf / math.tan(h)
+        run = rf / dmath.tan(h)
         # the room on each edge: its straight length from v, less how far the corner already sits along it
-        room_u = straight_u - float((c - v) @ u)
-        room_t = (_straight(_from(joined, v, tp)) if joined is not None else FILLET_MAX_K * half) - float((c - v) @ tp)
+        room_u = straight_u - float(dnp.matmul(c - v, u))
+        room_t = (_straight(_from(joined, v, tp)) if joined is not None else FILLET_MAX_K * half) - float(dnp.matmul(c - v, tp))
         cap = min(FILLET_MAX_K * half, room_u, room_t)
         if cap < FILLET_MIN_RUN_M:
             continue
         if run > cap:
             run = cap
-            rf = run * math.tan(h)
+            rf = run * dmath.tan(h)
         t1, t2 = c + run * u, c + run * tp
-        bis = (u + tp) / max(float(np.hypot(*(u + tp))), 1e-9)
-        o = c + bis * (rf / math.sin(h))
-        a1 = math.atan2(t1[1] - o[1], t1[0] - o[0])
-        a2 = math.atan2(t2[1] - o[1], t2[0] - o[0])
+        bis = (u + tp) / max(float(dnp.hypot(*(u + tp))), 1e-9)
+        o = c + bis * (rf / dmath.sin(h))
+        a1 = dmath.atan2(t1[1] - o[1], t1[0] - o[0])
+        a2 = dmath.atan2(t2[1] - o[1], t2[0] - o[0])
         da = (a2 - a1 + math.pi) % (2.0 * math.pi) - math.pi          # the short arc, facing the corner
         ang = a1 + da * np.linspace(0.0, 1.0, FILLET_ARC_N)
-        arc = o + rf * np.c_[np.cos(ang), np.sin(ang)]
+        arc = o + rf * np.c_[dnp.cos(ang), dnp.sin(ang)]
         out.append(np.r_[[c], arc])
     return out
 
@@ -266,7 +269,7 @@ def _fillets(ways, runways):
             if r < half:                            # (a wider way ending on a narrower one: its own end is enough)
                 continue
             t = segs[j, 1] - segs[j, 0]
-            t = t / max(float(np.hypot(*t)), 1e-9)
+            t = t / max(float(dnp.hypot(*t)), 1e-9)
             for head in (xy[k:], xy[k::-1]):
                 if len(head) >= 2:
                     out += _fillet(xy[k], head, half, r, t, others[int(seg_owner[j])][0])
@@ -326,7 +329,7 @@ def _feats_pads(feats):
                         ways.append((line, width / 2.0))
     if ways:                                # the fillets, in one metric frame for the cell
         lon0, lat0 = ways[0][0][0]
-        kx = M_PER_DEG * math.cos(math.radians(lat0))
+        kx = M_PER_DEG * dmath.cos(math.radians(lat0))
 
         def to_m(ln):
             return np.c_[(ln[:, 0] - lon0) * kx, (ln[:, 1] - lat0) * M_PER_DEG]

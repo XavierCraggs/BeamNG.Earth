@@ -72,8 +72,8 @@ def ground(lat, lon):
     return np.full(np.shape(lat), 12.0)
 
 
-def rows(rws, f=None, box=BOX, wind_deg=None):
-    return ws.tile_rows(FRAME, box, lambda k: f, lambda k: rws, ground, wind_deg=wind_deg, keys=[0])
+def rows(rws, f=None, box=BOX, wind_deg=None, roads_fn=None):
+    return ws.tile_rows(FRAME, box, lambda k: f, lambda k: rws, ground, wind_deg=wind_deg, keys=[0], roads_fn=roads_fn)
 
 
 class Spots(unittest.TestCase):
@@ -122,6 +122,76 @@ class Spots(unittest.TestCase):
     def test_memoised(self):
         a = runway()
         self.assertIs(ws._clear_spots(a), ws._clear_spots(list(a)))
+
+
+def line_feats(layer, cls, *lines, **tags):
+    """Features of (east, north) polylines in FRAME: an airport's infrastructure ways (class cls) or a roads layer's."""
+    ids = np.array([f"l{i:03d}" for i in range(len(lines))])
+    f = mapgeom.build(layer, ids, [(mapgeom.LINE, [[lonlat(ln)]]) for ln in lines])
+    f.attrs = {"class": mapgeom.text_column([cls] * len(lines)),
+               "subtype": mapgeom.text_column(["airport" if layer == "infrastructure" else "road"] * len(lines)),
+               "tags": mapgeom.text_column([json.dumps(tags)] * len(lines)),
+               "surface": mapgeom.text_column([None] * len(lines))}
+    return f
+
+
+class Clear(unittest.TestCase):
+    """The sock steps off pavement and roads, or is left out."""
+    FIRST = (ws.IN_M, WIDTH / 2.0 + ws.OUT_BEYOND_M)            # the low end's own place
+    ACROSS = [(-500.0, FIRST[1]), (2600.0, FIRST[1])]           # a road along the runway through it
+
+    def low(self, got):
+        return min((spot_en(sp) for sp in got), key=lambda p: p[0])
+
+    def test_a_road_through_the_first_spot_moves_the_sock(self):
+        rd = [lonlat(self.ACROSS)]
+        e, n = self.low(ws.spots(runway(), roads=rd))
+        self.assertGreater(abs(n - self.FIRST[1]), ws.ROAD_CLEAR_M)                 # off the road
+        self.assertLess(math.dist((e, n), self.FIRST), 101.0)                       # and still near the runway end
+        self.assertGreater(n, WIDTH / 2.0 + ws.OUT_BEYOND_M - 1.0)                  # (on the left, no nearer the runway)
+        self.assertEqual(len(ws.spots(runway(), roads=rd)), 2)
+
+    def test_a_road_elsewhere_changes_nothing(self):
+        far = [lonlat([(-500.0, 400.0), (2600.0, 400.0)])]
+        self.assertEqual(ws.spots(runway(), roads=far), ws.spots(runway()))
+        self.assertEqual(ws.spots(runway(), roads=[]), ws.spots(runway()))
+
+    def test_a_pad_over_the_first_spot_moves_the_sock(self):
+        n0 = self.FIRST[1]
+        ll = lonlat([(200.0, n0 - 30.0), (400.0, n0 - 30.0), (400.0, n0 + 40.0), (200.0, n0 + 40.0), (200.0, n0 - 30.0)])
+        pad = (ll[:, 1], ll[:, 0])                                              # (aeroways.pads' (lat, lon) outline)
+        e, n = self.low(ws.spots(runway(), pads=[pad]))
+        self.assertFalse(200.0 - ws.PAVED_CLEAR_M < e < 400.0 + ws.PAVED_CLEAR_M and
+                         n0 - 30.0 - ws.PAVED_CLEAR_M < n < n0 + 40.0 + ws.PAVED_CLEAR_M)
+
+    def test_no_clear_spot_no_sock(self):
+        walls = [lonlat([(x, -400.0), (x, 400.0)]) for x in range(-100, 2700, 20)]       # roads every 20 m, all round
+        got = ws.spots(runway(), roads=walls)
+        self.assertEqual(got, [])
+
+    def test_only_the_blocked_end_moves(self):
+        got = sorted(spot_en(sp) for sp in ws.spots(runway(), roads=[lonlat(self.ACROSS)]))
+        self.assertAlmostEqual(got[1][0], LENGTH - ws.IN_M, delta=1.0)               # the high end's own place
+        self.assertAlmostEqual(got[1][1], -(WIDTH / 2.0 + ws.OUT_BEYOND_M), delta=1.0)
+
+    def test_tile_rows_read_the_roads_and_the_taxiways(self):
+        n0 = self.FIRST[1]
+        roads = line_feats("roads", "service", self.ACROSS)
+        got = sorted(rows(runway(), roads_fn=lambda k: roads), key=lambda r: r[1])
+        self.assertEqual(len(got), 2)
+        self.assertGreater(abs(got[0][2] - n0), ws.ROAD_CLEAR_M)
+        foot = line_feats("roads", "footway", self.ACROSS)                           # (a footpath is no reason to move)
+        self.assertAlmostEqual(sorted(rows(runway(), roads_fn=lambda k: foot), key=lambda r: r[1])[0][2], n0, delta=1.0)
+        taxi = line_feats("infrastructure", "taxiway", [(-500.0, n0), (2600.0, n0)], width="23")
+        moved = sorted(rows(runway(), f=taxi), key=lambda r: r[1])
+        self.assertEqual(len(moved), 2)
+        self.assertGreater(abs(moved[0][2] - n0), 23.0 / 2.0 + ws.PAVED_CLEAR_M - 0.5)
+        self.assertAlmostEqual(sorted(rows(runway()), key=lambda r: r[1])[0][2], n0, delta=1.0)
+
+    def test_the_candidates_stay_off_the_runway_ends(self):
+        for ladder in ws._candidates(runway()[0]):
+            for sp in ladder:
+                self.assertTrue(0.1 * LENGTH - 1.0 <= spot_en(sp)[0] <= 0.9 * LENGTH + 1.0)
 
 
 class Mapped(unittest.TestCase):

@@ -44,6 +44,8 @@ import zlib
 import numpy as np
 
 import aeroways
+import dmath
+import dnp
 import geotiles
 
 GROUPS = {"light": "ac_light", "turboprop": "ac_turboprop", "narrow": "ac_narrow", "wide": "ac_wide"}
@@ -79,7 +81,7 @@ GA_INSET_M = 1.5                # the nose this far inside the apron's edge
 APRON_MIN_M2 = 400.0
 AERODROME_NEAR_M = 5000.0
 NEIGHBOUR_M = 150.0            # m: a gate or apron this near a cell's edge asks the neighbour cell's buildings too
-LEAD_IN_COS = math.cos(math.radians(20.0))
+LEAD_IN_COS = dmath.cos(math.radians(20.0))
 RAY_MAX_M = 400.0
 WALL_MIN_M = 8.0                # m of solid behind a wall (less the double of the way out) for a gate inside a terminal
 FACADES_MAX, FACADE_SEP_DEG = 6, 25.0
@@ -155,13 +157,13 @@ def _seg_dist(pts, a, b):
     """(m, k) distances from pts (m, 2) to the segments a -> b (k, 2)."""
     ab = b - a
     ap = pts[:, None, :] - a[None]
-    t = np.clip(np.einsum("mkj,kj->mk", ap, ab) / np.maximum(np.einsum("kj,kj->k", ab, ab), 1e-12)[None], 0.0, 1.0)
+    t = np.clip(dnp.vecdot(ap, ab) / np.maximum(dnp.vecdot(ab, ab), 1e-12)[None], 0.0, 1.0)
     d = ap - t[..., None] * ab[None]
-    return np.hypot(d[..., 0], d[..., 1])
+    return dnp.hypot(d[..., 0], d[..., 1])
 
 
 def _area(ring):
-    return 0.5 * abs(float(np.dot(ring[:, 0], np.roll(ring[:, 1], -1)) - np.dot(np.roll(ring[:, 0], -1), ring[:, 1])))
+    return 0.5 * abs(float(dnp.dot(ring[:, 0], np.roll(ring[:, 1], -1)) - dnp.dot(np.roll(ring[:, 0], -1), ring[:, 1])))
 
 
 def _nearest_on(ring, p):
@@ -170,7 +172,7 @@ def _nearest_on(ring, p):
     ab = b - a
     t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
     q = a + t[:, None] * ab
-    d = np.hypot(*(q - p).T)
+    d = dnp.hypot(*(q - p).T)
     j = int(np.argmin(d))
     return float(d[j]), q[j], j
 
@@ -181,12 +183,12 @@ def _facade(ring, p):
     d0, q, _ = _nearest_on(ring, p)
     a, b = ring, np.roll(ring, -1, axis=0)
     ab = b - a
-    ln = np.maximum(np.hypot(ab[:, 0], ab[:, 1]), 1e-9)
-    near = np.hypot(*(((a + b) / 2.0) - q).T) <= FACADE_R_M + ln / 2.0
+    ln = np.maximum(dnp.hypot(ab[:, 0], ab[:, 1]), 1e-9)
+    near = dnp.hypot(*(((a + b) / 2.0) - q).T) <= FACADE_R_M + ln / 2.0
     w = np.minimum(ln, FACADE_R_M)[near]
-    ang = np.arctan2(ab[near, 1], ab[near, 0])
-    t = 0.5 * math.atan2(float((w * np.sin(2 * ang)).sum()), float((w * np.cos(2 * ang)).sum()))
-    n = np.array([-math.sin(t), math.cos(t)])
+    ang = dnp.arctan2(ab[near, 1], ab[near, 0])
+    t = 0.5 * dmath.atan2(float((w * dnp.sin(2 * ang)).sum()), float((w * dnp.cos(2 * ang)).sum()))
+    n = np.array([-dmath.sin(t), dmath.cos(t)])
     inside = bool(_pip(ring, (q + n * 2.0)[None])[0])
     if inside:
         n = -n
@@ -247,7 +249,7 @@ def _scene(feats):
     first = int(np.flatnonzero(gate_like | aprons)[0])
     pt = np.asarray(feats.parts(first)[0][0], np.float64)[0]
     sc.lon0, sc.lat0 = float(pt[0]), float(pt[1])
-    sc.kx = aeroways.M_PER_DEG * math.cos(math.radians(sc.lat0))
+    sc.kx = aeroways.M_PER_DEG * dmath.cos(math.radians(sc.lat0))
     sc.intl = bool((air & (cls == aeroways.AERODROME)).any())
     for i in np.flatnonzero(air):
         kind = int(feats.kind[i])
@@ -307,7 +309,7 @@ def _aerodrome(sc, x, y):
     for tier, geom in sc.aerodromes:
         if len(geom) >= 3 and _pip(geom, p)[0]:
             return tier
-        d = float(np.hypot(*(geom - (x, y)).T).min())
+        d = float(dnp.hypot(*(geom - (x, y)).T).min())
         if d < bd:
             best, bd = tier, d
     return best
@@ -353,7 +355,7 @@ class _World:
             keep = (lo[:, 0] <= x) & (hi[:, 0] >= x) & (lo[:, 1] <= y) & (hi[:, 1] >= y)
             if keep.any():                      # (a taxilane the nose points along is the stand's own lead-in: no clash)
                 ab = self.b[keep] - self.a[keep]
-                along = np.abs(ab[:, 0] * nx + ab[:, 1] * ny) > LEAD_IN_COS * np.maximum(np.hypot(ab[:, 0], ab[:, 1]), 1e-9)
+                along = np.abs(ab[:, 0] * nx + ab[:, 1] * ny) > LEAD_IN_COS * np.maximum(dnp.hypot(ab[:, 0], ab[:, 1]), 1e-9)
                 keep[np.flatnonzero(keep)[along & self.centre[keep]]] = False
             if keep.any():
                 hit = _seg_dist(pts, self.a[keep], self.b[keep]).min(0) < self.half[keep]
@@ -434,13 +436,13 @@ def _inside_facades(ring, p):
     soonest, the ones with solid behind them (a wall; a finger's tip along its axis) first, at most FACADES_MAX apart by
     FACADE_SEP_DEG."""
     ang = np.radians(np.arange(0.0, 360.0, 5.0))
-    d = np.stack([np.cos(ang), np.sin(ang)], 1)
+    d = np.stack([dnp.cos(ang), dnp.sin(ang)], 1)
     pp = np.tile(p, (len(d), 1))
     fwd, back = _exit_out(ring, pp, d), _exit_out(ring, pp, -d)
     order = sorted(range(len(d)), key=lambda i: (back[i] - 2.0 * fwd[i] < WALL_MIN_M, fwd[i]))
     out, got = [], []
     for i in order:
-        if fwd[i] >= RAY_MAX_M or any(float(d[i] @ d[j]) > math.cos(math.radians(FACADE_SEP_DEG)) for j in got):
+        if fwd[i] >= RAY_MAX_M or any(float(dnp.matmul(d[i], d[j])) > dmath.cos(math.radians(FACADE_SEP_DEG)) for j in got):
             continue
         got.append(i)
         out.append((p + d[i] * fwd[i], d[i]))
@@ -471,8 +473,8 @@ def _terminal(obstacles, x, y, near=None):
         out = [_facade(ring, p)]                                                          # (the nearest edge's own normal)
         _d, q, j = _nearest_on(ring, p)
         e = np.roll(ring, -1, axis=0)[j] - ring[j]
-        n = np.array([-e[1], e[0]]) / max(float(np.hypot(*e)), 1e-9)
-        if float(n @ (p - q)) < 0.0 or (float(n @ (p - q)) == 0.0 and bool(_pip(ring, (q + n * 2.0)[None])[0])):
+        n = np.array([-e[1], e[0]]) / max(float(dnp.hypot(*e)), 1e-9)
+        if float(dnp.matmul(n, p - q)) < 0.0 or (float(dnp.matmul(n, p - q)) == 0.0 and bool(_pip(ring, (q + n * 2.0)[None])[0])):
             n = -n                                              # (toward the gate's side: out of the building)
         out.append((q, n))
     return ring, out
@@ -485,10 +487,10 @@ def _bridge(small, gx, gy, out):
     tan = np.array([-out[1], out[0]])
     best = None
     for ring, _a in small:
-        if np.hypot(*(ring - p).T).min() > ATTACH_M:
+        if dnp.hypot(*(ring - p).T).min() > ATTACH_M:
             continue
         d = ring - p
-        tip, lat = (d @ out), (d @ tan)
+        tip, lat = dnp.matmul(d, out), dnp.matmul(d, tan)
         if tip.max() >= BRIDGE_MIN_M and (best is None or tip.max() > best[0]):
             best = (float(min(tip.max(), BRIDGE_CAP_M)), float((lat.min() + lat.max()) / 2.0),
                     float((lat.max() - lat.min()) / 2.0))
@@ -534,7 +536,7 @@ def _gate_craft(sc, world, small, obstacles):
             tries = []                                  # (centre x, y, nose direction x, y)
             if term is not None:
                 for q, n in term[1]:
-                    nose_d = float((q - (gx, gy)) @ n) + NOSE_GAP_M
+                    nose_d = float(dnp.matmul(q - (gx, gy), n)) + NOSE_GAP_M
                     lat = 0.0
                     br = _bridge(small, gx, gy, n)
                     if br is not None:
@@ -544,7 +546,7 @@ def _gate_craft(sc, world, small, obstacles):
                     cx, cy = np.array([gx, gy]) + n * (nose_d + length / 2.0) + tan * lat
                     tries.append((cx, cy, -n[0], -n[1]))
             elif is_pos and bearing is not None:
-                nx, ny = math.sin(math.radians(bearing)), math.cos(math.radians(bearing))
+                nx, ny = dmath.sin(math.radians(bearing)), dmath.cos(math.radians(bearing))
                 tries.append((gx - nx * 0.4 * length, gy - ny * 0.4 * length, nx, ny))
             elif is_pos:
                 got = _apron_nose(sc, gx, gy)
@@ -554,7 +556,7 @@ def _gate_craft(sc, world, small, obstacles):
             elif remote is not None:                    # (a stand off the terminals: the nose toward the nearest facade)
                 q = remote[1][-1][0]
                 v = q - (gx, gy)
-                nx, ny = v / max(float(np.hypot(*v)), 1e-6)
+                nx, ny = v / max(float(dnp.hypot(*v)), 1e-6)
                 tries.append((gx - nx * 0.4 * length, gy - ny * 0.4 * length, nx, ny))
             if not tries:
                 why = "no_terminal"
@@ -580,7 +582,7 @@ def _apron_nose(sc, x, y):
         if _pip(ring, p)[0]:
             _d, q, _j = _nearest_on(ring, p[0])
             v = q - p[0]
-            n = float(np.hypot(*v))
+            n = float(dnp.hypot(*v))
             return (v / n) if n > 1e-6 else None
     return None
 
@@ -596,10 +598,10 @@ def _ga_craft(sc, world):
             continue
         closed = np.r_[ring, ring[:1]] if not np.allclose(ring[0], ring[-1]) else ring
         seg = np.diff(closed, axis=0)
-        ln = np.hypot(seg[:, 0], seg[:, 1])
+        ln = dnp.hypot(seg[:, 0], seg[:, 1])
         cum = np.r_[0.0, np.cumsum(ln)]
         # the ring's sense: the inward normal of an edge is its left when it runs counter-clockwise
-        sign = 1.0 if float(np.dot(closed[:-1, 0], closed[1:, 1]) - np.dot(closed[1:, 0], closed[:-1, 1])) > 0 else -1.0
+        sign = 1.0 if float(dnp.dot(closed[:-1, 0], closed[1:, 1]) - dnp.dot(closed[1:, 0], closed[:-1, 1])) > 0 else -1.0
         slots = []
         for k in range(int(cum[-1] // GA_SPACING_M)):
             h = _crc(f"{aid}:{k}")
@@ -661,7 +663,7 @@ def has_stands(feats):
 
 # ------------------------------------------------------------------------------------------------- the tile's rows
 def _yaw(east, north):
-    return (math.degrees(math.atan2(north, east)) - 90.0) % 360.0
+    return (math.degrees(dmath.atan2(north, east)) - 90.0) % 360.0
 
 
 def _near_cells(key, feats):
@@ -676,7 +678,7 @@ def _near_cells(key, feats):
     lon = sc.lon0 + xy[:, 0] / sc.kx
     lat = sc.lat0 + xy[:, 1] / aeroways.M_PER_DEG
     dlat = NEIGHBOUR_M / aeroways.M_PER_DEG
-    dlon = NEIGHBOUR_M / (aeroways.M_PER_DEG * math.cos(math.radians(sc.lat0)))
+    dlon = NEIGHBOUR_M / (aeroways.M_PER_DEG * dmath.cos(math.radians(sc.lat0)))
     out = []
     for nk in key.neighbours():
         w, s, e, n = nk.bounds()
@@ -689,7 +691,7 @@ def _dedupe(items, lat, lon):
     """Indices of the items kept, deterministic whatever the order (position order): an aircraft drops where it overlaps a
     kept one of another cell (the cells place their own gates' aircraft without each other's)."""
     order = sorted(range(len(items)), key=lambda j: (round(float(lat[j]), 6), round(float(lon[j]), 6), items[j].kind))
-    kx = aeroways.M_PER_DEG * np.cos(np.radians(lat))
+    kx = aeroways.M_PER_DEG * dnp.cos(np.radians(lat))
     kept, placed = [], []                           # placed: (kind, x, y, nx, ny) in a local plane
     for j in order:
         c = items[j]
@@ -741,7 +743,7 @@ def tile_rows(frame, box, infra_fn, buildings_fn, elev, keys=None):
     if not len(own):
         return []
     # (the nose direction in this frame: a point 10 m on, with the meridians' convergence)
-    kx = aeroways.M_PER_DEG * np.cos(np.radians(lat[own]))
+    kx = aeroways.M_PER_DEG * dnp.cos(np.radians(lat[own]))
     ne = np.array([items[j].ne for j in own], np.float64)
     nn = np.array([items[j].nn for j in own], np.float64)
     la2, lo2 = lat[own] + nn * 10.0 / aeroways.M_PER_DEG, lon[own] + ne * 10.0 / kx

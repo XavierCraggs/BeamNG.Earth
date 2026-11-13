@@ -24,6 +24,8 @@ import math
 import numpy as np
 
 import aeroways
+import dmath
+import dnp
 import geotiles
 import polygon
 import runwaygeom
@@ -158,10 +160,10 @@ def _seg_dist_min(p, a, b, margin):
             continue
         sa, sb, sm = a[near], b[near], margin[near]
         ab = sb - sa
-        ab2 = np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12)
+        ab2 = np.maximum(dnp.vecdot(ab, ab), 1e-12)
         qq = q[:, None, :]
-        t = np.clip(np.einsum("mij,ij->mi", qq - sa, ab) / ab2, 0.0, 1.0)
-        d = np.hypot(*(sa + t[..., None] * ab - qq).transpose(2, 0, 1))
+        t = np.clip(dnp.vecdot(qq - sa, ab) / ab2, 0.0, 1.0)
+        d = dnp.hypot(*(sa + t[..., None] * ab - qq).transpose(2, 0, 1))
         out[idx] = (d - sm).min(axis=1)
     return out
 
@@ -184,7 +186,7 @@ def _taxiway_lights(feats, runways):
     if not open_:
         return Lights()
     lat0, lon0 = open_[0].le.lat, open_[0].le.lon
-    kx = aeroways.M_PER_DEG * math.cos(math.radians(lat0))
+    kx = aeroways.M_PER_DEG * dmath.cos(math.radians(lat0))
 
     def local(ll):                          # (n, 2) lon / lat -> metres about the first runway's end
         return np.c_[(ll[:, 0] - lon0) * kx, (ll[:, 1] - lat0) * aeroways.M_PER_DEG]
@@ -203,7 +205,7 @@ def _taxiway_lights(feats, runways):
                 if len(line) < 2:
                     continue
                 xy = local(np.asarray(line, np.float64))
-                xy = xy[np.r_[True, np.hypot(*np.diff(xy, axis=0).T) > 1e-3]]
+                xy = xy[np.r_[True, dnp.hypot(*np.diff(xy, axis=0).T) > 1e-3]]
                 if len(xy) < 2:
                     continue
                 lit = cls[i] == "taxiway" and not no_lit and _lit_at(xy, rend)
@@ -215,7 +217,7 @@ def _taxiway_lights(feats, runways):
         if not lit:
             continue
         d = np.diff(xy, axis=0)
-        seg = np.hypot(d[:, 0], d[:, 1])
+        seg = dnp.hypot(d[:, 0], d[:, 1])
         cum = np.r_[0.0, np.cumsum(seg)]
         n = max(1, math.ceil(cum[-1] / TAXI_SPACING_M))
         st = np.linspace(0.0, cum[-1], n + 1)
@@ -233,12 +235,12 @@ def _taxiway_lights(feats, runways):
     # nor on a runway (half width + RUNWAY_CLEAR_M, its length + the same at each end)
     for (e, rw) in ((local(np.array([[r.le.lon, r.le.lat], [r.he.lon, r.he.lat]])), r) for r in land):
         v = e[1] - e[0]
-        length = float(np.hypot(*v))
+        length = float(dnp.hypot(*v))
         if length < 1.0:
             continue
         u = v / length
         q = pts - e[0]
-        s, t = q @ u, q[:, 0] * -u[1] + q[:, 1] * u[0]
+        s, t = dnp.matmul(q, u), q[:, 0] * -u[1] + q[:, 1] * u[0]
         keep &= ~((s > -RUNWAY_CLEAR_M) & (s < length + RUNWAY_CLEAR_M) & (np.abs(t) < rw.width_m / 2.0 + RUNWAY_CLEAR_M))
     pts = pts[keep]
     lat, lon = lat0 + pts[:, 1] / aeroways.M_PER_DEG, lon0 + pts[:, 0] / kx
@@ -262,15 +264,15 @@ def _taxiway_lights(feats, runways):
 
 def _lit_at(xy, rend):
     """Is the way's middle within TAXI_REACH_M of an open runway, the nearest one lighted?"""
-    seg = np.hypot(*np.diff(xy, axis=0).T)
+    seg = dnp.hypot(*np.diff(xy, axis=0).T)
     cum = np.r_[0.0, np.cumsum(seg)]
     k = min(int(np.searchsorted(cum, cum[-1] / 2.0, side="right")) - 1, len(seg) - 1)
     m = xy[k] + (cum[-1] / 2.0 - cum[k]) / max(seg[k], 1e-9) * (xy[k + 1] - xy[k])
     best, lit = np.inf, False
     for e, rw in rend:
         v = e[1] - e[0]
-        t = float(np.clip((m - e[0]) @ v / max(float(v @ v), 1e-9), 0.0, 1.0))
-        d = float(np.hypot(*(e[0] + t * v - m)))
+        t = float(np.clip(dnp.matmul(m - e[0], v) / max(float(dnp.matmul(v, v)), 1e-9), 0.0, 1.0))
+        d = float(dnp.hypot(*(e[0] + t * v - m)))
         if d < best:
             best, lit = d, bool(rw.lighted)
     return lit and best <= TAXI_REACH_M

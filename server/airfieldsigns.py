@@ -41,6 +41,8 @@ import numpy as np
 
 import aeroways
 import dirsigns
+import dmath
+import dnp
 import fast
 import geotiles
 import imagery
@@ -109,13 +111,13 @@ def _face(out_dir, vfs_dir, kind, text):
 
 # ------------------------------------------------------------------------------------------------- geometry
 def _length(line):
-    return float(np.hypot(*np.diff(line, axis=0).T).sum())
+    return float(dnp.hypot(*np.diff(line, axis=0).T).sum())
 
 
 def _at(line, s):
     """The point (2,) and the unit direction (2,) of the polyline (k, 2) s m along it (clamped to its ends)."""
     d = np.diff(line, axis=0)
-    seg = np.hypot(d[:, 0], d[:, 1])
+    seg = dnp.hypot(d[:, 0], d[:, 1])
     cum = np.r_[0.0, np.cumsum(seg)]
     s = min(max(s, 0.0), float(cum[-1]))
     k = min(int(np.searchsorted(cum, s, side="right")) - 1, len(seg) - 1)
@@ -127,13 +129,13 @@ def _seg_dist(pts, a, b):
     """Distance (k, m) from each point (k, 2) to each segment a -> b (m, 2)."""
     ab = b - a
     ap = pts[:, None, :] - a[None]
-    t = np.clip(np.einsum("kmj,mj->km", ap, ab) / np.maximum(np.einsum("mj,mj->m", ab, ab), 1e-12)[None], 0.0, 1.0)
+    t = np.clip(dnp.vecdot(ap, ab) / np.maximum(dnp.vecdot(ab, ab), 1e-12)[None], 0.0, 1.0)
     d = ap - t[..., None] * ab[None]
-    return np.hypot(d[..., 0], d[..., 1])
+    return dnp.hypot(d[..., 0], d[..., 1])
 
 
 def _bearing(d):
-    return math.degrees(math.atan2(d[0], d[1])) % 360.0
+    return math.degrees(dmath.atan2(d[0], d[1])) % 360.0
 
 
 class _Ground:
@@ -219,7 +221,7 @@ def _hold_text(sc, ri, site, u, db):
         pairs = _db_ends(sc, ri, site, db)
         if not pairs:
             return None
-    pairs.sort(key=lambda p: -float((p[1] - site) @ left))
+    pairs.sort(key=lambda p: -float(dnp.matmul(p[1] - site, left)))
     return "-".join(p[0] for p in pairs)
 
 
@@ -260,21 +262,21 @@ def _junctions(sc):
     lines = {}
     for i in ids:
         xy = sc.ways[i][0]
-        lines[i] = xy[np.r_[True, np.hypot(*np.diff(xy, axis=0).T) > 1e-3]]
+        lines[i] = xy[np.r_[True, dnp.hypot(*np.diff(xy, axis=0).T) > 1e-3]]
     own = np.concatenate([np.full(len(lines[i]) - 1, i) for i in ids])
     a = np.concatenate([lines[i][:-1] for i in ids])
     b = np.concatenate([lines[i][1:] for i in ids])
     ab = b - a
-    ab2 = np.maximum(np.einsum("mj,mj->m", ab, ab), 1e-12)
+    ab2 = np.maximum(dnp.vecdot(ab, ab), 1e-12)
     adds = {}                                   # (a way's end on the line of another: a vertex there)
     for i in ids:
         for e in (lines[i][0], lines[i][-1]):
-            t = np.clip(np.einsum("mj,mj->m", e - a, ab) / ab2, 0.0, 1.0)
+            t = np.clip(dnp.vecdot(e - a, ab) / ab2, 0.0, 1.0)
             q = a + t[:, None] * ab
-            d = np.hypot(*(q - e).T)
+            d = dnp.hypot(*(q - e).T)
             d[own == i] = np.inf
             k = int(np.argmin(d))
-            if d[k] <= JOIN_M and min(float(np.hypot(*(q[k] - a[k]))), float(np.hypot(*(q[k] - b[k])))) > JOIN_M:
+            if d[k] <= JOIN_M and min(float(dnp.hypot(*(q[k] - a[k]))), float(dnp.hypot(*(q[k] - b[k])))) > JOIN_M:
                 adds.setdefault(int(own[k]), []).append((k, float(t[k]), q[k]))
     first = {i: int(np.flatnonzero(own == i)[0]) for i in ids if (own == i).any()}
     for i, extra in adds.items():
@@ -300,7 +302,7 @@ def _junctions(sc):
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 for m in grid.get((cx + dx, cy + dy), ()):
-                    if float(np.hypot(*(verts[n] - verts[m]))) <= JOIN_M:
+                    if float(dnp.hypot(*(verts[n] - verts[m]))) <= JOIN_M:
                         parent[find(n)] = find(m)
         grid.setdefault((cx, cy), []).append(n)
     groups = {}
@@ -339,9 +341,9 @@ def _row(sc, junction):
     for way, head in arms:
         own = sc.ways[way][2]
         look = _at(head, min(ARM_LOOK_M, _length(head)))[0] - head[0]
-        if float(np.hypot(*look)) < 2.0:
+        if float(dnp.hypot(*look)) < 2.0:
             continue
-        heading = -look / float(np.hypot(*look))                    # (the pilot's, in from the arm's far end)
+        heading = -look / float(dnp.hypot(*look))                    # (the pilot's, in from the arm's far end)
         turns = {}                                                  # crossing ref -> [theta], and its half width
         wide = 0.0
         for other, h2 in arms:
@@ -349,10 +351,10 @@ def _row(sc, junction):
             if other == way or not _valid(ref) or ref == own:
                 continue
             d = _at(h2, min(ARM_LOOK_M, _length(h2)))[0] - h2[0]
-            if float(np.hypot(*d)) < 2.0:
+            if float(dnp.hypot(*d)) < 2.0:
                 continue
-            d /= float(np.hypot(*d))
-            theta = math.degrees(math.atan2(heading[0] * d[1] - heading[1] * d[0], heading @ d))
+            d /= float(dnp.hypot(*d))
+            theta = math.degrees(dmath.atan2(heading[0] * d[1] - heading[1] * d[0], dnp.matmul(heading, d)))
             if STRAIGHT_DEG < abs(theta) < BACK_DEG:
                 turns.setdefault(ref, []).append(theta)
                 wide = max(wide, sc.ways[other][1] / 2.0)
@@ -376,7 +378,7 @@ def _build(sc, aprons, db):
     found = []                                  # (kind, text, x, y, face direction (2,), w, h)
 
     def free(c, w):
-        return all(float(np.hypot(*(c - p))) >= 0.5 * min(w, pw) + 0.2 for p, pw in placed)
+        return all(float(dnp.hypot(*(c - p))) >= 0.5 * min(w, pw) + 0.2 for p, pw in placed)
 
     def put(kind, text, c, face, lat_dir, w, h):
         pts = c[None] + lat_dir[None] * np.array([-w / 2.0, 0.0, w / 2.0])[:, None]
@@ -461,7 +463,7 @@ def sign_tile(md, frame, tx, ty, elev, out_dir, vfs_dir, db=None):
             faces[name] = tex
             materials.append(name)
         zg = z[k] - (MOUNT_M - BOTTOM_M)
-        fx, fy = math.sin(math.radians(sg.face)), math.cos(math.radians(sg.face))
+        fx, fy = dmath.sin(math.radians(sg.face)), dmath.cos(math.radians(sg.face))
         rows.append([sg.kind, sg.text, float(e[i]), float(n[i]), zg, zg, -fx, -fy, w, h, materials.index(name), MOUNT_M])
     if not rows:
         return None, {}
