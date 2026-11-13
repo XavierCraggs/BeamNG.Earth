@@ -14,6 +14,7 @@ import aeroways  # noqa: E402
 import airportgrade  # noqa: E402
 import geodesy  # noqa: E402
 import mapgeom  # noqa: E402
+import parkedaircraft as pa  # noqa: E402
 import taxiwaymarks as tm  # noqa: E402
 
 FRAME = geodesy.EnuFrame(-27.39, 153.118)
@@ -225,6 +226,99 @@ class TileChunks(unittest.TestCase):
         self.assertEqual(len(v), 1)
         pts = np.array(v[0]["n"])[:, :2]
         self.assertTrue(np.any(np.hypot(*(pts - [10, 30]).T) < 0.1), "it passes the mapped vertex")
+
+
+def craft(kind, x, y, ne, nn, mode="gate"):
+    """A parked aircraft (parkedaircraft.Craft) centred at (x, y) east / north of the frame's origin."""
+    la, lo, _ = FRAME.enu_to_geodetic(np.array([x], np.float64), np.array([y], np.float64), 0.0)
+    return pa.Craft(kind, float(la[0]), float(lo[0]), ne, nn, mode)
+
+
+class LeadIns(unittest.TestCase):
+    """A stand's yellow lead-in: from the taxilane its axis meets, an arc into a straight run along the axis to the nose,
+    and a stop bar across it at the nose."""
+    LANE = taxiway((-120, 0), (100, 0), cls="taxilane")             # (more lane behind the axis than before it)
+    NARROW = pa.SPECS["narrow"]
+
+    def painted(self, f, *stands):
+        base = tm.strokes([f])
+        got = tm.strokes([f], list(stands))
+        self.assertEqual(got[:len(base)], base)                         # (the mapped lines unchanged)
+        return [metres(s) for s in got[len(base):]], got[len(base):]
+
+    def test_lane_arc_straight_run_to_the_nose_and_a_stop_bar(self):
+        f = feats(self.LANE)
+        L, span = self.NARROW[0], self.NARROW[1]
+        segs, raw = self.painted(f, craft("narrow", 0.0, 60.0, 0.0, 1.0))                # nose 60 + L/2 north, tail to the lane
+        nose = 60.0 + L / 2.0
+        for s in raw:
+            self.assertEqual((s[4], s[5], s[6]), (tm.CENTRE_W_M, tm.CENTRE_KIND, "yellow"))      # the centreline's paint
+        bar, line = segs[-1], segs[:-1]
+        self.assertAlmostEqual(line[0][1], 0.0, 1)                                           # it starts on the lane ...
+        self.assertAlmostEqual(line[0][0], -tm.LEAD_RADIUS_K * span, delta=0.5)              # ... a radius before the axis
+        self.assertAlmostEqual(line[-1][2], 0.0, 2)
+        self.assertAlmostEqual(line[-1][3], nose, 2)                                         # ... and ends at the nose
+        for a, b in zip(line, line[1:]):                                                     # one connected polyline
+            self.assertAlmostEqual(a[2], b[0], 2)
+            self.assertAlmostEqual(a[3], b[1], 2)
+        d0 = np.array([line[0][2] - line[0][0], line[0][3] - line[0][1]])
+        self.assertGreater(d0[0] / np.hypot(*d0), 0.97)                                      # leaves along the lane (tangent)
+        straight = [s for s in line if s[1] > tm.LEAD_RADIUS_K * span - 0.1]
+        self.assertTrue(straight)
+        for s in straight:
+            self.assertAlmostEqual(s[0], 0.0, 2)                                             # the run is on the axis
+            self.assertAlmostEqual(s[2], 0.0, 2)
+        self.assertAlmostEqual(bar[1], nose, 2)                                              # the bar across the axis at the nose
+        self.assertAlmostEqual(bar[3], nose, 2)
+        self.assertAlmostEqual(abs(bar[2] - bar[0]), tm.STOP_BAR_M, 2)
+        self.assertAlmostEqual(bar[0] + bar[2], 0.0, 2)
+
+    def test_a_curve_not_a_corner_between_lane_and_axis(self):
+        segs, _ = self.painted(feats(self.LANE), craft("turboprop", 30.0, 50.0, 0.0, 1.0))
+        line = segs[:-1]
+        turn = []
+        for a, b in zip(line, line[1:]):
+            da = np.array([a[2] - a[0], a[3] - a[1]])
+            db = np.array([b[2] - b[0], b[3] - b[1]])
+            turn.append(float(np.degrees(np.arccos(np.clip(da @ db / np.hypot(*da) / np.hypot(*db), -1, 1)))))
+        self.assertLess(max(turn), 25.0)                                # (no vertex turns sharply: a 90 degree turn in steps)
+        self.assertAlmostEqual(sum(turn), 90.0, delta=4.0)              # (a quarter turn in all, less the chords' ends)
+
+    def test_a_lane_that_ends_short_is_carried_on(self):
+        f = feats(taxiway((-120, 0), (-30, 0), cls="taxilane"))
+        segs, _ = self.painted(f, craft("narrow", 0.0, 60.0, 0.0, 1.0))
+        self.assertAlmostEqual(segs[0][0], -30.0, 1)                    # from the lane's end ...
+        self.assertAlmostEqual(segs[0][1], 0.0, 1)
+        self.assertAlmostEqual(segs[0][2], -tm.LEAD_RADIUS_K * self.NARROW[1], delta=0.5)   # ... straight on to where the curve starts
+        self.assertAlmostEqual(segs[0][3], 0.0, 1)
+
+    def test_a_stand_on_the_far_side_is_reached_from_its_own_side(self):
+        segs, _ = self.painted(feats(self.LANE), craft("narrow", 0.0, -60.0, 0.0, -1.0))
+        self.assertAlmostEqual(segs[0][1], 0.0, 1)
+        self.assertAlmostEqual(segs[-2][3], -60.0 - self.NARROW[0] / 2.0, 2)
+
+    def test_no_lead_in_for_a_ga_row_or_a_stand_without_a_lane(self):
+        f = feats(self.LANE)
+        self.assertEqual(self.painted(f, craft("light", 0.0, 30.0, 0.0, 1.0, "ga"))[0], [])
+        self.assertEqual(self.painted(f, craft("narrow", 600.0, 900.0, 0.0, 1.0))[0], [])          # (a lane 1 km off)
+
+    def test_a_lane_ending_at_the_nose_along_the_axis_is_carried_on_to_it(self):
+        f = feats(taxiway((0, 0), (0, 40), cls="taxilane"))
+        segs, _ = self.painted(f, craft("narrow", 0.0, 60.0, 0.0, 1.0))      # nose at 78.8: the lane's end 38.8 short of it
+        self.assertEqual(len(segs), 2)                                  # a straight line and the bar
+        self.assertAlmostEqual(segs[0][1], 40.0, 1)
+        self.assertAlmostEqual(segs[0][3], 60.0 + self.NARROW[0] / 2.0, 2)
+
+    def test_chunks_carry_the_lead_in_each_in_one_tile(self):
+        f = feats(self.LANE)
+        st = [craft("narrow", 0.0, 60.0, 0.0, 1.0)]
+        tc = TileChunks()
+        run = lambda stands: [c for tx in range(-2, 2) for ty in range(-2, 2) for c in
+                              tm.tile_chunks([f], FRAME, tx, ty, lambda la, lo: np.full(len(la), 7.0), tc.bbox, stands)]
+        plain, with_lead = run(None), run(st)
+        length = lambda cs: sum(float(np.hypot(*np.diff(np.array(c["n"])[:, :2], axis=0).T).sum()) for c in cs)
+        want = sum(float(np.hypot(m[2] - m[0], m[3] - m[1])) for m in self.painted(f, *st)[0])
+        self.assertAlmostEqual(length(with_lead) - length(plain), want, delta=want * 0.02)
 
 
 if __name__ == "__main__":

@@ -169,20 +169,22 @@ def _road_lines(feats):
     return out
 
 
-def _blocked(lat, lon, pads, roads):
-    """Which of the (lat, lon) points are within PAVED_CLEAR_M of a pad (aeroways.pads' (lat, lon) outlines: inside it or
-    with a point of a ring of that radius inside) or within ROAD_CLEAR_M of a road line (lon / lat arrays)."""
+def _blocked(lat, lon, pads, roads, paved_clear=PAVED_CLEAR_M, road_clear=ROAD_CLEAR_M):
+    """Which of the (lat, lon) points are within paved_clear m of a pad (aeroways.pads' (lat, lon) outlines: inside it or
+    with a point of a ring of that radius inside; 0: inside it) or within road_clear m of a road line (lon / lat arrays).
+    (Any (lat, lon) outlines will do for the pads: airfieldlights' clearance adds the buildings' footprints.)"""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     out = np.zeros(len(lat), bool)
     if not len(lat) or not (pads or roads):
         return out
     la0, lo0 = float(lat.mean()), float(lon.mean())
     kx = M_PER_DEG * dmath.cos(math.radians(la0))
-    reach = max(PAVED_CLEAR_M, ROAD_CLEAR_M)
+    reach = max(paved_clear, road_clear)
     box = (lat.min() - reach / M_PER_DEG, lon.min() - reach / kx, lat.max() + reach / M_PER_DEG, lon.max() + reach / kx)
     pt = np.c_[(lon - lo0) * kx, (lat - la0) * M_PER_DEG]
     ang = np.radians(np.arange(0.0, 360.0, 45.0))
-    probe = np.concatenate([[[0.0, 0.0]], PAVED_CLEAR_M * np.c_[dnp.cos(ang), dnp.sin(ang)]])     # (the point and a ring)
+    probe = np.concatenate([[[0.0, 0.0]], paved_clear * np.c_[dnp.cos(ang), dnp.sin(ang)]]) if paved_clear > 0.0 \
+        else np.zeros((1, 2))                                   # (the point and a ring)
     probes = (pt[:, None, :] + probe[None]).reshape(-1, 2)
     for la, lo in pads or ():
         la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
@@ -198,7 +200,7 @@ def _blocked(lat, lon, pads, roads):
         ab = b - a
         t = np.clip(((pt[:, None, :] - a[None]) * ab[None]).sum(2) / np.maximum(dnp.sq(ab).sum(1), 1e-12)[None], 0.0, 1.0)
         d = dnp.norm(pt[:, None, :] - (a[None] + t[..., None] * ab[None]), axis=2).min(axis=1)
-        out |= d < ROAD_CLEAR_M
+        out |= d < road_clear
     return out
 
 

@@ -13,7 +13,7 @@ APPROACH_LEN_M (a simple 900 m line) with a crossbar of APPROACH_BAR_W_M at APPR
 PAPI_MIN_RUNWAY_M or more a PAPI at each landing end: four lights PAPI_STEP_M apart, the first PAPI_OFF_M left of the
 runway edge (as the landing aircraft sees it) PAPI_AT_M past the threshold, the two nearer the runway red and the two
 outer white (the on-slope look). The lights stand on the ground (the extended centreline is not checked for water,
-roads or buildings: the row's `elev` puts a light on whatever ground the grade gives).
+roads or buildings by runway_lights: tile_rows leaves out what stands on them, below).
 ils_masts(rw) -> [Mast]: the ILS aerials of a paved open runway over ILS_MIN_RUNWAY_M, forest rows of the mod's static
 groups ils_loc (a localizer array, a 30 m wide, 3 m high row of dipoles on a frame) and ils_gs (a 15 m glide-slope lattice
 mast): the localizer of each approach LOC_AT_M past the far end on the centreline (between the approach lights' rows)
@@ -24,9 +24,14 @@ paved taxiways (infrastructure Features: subtype "airport", class "taxiway"; the
 defaults are aeroways') at airports whose nearest open runway (within TAXI_REACH_M) is lighted; none inside an apron,
 inside a runway's half width + RUNWAY_CLEAR_M, nor within another taxiway's or taxilane's pavement (a junction's, the
 inner side of a tight bend) nor on a way tagged lit=no.
-tile_rows(frame, box, infra_fn, runways_fn, elev) -> forest rows [group, x, y, z, yaw, scale, height, rank] of the
-lights a road tile owns (the group's shape is 1 m high: height 1), as areaprops' rows, and of the ILS masts (their own
-groups, the catalogue's height, the yaw the server's, as windsocks').
+tile_rows(frame, box, infra_fn, runways_fn, elev, keys=None, roads_fn=None, buildings_fn=None) -> forest rows
+[group, x, y, z, yaw, scale, height, rank] of the lights a road tile owns (the group's shape is 1 m high: height 1), as
+areaprops' rows, and of the ILS masts (their own groups, the catalogue's height, the yaw the server's, as windsocks').
+The tile's own clearance (_cleared, from the data of the cells round the equipment: aeroways.pads without the runways'
+strips, the buildings' footprints, windsocks.road_lines): an approach light, a PAPI unit or an ILS aerial that falls on
+an apron or taxiway pad, inside a building (an aerial's own half width round it too) or within CLEAR_ROAD_M of a road
+line is left out, and the approach row of that end with it from that light out (a localizer array stood on Brisbane's
+domestic apron, 315 m past a runway end). No approach lights nor ILS aerials for a runway of a closed airport.
 
 Every light is a pure function of its runway's data or its Features, kept: a runway's by its data's signature (a bounded
 module cache), a Features' on the Features by the runways it was asked with (so every tile of a cell shares them). A
@@ -73,6 +78,9 @@ LOC_AT_M = 315.0                # m past the far end: the localizer (between the
 GS_AT_M = 300.0                 # m past the threshold: the glide-slope mast
 GS_OFF_M = 120.0                # m off the runway's centreline
 FACE_M = 10.0                   # m: a mast's second point (the way its front faces)
+CLEAR_ROAD_M = 5.0              # m: approach lights, PAPIs and ILS aerials stand at least this far from a road line ...
+MAST_CLEAR_M = {"ils_loc": 15.0, "ils_gs": 4.0}     # ... an aerial's own half width clear of pavement and buildings
+CLEAR_CELL_PAD_DEG = 0.0004     # (about 45 m) the data's reach round the equipment, in map cells
 BAR_SPACING_M = 4.0             # across the threshold and end bars
 BAR_OUT_M = 1.0                 # the end bar this far beyond the runway end
 DISPLACED_MAX = 1.0 / 3.0       # a displaced threshold past this share of the runway is a data error: none
@@ -147,7 +155,7 @@ def _approach_parts(rw, L):
     """The approach lights (a white centreline row and the crossbar) before each end, the PAPIs at each landing end, as
     (s, t, colour, kind) lists."""
     parts = []
-    if rw.paved and (L > APPROACH_MIN_RUNWAY_M or rw.airport_type == "large_airport"):
+    if rw.paved and rw.airport_type != "closed" and (L > APPROACH_MIN_RUNWAY_M or rw.airport_type == "large_airport"):
         k = np.arange(1, int(round(APPROACH_LEN_M / APPROACH_STEP_M)) + 1) * APPROACH_STEP_M
         n_bar = int(round(APPROACH_BAR_W_M / APPROACH_BAR_STEP_M))
         bar = np.linspace(-APPROACH_BAR_W_M / 2.0, APPROACH_BAR_W_M / 2.0, n_bar + 1)
@@ -229,7 +237,8 @@ def _masts_of(rw):
 def ils_masts(rw):
     """The ILS aerials [Mast] of a runway (airports.Runway): none unless paved, open, on land and over ILS_MIN_RUNWAY_M;
     memoised by its data."""
-    if not rw.paved or rw.closed or rw.surface == "water" or runwaygeom.geometry(rw).length <= ILS_MIN_RUNWAY_M:
+    if not rw.paved or rw.closed or rw.airport_type == "closed" or rw.surface == "water" \
+            or runwaygeom.geometry(rw).length <= ILS_MIN_RUNWAY_M:
         return []
     key = _signature(rw)
     got = _MASTS.get(key)
@@ -411,11 +420,13 @@ def _keys_of(frame, box):
         return [], (la, lo)
 
 
-def tile_rows(frame, box, infra_fn, runways_fn, elev, keys=None):
+def tile_rows(frame, box, infra_fn, runways_fn, elev, keys=None, roads_fn=None, buildings_fn=None):
     """Forest rows [group, x, y, z, yaw, 1, GROUP_H, 0] of the airfield lights a tile (box: x0, y0, x1, y1 in frame, or
     a geotile's OwnedBox) owns (each light in one tile). infra_fn(key) -> the cell's infrastructure Features (or None),
     runways_fn(key) -> the airports.Runways to light it by (AirportDB.in_cell(key, margin_m=TAXI_REACH_M)), elev(lat,
-    lon) -> the (graded) ground in metres (arrays). keys: the box's cells (default: those under it)."""
+    lon) -> the (graded) ground in metres (arrays). keys: the box's cells (default: those under it). roads_fn(key) ->
+    the cell's roads Features, buildings_fn(key) -> its buildings Features, or a list of them (or None; None for the
+    function: no road, no building is kept clear of: the clearance of the equipment is the pavement of infra_fn's)."""
     got = _keys_of(frame, box)
     if keys is None:
         keys = got[0]
@@ -428,10 +439,100 @@ def tile_rows(frame, box, infra_fn, runways_fn, elev, keys=None):
         for rw in runways:
             if rw.key not in seen:
                 seen[rw.key] = True
-                parts.append(runway_lights(rw))
-                masts += ils_masts(rw)
+                lights, ms = _cleared(rw, runway_lights(rw), ils_masts(rw), la, lo, infra_fn, roads_fn, buildings_fn)
+                parts.append(lights)
+                masts += ms
         parts.append(taxiway_lights(infra_fn(k), runways))
     return _light_rows(frame, box, Lights.join(parts), elev, la, lo) + _mast_rows(frame, box, masts, elev, la, lo)
+
+
+_BUILDINGS_KEY = "_airfield_building_outlines"
+
+
+def _building_outlines(feats):
+    """The footprints of a buildings Features (or a list of them) as [(lat (k,), lon (k,))] (above ground), kept on it."""
+    out = []
+    for f in (feats if isinstance(feats, (list, tuple)) else [feats]):
+        if f is None or len(f) == 0:
+            continue
+        got = f.__dict__.get(_BUILDINGS_KEY)
+        if got is None:
+            got = []
+            under = f.attrs.get("is_underground")
+            for i in np.flatnonzero(np.asarray(f.kind) == 3).tolist():
+                if under is not None and bool(under[i]):
+                    continue
+                for part in f.parts(i):
+                    if part and len(part[0]) >= 3:
+                        ring = np.asarray(part[0], np.float64)
+                        got.append((ring[:, 1], ring[:, 0]))
+            f.__dict__[_BUILDINGS_KEY] = got
+        out += got
+    return out
+
+
+def _cleared(rw, lights, masts, la, lo, infra_fn, roads_fn, buildings_fn):
+    """(lights, masts) of the runway rw without the equipment (approach lights, PAPI units, ILS aerials) that falls on an
+    apron or taxiway pad, inside a building or within CLEAR_ROAD_M of a road line, and without the approach row of an end
+    from its first centreline light that does (the crossbar's lights too, in line with them): the data of the cells round
+    the equipment, so every tile decides alike. Unchanged where none of the equipment is in the tile (la, lo: its
+    corners' lat / lon)."""
+    import windsocks                        # (here: windsocks imports this module)
+    app = KINDS.index(APPROACH)
+    eq = np.flatnonzero((lights.kind == app) | (lights.kind == KINDS.index(PAPI)))
+    if not len(eq) and not masts:
+        return lights, masts
+    elat = np.r_[lights.lat[eq], [m.lat for m in masts]]
+    elon = np.r_[lights.lon[eq], [m.lon for m in masts]]
+    pad = 0.0005
+    if not ((elat >= la.min() - pad) & (elat <= la.max() + pad) & (elon >= lo.min() - pad) & (elon <= lo.max() + pad)).any():
+        return lights, masts
+    import mapcells
+    cells = list(mapcells.cells_near_points(elat, elon, CLEAR_CELL_PAD_DEG, CLEAR_CELL_PAD_DEG))
+    infra = [f for f in (infra_fn(k) for k in cells) if f is not None]
+    outlines, roads = list(aeroways.pads(infra, runways=False)), []
+    for k in cells:
+        if roads_fn is not None:
+            try:                            # (a cell without its roads or buildings loaded: not kept clear of there)
+                roads += windsocks.road_lines(roads_fn(k))
+            except Exception:
+                pass
+        if buildings_fn is not None:
+            try:
+                outlines += _building_outlines(buildings_fn(k))
+            except Exception:
+                pass
+    if not (outlines or roads):
+        return lights, masts
+    bad = windsocks._blocked(elat[:len(eq)], elon[:len(eq)], outlines, roads, 0.0, CLEAR_ROAD_M)
+    keep = ~bad
+    isapp = lights.kind[eq] == app
+    # (a road drops only the light on it, the row goes on over it as at Heathrow's 27L; an apron or a building ends it)
+    hard = windsocks._blocked(elat[:len(eq)], elon[:len(eq)], outlines, [], 0.0, CLEAR_ROAD_M) if roads else bad
+    if (isapp & hard).any():
+        a = np.flatnonzero(isapp)
+        g = runwaygeom.geometry(rw)
+        s, t = g.st(lights.lat[eq[a]], lights.lon[eq[a]])
+        far = s > g.length / 2.0
+        d = np.where(far, s - g.length, -s)             # (from the end it is before)
+        centre = np.abs(t) < 0.5
+        for end in (False, True):
+            on = far == end
+            cut = d[on & centre & hard[a]]
+            if len(cut):
+                keep[a[on & (d >= cut.min() - 0.5)]] = False
+    keep_all = np.ones(len(lights), bool)
+    keep_all[eq] = keep
+    mlat, mlon = elat[len(eq):], elon[len(eq):]
+    ok = np.ones(len(masts), bool)
+    for group, r in MAST_CLEAR_M.items():
+        idx = [i for i, m in enumerate(masts) if m.group == group]
+        if idx:
+            ok[idx] = ~windsocks._blocked(mlat[idx], mlon[idx], outlines, roads, r, CLEAR_ROAD_M)
+    if keep_all.all() and ok.all():
+        return lights, masts
+    return Lights(lights.lat[keep_all], lights.lon[keep_all], lights.colour[keep_all], lights.kind[keep_all]), \
+        [m for m, o in zip(masts, ok) if o]
 
 
 def _light_rows(frame, box, lights, elev, la, lo):

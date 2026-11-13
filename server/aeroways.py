@@ -278,7 +278,7 @@ def _fillets(ways, runways):
     return out
 
 
-def _feats_pads(feats):
+def _feats_pads(feats, runways_too=True):
     sub = feats.attrs.get("subtype")
     cls = feats.attrs.get("class")
     if sub is None or cls is None:
@@ -305,7 +305,7 @@ def _feats_pads(feats):
                 w = width_tag(tags.get("width")) or (RUNWAY_INTL_M if intl else RUNWAY_M)
                 lines = [np.asarray(ln, np.float64) for part in feats.parts(i) for ln in part if len(ln) >= 2]
                 runways += [(ln, w / 2.0) for ln in lines]
-                for ln in lines:
+                for ln in lines if runways_too else ():
                     out += _buffer(ln[:, 1], ln[:, 0], w, butt=True)
             continue
         if _unpaved(feats, i, tags):
@@ -342,15 +342,17 @@ def _feats_pads(feats):
     return out
 
 
-def pads(feats_list):
+def pads(feats_list, runways=True):
     """[(lat (k,), lon (k,))] of the aprons and taxiways of the Features in feats_list (see the module docstring),
-    [] for Features with no airport in them (one vectorised test of the class column, kept on the Features)."""
+    [] for Features with no airport in them (one vectorised test of the class column, kept on the Features). runways
+    False: without the mapped runway and stopway lines' paving (the aprons, taxiways and their fillets alone)."""
     out = []
+    key = _KEY if runways else _KEY + "_ways"
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
-        got = feats.__dict__.get(_KEY)
+        got = feats.__dict__.get(key)
         if got is None:
-            got = feats.__dict__[_KEY] = _feats_pads(feats)
+            got = feats.__dict__[key] = _feats_pads(feats, runways)
         out += got
     return out

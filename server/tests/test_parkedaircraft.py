@@ -57,8 +57,13 @@ def feats(*rows, occupied=None):
     return f
 
 
-def buildings(*polys):
-    return mapgeom.build("buildings", np.array([f"b{i:03d}" for i in range(len(polys))]), [poly(p) for p in polys])
+def buildings(*polys, prefix="b"):
+    return mapgeom.build("buildings", np.array([f"{prefix}{i:03d}" for i in range(len(polys))]), [poly(p) for p in polys])
+
+
+def parts(*polys):
+    """Building parts Features (canopies, covered walkways: the footprints of raised parts count the same)."""
+    return mapgeom.build("building_parts", np.array([f"p{i:03d}" for i in range(len(polys))]), [poly(p) for p in polys])
 
 
 def aerodrome(cls="international_airport"):
@@ -169,6 +174,126 @@ class Gates(unittest.TestCase):
         self.assertAlmostEqual(y - half, 30.0 - pa.BACK_M[c.kind], delta=0.6)    # the door at the bridge's tip
         self.assertAlmostEqual(abs(x), 2.0 + pa.SPECS[c.kind][3] / 2.0 + pa.BRIDGE_SIDE_M, delta=0.6)   # beside it
         self.assertAlmostEqual(c.nn, -1.0, 2)
+
+
+def footprint(c):
+    """The sample points of an aircraft's rectangles in the plane."""
+    x, y = en(c)
+    return pa._world(pa._local_points(c.kind), x, y, c.ne, c.nn)
+
+
+class Orientation(unittest.TestCase):
+    def slanted(self, deg, tags=None):
+        """The one aircraft at a gate just inside a terminal wall `deg` to the x axis, the wall's direction and normal."""
+        a = math.radians(deg)
+        rot = lambda x, y: (x * math.cos(a) - y * math.sin(a), x * math.sin(a) + y * math.cos(a))
+        gx, gy = rot(0.0, -1.5)
+        row = (point(gx, gy), "airport_gate", dict({"aeroway": "gate"}, **(tags or {})))
+        f = feats(aerodrome("regional_airport"), row, occupied=True)
+        got = pa.stands(f, buildings([rot(*p) for p in TERMINAL]))
+        self.assertEqual(len(got), 1)
+        return got[0], (math.cos(a), math.sin(a)), (-math.sin(a), math.cos(a))
+
+    def test_the_axis_is_perpendicular_to_the_wall_and_the_nose_at_it(self):
+        for deg in (0.0, 33.0, 100.0, -57.0):
+            c, w, nrm = self.slanted(deg)
+            self.assertAlmostEqual(c.ne * w[0] + c.nn * w[1], 0.0, 2, deg)               # across the wall
+            self.assertAlmostEqual(c.ne * nrm[0] + c.nn * nrm[1], -1.0, 2, deg)          # the nose toward it, the tail away
+            x, y = en(c)
+            half = pa.SPECS[c.kind][0] / 2.0
+            self.assertGreater((x - c.ne * half) * nrm[0] + (y - c.nn * half) * nrm[1], 0.0)
+
+    def test_a_corner_does_not_turn_the_aircraft_sideways(self):
+        ring = np.array([(-200.0, -60.0), (60.0, -60.0), (60.0, -20.0), (0.0, -20.0), (0.0, 0.0), (-200.0, 0.0)])
+        _q, smooth = pa._facade(ring, np.array([6.0, -12.0]))           # (the long edges outweigh a short wall in a notch)
+        self.assertLess(abs(smooth[0]), 0.1)
+        term = pa._terminal([(ring, (-200.0, -60.0, 60.0, 0.0))], 6.0, -12.0)
+        self.assertGreater(term[1][0][1][0], 0.99)                      # the nearest wall's (x = 0) normal comes first
+
+    def test_a_tagged_heading_is_preferred_where_it_points_at_the_wall(self):
+        c, _w, _n = self.slanted(0.0, {"heading": "200"})
+        b = math.radians(200.0)
+        self.assertAlmostEqual(c.ne, math.sin(b), 2)
+        self.assertAlmostEqual(c.nn, math.cos(b), 2)
+        away, _w, _n = self.slanted(0.0, {"heading": "0"})              # (nose away from the wall: not used)
+        self.assertAlmostEqual(away.nn, -1.0, 2)
+
+    def test_remote_stand_lines_up_with_the_nearest_taxilane(self):
+        lane = (line((-200, 60), (200, 60)), "taxilane", {})
+        got = pa.stands(feats(aerodrome("regional_airport"), gate(0.0, 100.0), lane, occupied=True), None)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0].mode, "remote")
+        self.assertAlmostEqual(got[0].ne, 0.0, 2)                       # across the lane, the nose away from it
+        self.assertAlmostEqual(got[0].nn, 1.0, 2)
+        below = pa.stands(feats(aerodrome("regional_airport"), gate(0.0, 20.0), lane, occupied=True), None)
+        self.assertAlmostEqual(below[0].nn, -1.0, 2)
+        stub = (line((0, 40), (0, 70)), "taxilane", {})                 # (a lane ending at the stand: along it, on)
+        c = pa.stands(feats(aerodrome("regional_airport"), gate(0.0, 90.0), stub, occupied=True), None)[0]
+        self.assertAlmostEqual(c.nn, 1.0, 2)
+
+
+class Buildings(unittest.TestCase):
+    CANOPY = [(-12, 6), (12, 6), (12, 12), (-12, 12)]
+
+    def gate_with(self, *blds):
+        f = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
+        return pa.stands(f, [buildings(TERMINAL)] + list(blds))
+
+    def test_a_canopy_or_walkway_part_pulls_the_aircraft_back(self):
+        base = self.gate_with()
+        self.assertEqual(len(base), 1)
+        for blds in ([parts(self.CANOPY)], [buildings(self.CANOPY, prefix="c")]):
+            got = self.gate_with(*blds)
+            self.assertEqual(len(got), 1)
+            c = got[0]
+            x, y = en(c)
+            half = pa.SPECS[c.kind][0] / 2.0
+            self.assertGreaterEqual(y - half, 12.0 + pa.BUILDING_CLEAR_M - 0.05)        # the nose clear of the canopy
+            self.assertLessEqual(y, en(base[0])[1] + pa.PULL_BACK_MAX_M + 0.05)
+            self.assertAlmostEqual(c.nn, -1.0, 2)                                       # the same axis, moved tail-ward
+            self.assertAlmostEqual(x, en(base[0])[0], 1)
+
+    def test_no_aircraft_overlaps_any_building_or_part(self):
+        sheds = [[(-30, 20), (-26, 20), (-26, 24), (-30, 24)], [(25, 30), (28, 30), (28, 33), (25, 33)]]   # (under 300 m2)
+        f = feats(aerodrome("regional_airport"), *[gate(x) for x in (-60.0, 0.0, 60.0)], occupied=True)
+        got = pa.stands(f, [buildings(TERMINAL, *sheds), parts(self.CANOPY)])
+        self.assertTrue(got)
+        for c in got:
+            pts = footprint(c)
+            for r in sheds + [self.CANOPY]:
+                r = np.array(r, np.float64)
+                self.assertFalse(pa._pip(r, pts).any())
+                self.assertGreater(pa._seg_dist(pts, r, np.roll(r, -1, axis=0)).min(), pa.BUILDING_CLEAR_M - 0.05)
+
+    def test_too_deep_to_pull_back_drops_it(self):
+        self.assertEqual(self.gate_with(parts([(-12, 6), (12, 6), (12, 40), (-12, 40)])), [])
+
+    def test_the_gates_own_bridge_is_no_obstacle_but_a_neighbours_is(self):
+        f = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
+        bridge = [(-2, -3), (2, -3), (2, 30), (-2, 30)]
+        self.assertEqual(len(pa.stands(f, [buildings(TERMINAL), parts(bridge)])), 1)
+        f2 = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)       # (a long walkway by the wing tips: a wall)
+        self.assertEqual(pa.stands(f2, buildings(TERMINAL, [(14, -3), (18, -3), (18, 80), (14, 80)])), [])
+
+    def test_a_small_shed_on_the_apron_is_kept_off(self):
+        apron = [(-150, 100), (150, 100), (150, 200), (-150, 200)]
+        f = feats(aerodrome("regional_airport"), (poly(apron), "apron", {}))
+        free = pa.stands(f, None)
+        sheds = []
+        for c in free[::2]:
+            x, y = en(c)
+            sheds.append([(x - 1.5, y - 1.5), (x + 1.5, y - 1.5), (x + 1.5, y + 1.5), (x - 1.5, y + 1.5)])
+        got = pa.stands(f, buildings(*sheds))
+        self.assertLess(len(got), len(free))
+        for c in got:
+            for r in sheds:
+                self.assertFalse(pa._pip(np.array(r), footprint(c)).any())
+
+    def test_kept_stands_is_what_tile_rows_places(self):
+        f, _ = gates_row(4, 80.0, occupied=True)
+        got = pa.kept_stands([0], lambda k: f, lambda k: [buildings(TERMINAL), None])
+        self.assertEqual(len(got), 4)
+        self.assertEqual(len(pa.tile_rows(FRAME, BOX, lambda k: f, lambda k: buildings(TERMINAL), ground, keys=[0])), 4)
 
 
 class Types(unittest.TestCase):

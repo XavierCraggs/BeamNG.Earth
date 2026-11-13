@@ -3495,7 +3495,9 @@ class Server:
                     import airfieldlights
                     db = self.airports.db
                     props.extend(airfieldlights.tile_rows(anchor.frame, box, infra_fn,
-                                                          lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), elev))
+                                                          lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), elev,
+                                                          roads_fn=lambda k: self.mapdata.cell(k, layers=("roads",), kind="demand").layers.get("roads"),
+                                                          buildings_fn=bld_fn))
                 except Exception as ex:
                     log.warning("airfield lights: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
                 try:   # (a windsock near each runway end: windsocks; along the runway, the wind would freeze in the tile)
@@ -3507,12 +3509,14 @@ class Server:
                     log.warning("windsocks: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
                 try:   # (parked aircraft at the terminal gates and on the GA aprons: parkedaircraft)
                     import parkedaircraft
-                    props.extend(parkedaircraft.tile_rows(anchor.frame, box, infra_fn, bld_fn, elev))
+                    props.extend(parkedaircraft.tile_rows(anchor.frame, box, infra_fn,
+                                                          parkedaircraft.building_layers_fn(self.mapdata), elev))
                 except Exception as ex:
                     log.warning("parked aircraft: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
                 try:   # (ground vehicles at the stands, apron masts, containers by the hangars: airsideprops)
                     import airsideprops
-                    props.extend(airsideprops.tile_rows(anchor.frame, box, infra_fn, bld_fn, elev))
+                    props.extend(airsideprops.tile_rows(anchor.frame, box, infra_fn,
+                                                        parkedaircraft.building_layers_fn(self.mapdata), elev))
                 except Exception as ex:
                     log.warning("airside props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             try:       # (solar farms, container terminals, marinas, trailer parks, construction sites)

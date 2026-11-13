@@ -9,7 +9,9 @@ list of the cell's and its neighbours' buildings), kept on the Features.
 Vehicles (an aircraft of the turboprop, narrow and wide kinds; the light singles get none; the Craft's own `mode` tells a
 gate from a remote stand), each by a hash of the aircraft's position (never random: a rebuilt tile is the same), one handler's
 livery (white, yellow or grey) for a block of stands, and only where the box of the vehicle is clear of the aircraft's
-rectangles (and the other vehicles), of buildings and of the pavement of runways, stopways and taxiways (a taxilane's
+rectangles (and the other vehicles), of every building and building part (parkedaircraft's footprints: canopies and
+covered walkways too, whatever their height; CLEAR_BUILDING_M margin; the small building touching a gate, a jet bridge,
+excepted) and of the pavement of runways, stopways and taxiways (a taxilane's
 centreline is no obstacle: a stand's lead-in runs through the nose):
   pushback tug  gates: ahead of the nose, facing the aircraft;
   baggage train a tug and 2-3 carts on the aircraft's right side, aft of the wing, the tug leading forward;
@@ -123,9 +125,10 @@ class _Site:
     """A cell's airport in its plane: what the airside props keep off (buildings, pavement, the aircraft) and the ones
     placed so far."""
 
-    def __init__(self, sc, obstacles, crafts):
+    def __init__(self, sc, obstacles, crafts, exempt=()):
         self.sc = sc
         self.world = pa._World(sc, obstacles)
+        self.exempt = frozenset(exempt)         # indexes of the obstacles that are no obstacle to a vehicle (jet bridges)
         self.crafts = crafts                    # [(kind, x, y, nx, ny)]
         self.placed = []                        # (kind, cx, cy, hx, hy, pts)
 
@@ -135,8 +138,8 @@ class _Site:
         w = self.world
         pts = _box_pts(kind, cx, cy, hx, hy)
         r = _reach(kind) + CLEAR_BUILDING_M
-        for ring, (x0, y0, x1, y1) in w.rings:
-            if x0 - r > cx or x1 + r < cx or y0 - r > cy or y1 + r < cy:
+        for oi, (ring, (x0, y0, x1, y1)) in enumerate(w.rings):
+            if x0 - r > cx or x1 + r < cx or y0 - r > cy or y1 + r < cy or oi in self.exempt:
                 continue
             if pa._pip(ring, pts).any() or pa._seg_dist(pts, ring, np.roll(ring, -1, axis=0)).min() < CLEAR_BUILDING_M:
                 return False
@@ -396,16 +399,19 @@ def props(feats, buildings=None):
     was asked with); [] for Features without airport gates or aprons."""
     if feats is None or len(feats) == 0 or not pa.has_stands(feats):
         return []
-    same = lambda a, b: a is b or (isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)) and len(a) == len(b)
-                                   and all(x is y for x, y in zip(a, b)))
+    buildings = pa._flat(buildings)
+    same = lambda a, b: len(a) == len(b) and all(x is y for x, y in zip(a, b))
     got = feats.__dict__.get(_KEY)
     if got is not None and same(got[0], buildings):
         return got[1]
     sc = feats.__dict__[pa._KEY + "_scene"]
     crafts = pa.stands(feats, buildings)
-    obstacles, _small = pa._buildings(sc, buildings)
+    obstacles, small = pa._buildings(sc, buildings)
     planar = [_plane(sc, c) for c in crafts]
-    site = _Site(sc, obstacles, planar)
+    gate_xy = np.array([[g[1], g[2]] for g in sc.gates]).reshape(-1, 2)
+    exempt = [oi for ring, _a, oi in small if len(gate_xy) and
+              min(float(dnp.hypot(*(ring - g).T).min()) for g in gate_xy) <= pa.ATTACH_M]   # (a jet bridge touches its gate)
+    site = _Site(sc, obstacles, planar, exempt)
     out = []
 
     def emit(group, x, y, hx, hy, lift=0.0, variant=0, owner=None):
@@ -446,7 +452,7 @@ def tile_rows(frame, box, infra_fn, buildings_fn, elev, keys=None):
         feats = infra_fn(k)
         if not pa.has_stands(feats):
             continue
-        blds = [buildings_fn(k)] + [buildings_fn(nk) for nk in pa._near_cells(k, feats)]
+        blds = pa._flat([buildings_fn(k)] + [buildings_fn(nk) for nk in pa._near_cells(k, feats)])
         cells.append((props(feats, blds), pa.stands(feats, blds)))
     if not cells or not any(p for p, _s in cells):
         return []

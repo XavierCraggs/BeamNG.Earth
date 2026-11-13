@@ -672,6 +672,12 @@ BAND_OFFICE = (0, 5)        # m_highrise_metal: curtain wall
 BAND_OFFICE2 = (1, 4)
 BAND_SHOP = (2, 2)          # shopfront with awnings
 BANDS = 4
+# An airport's airside buildings (airportbuildings.Context.airside: piers, satellites, walkways, whatever their size and
+# whether the map gives them a height) take the terminal's look: glass curtain walls (OFFICE's tints) or light panels
+# (white or grey plaster with square windows), by the seed, never brick, siding or a house's rules
+AIRSIDE_GLASS_SHARE = 0.6
+AIRSIDE_PANEL_TINTS = (FACADE_TINTS[0], FACADE_TINTS[3], FACADE_TINTS[0])
+AIRSIDE_CLUTTER_MIN_M2 = 1500.0     # m2: the roof plant of a bigger airside roof; a smaller one is bare
 
 # Overture "bridge_structure" (OSM man_made=bridge parts with a height: the Queensboro Bridge's towers, 110 m) was a
 # glass tower the decks ran through (the user's report, 2026-10-17)
@@ -816,7 +822,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "terminal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml", "airside")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -1014,6 +1020,11 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         return ships.spec(ring, attrs, seed)
     if attrs.get("pier"):           # a quay structure alongside one (ships.pier_alongside): a low deck
         return ships.pier_spec(ring, seed)
+    if attrs.get("_pillar"):        # a support of a raised airside part (airportbuildings.pillars): a plain concrete column
+        return Spec(ring=ring, floors=1, floor_h=float(attrs.get("height") or 3.0), height=float(attrs.get("height") or 3.0),
+                    roof="flat", roof_mat="bne_precast", facade="bne_precast", band=None, shop=False, plain=True, seed=seed,
+                    min_h=0.0, wall=None, windows=False, steeple=False, porch=False, cls=airportbuildings.PILLAR_CLASS,
+                    deck=False, pitch=None)
     style = region_style(lat, lon)
     _, _, hl, hw = oriented_box(ring)
     box_fill = area / max(4 * hl * hw, 1e-6)
@@ -1024,6 +1035,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # its own footprint (streets.gl comparison 2026-11-14: the Capitol's marble lantern rings under 40 m² came out sheds
     # in vinyl siding, the Chrysler Building's 185 m wings on under 100 m² windowless steel masts)
     part = attrs.get("building_height") is not None
+    airside = bool(attrs.get("_airside")) and not terminal      # (an airport's pier, satellite or walkway: the terminal look)
     church = cls in CHURCH_CLASSES or any(w in name for w in ("church", "chapel", "cathedral"))
     if "hangar" in name:
         cls = "hangar"
@@ -1033,15 +1045,15 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         "garage" in name and area > 800) or (bool(attrs.get("garage")) and cls in GARAGE_TAG_CLASSES)
     narrow = hw < 4.2 and hl > 2.2 * hw                 # a row house: ~4-8 m wide, deep
     # in a dense core small buildings are row houses even where the footprints leave gaps (Fells Point)
-    row = cls in ROW_CLASSES or (not west_town and not part and ((narrow and (neighbours >= 1 or dense)) or (
-        dense and area < 260 and cls not in SHOP_CLASSES)))
-    shed = ((cls in SHED_CLASSES and not garage) or (area < 40 and not row and not part)) and not attrs.get("_tower")
+    row = (cls in ROW_CLASSES or (not west_town and not part and ((narrow and (neighbours >= 1 or dense)) or (
+        dense and area < 260 and cls not in SHOP_CLASSES)))) and not airside
+    shed = ((cls in SHED_CLASSES and not garage) or (area < 40 and not row and not part)) and not attrs.get("_tower")         and not airside
     shop = cls in SHOP_CLASSES
     industrial = cls in INDUSTRIAL_CLASSES or (area > 2500 and cls in ("", "commercial"))
     # (on industrial land, industrial_rings: a refinery's or a port's control rooms and stores, not houses with porches
     # and chimneys; Pernis, Rotterdam, against its aerial photo, 2026-11-10)
     industrial = industrial or (attrs.get("_land") == "industrial" and cls in INDUSTRIAL_LAND_CLASSES)
-    industrial = industrial and not (garage or terminal)
+    industrial = industrial and not (garage or terminal or airside)
 
     h = attrs.get("height")
     nf = attrs.get("num_floors")
@@ -1050,6 +1062,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         if attrs.get("_terminal"):                      # (one at an airport: by its size, airportbuildings; two or three)
             h = float(np.clip(8.0 + math.sqrt(area) / 12.0, 12.0, 20.0))
             nf = 2 if h < 16.0 else 3
+    if airside and (h is None or not np.isfinite(h)) and (nf is None or not np.isfinite(nf)):
+        lo_, hi_ = airportbuildings.AIRSIDE_H_M            # (a pier's or a walkway's scale: two or three storeys)
+        h = lo_ + (hi_ - lo_) * _hash01(seed, "airside h")
     if garage and (h is None or not np.isfinite(h)) and (nf is None or not np.isfinite(nf)):
         nf = 4 + int(seed * 2)
     if cls == "hangar" and (h is None or not np.isfinite(h)):
@@ -1163,7 +1178,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if church:
         floor_h = 7.5
     # (a big shed is a barn; a row of garages, a carport or a canopy is not)
-    barn = cls in BARN_CLASSES or (shed and area >= 150 and cls not in ("garage", "garages", "carport", "roof", "shelter"))
+    barn = (cls in BARN_CLASSES or (shed and area >= 150 and cls not in ("garage", "garages", "carport", "roof", "shelter"))) \
+        and not airside
     if barn:
         floor_h = 5.5 if area >= 150 else 3.5          # one tall storey; the gable above it
     if h is None and nf is None:
@@ -1209,6 +1225,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             # under tiled pitched roofs, predicted flat as a block before)
             roof = "flat" if measured_rise < RISE_FLAT_M else \
                 ("gabled" if seed < 1.0 - style.hipped else "hipped")
+        elif airside:
+            roof = "flat"           # (a pier's or a walkway's roof: flat; a mapped one is kept above)
         elif church and neighbours == 0:
             roof = "gabled"
         elif neighbours >= 1:
@@ -1356,8 +1374,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         plain = False
     wall = None
     house = (cls in HOUSE_CLASSES or (area < 260 and not shop and not industrial)) and not row and not shed \
-        and not part \
-        and neighbours == 0 and area < 300         # a long "residential" block is not a house (Fells Point)
+        and not part         and neighbours == 0 and area < 300 and not airside         # a long "residential" block is not a house (Fells Point)
     if house and band is not BAND_BRICK and nf <= 3:
         # detached houses: siding in the East and South, stucco in the West; windows laid over the wall
         u = _hash01(seed, "wall")
@@ -1459,8 +1476,16 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         facade, band, plain = OFFICE, BAND_OFFICE, False
     elif garage:
         facade, band, plain = FACADE_TINTS[3], BAND_PANEL, False
+    elif airside:
+        # (glass or light panels by the seed, whatever the map says of the walls: never brick, siding or stucco)
+        wall, plain = None, False
+        if _hash01(seed, "airside look") < AIRSIDE_GLASS_SHARE:
+            facade = f"{OFFICE}|{int(_hash01(seed, 'glass tint') * len(WALL_TINTS[OFFICE]))}"
+            band = BAND_OFFICE if _hash01(seed, "airside band") < 0.5 else BAND_OFFICE2
+        else:
+            facade, band = AIRSIDE_PANEL_TINTS[int(_hash01(seed, "airside tint") * len(AIRSIDE_PANEL_TINTS))], BAND_PANEL
     windows = attrs.get("_tower") not in ("shaft", "cap")      # (a control tower's concrete: no rows of windows)
-    if not (shed or barn or row or house or terminal or garage or church) and nf <= 2 and roof == "flat" \
+    if not (shed or barn or row or house or terminal or garage or church or airside) and nf <= 2 and roof == "flat" \
             and (area >= BIG_BOX_M2 or industrial) \
             and cls not in HOUSE_CLASSES and cls != "apartments":
         kind = METALWALL if industrial else PANEL
@@ -1568,7 +1593,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 pitch=math.degrees(dmath.atan2(dome_rise(roof, hw, rh), max(float(hw), 0.1))) if roof in DOME_ROOFS
                 else (mapped_pitch(roof, shw, attrs.get("roof_height")) or style.pitch),
                 across=across, hi=hi, roof_h=mapped_roof_h(roof, attrs.get("roof_height")), hf=hf, skel=skel,
-                skel_cap=skel_cap, slope_dir=_slope_dir(roof, attrs.get("roof_direction")))
+                skel_cap=skel_cap, slope_dir=_slope_dir(roof, attrs.get("roof_direction")), airside=airside)
     if skel:
         spec.pitch = skel_pitch
     return francehouses.adapt(spec, attrs, lat, lon)
@@ -2228,6 +2253,8 @@ def _clutter(m, spec, ring, z_eave, mat_idx):
     if spec.roof != "flat" or spec.plain or spec.cls in CHURCH_CLASSES or len(ring) < 3 \
             or spec.cls in ("mast", "tank", "greenhouse", airportbuildings.TOWER_CLASS):
         return
+    if spec.airside and _area2(np.asarray(ring, np.float64)[:, :2]) / 2 < AIRSIDE_CLUTTER_MIN_M2:
+        return                          # (a small airside roof, a pier's or a walkway's: bare)
     import fast
     fast.require(187, "roof_kit")
     ring = np.asarray(ring, np.float64)[:, :2]
@@ -5295,6 +5322,16 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         attrs[-1].update(_tower=pat["_tower"], **{"class": airportbuildings.TOWER_CLASS})
                     looks.append(look)
                     mins.append(pmh)
+                    if airport is not None and pmh > airportbuildings.AIRSIDE_RAISED_M and not pat.get("_tower") \
+                            and airport.airside(r, at):
+                        # (a raised airside part, a walkway or a bridge over a stand: it floats, as mapped, on pillars
+                        # to its underside, drawn through this path as any part)
+                        for pr_ in airportbuildings.pillars(r):
+                            rings.append(pr_)
+                            attrs.append({"class": at["class"], "height": pmh - 0.02, "num_floors": None,
+                                          "roof_shape": "flat", "building_height": top, "_pillar": True})
+                            looks.append(look)
+                            mins.append(0.0)
                 if key is not None:
                     seen.add(key)
                 # (the outline kept with its parts is no building of its own: no steeple of ours on it, its parts
@@ -5514,6 +5551,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                                                                        or at.get("landmark")) \
                 and airport.terminal(ring, at):
             at = dict(at, _terminal=True)       # (an airport terminal: its look and its height by its size)
+        elif airport is not None and not (at.get("ship") or at.get("pier") or at.get("landmark") or at.get("_pillar")) \
+                and airport.airside(ring, at):
+            at = dict(at, _airside=True)        # (on the airside, a pier, a satellite or a walkway: the terminal's look)
         if tank_paths is not None and look is None and str(at.get("class") or "") not in TANK_CLASSES:
             cxy = np.asarray(ring, np.float64)[:, :2].mean(0)
             for t_, tp in enumerate(tank_paths):

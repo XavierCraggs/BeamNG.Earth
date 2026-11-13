@@ -16,6 +16,15 @@ aeroways reads it (airport subtype, class, unpaved surfaces skipped, kind-2 line
 Features of every cell it touches: those are read once (by id) and the strokes of a list of Features are memoized on its
 first (bounded), so every tile of a block shares them. Pure: no ground, no frame.
 
+Stand lead-ins (strokes / tile_chunks take `stands`, parkedaircraft's Craft list of the cells, parkedaircraft.kept_stands):
+for each gate or remote stand (not a general-aviation row) a yellow line (CENTRE_KIND, CENTRE_W_M: the same paint) from the
+taxiway or taxilane that the aircraft's axis (extended tail-ward) meets nearest: along that line, then a quadratic Bezier
+arc (tangent length of a radius of half the wingspan: LEAD_RADIUS_K; tighter where the lane or the straight run is short)
+into a straight run along the axis to the nose, and a stop bar STOP_BAR_M across the axis at the nose. A lane that ends
+short of the axis is carried on straight (up to LEAD_EXT_M) to it; a lane's end the nose points along (the stand's own
+mapped lead-in) is carried on to the nose. A stand with no lane gets nothing. The mapped lines are cut only at runways (not
+at an apron's edge).
+
 scene(feats_list) -> Scene: the same read (the ways with their `ref`, the runways with theirs, the runway holding
 positions) in one local metre frame, for the airfield signs (airfieldsigns: a runway's signs stand at those positions).
 
@@ -23,15 +32,20 @@ tile_chunks(feats_list, frame, tx, ty, elev, tile_bbox) -> road chunks ({"m", "w
 AirportGrader.tile_chunks draws the runway markings (airportgrade.MARK_LOOK, MARK_PIECE_M, MARK_NODE_M): a centreline
 is one polyline cut into pieces (so its bends are one road), each piece in the tile of its midpoint.
 """
+import logging
 import weakref
 
 import numpy as np
 
 import aeroways
 import airportgrade
+import dmath
 import dnp
 import geodesy
 import geotiles
+import parkedaircraft as pa
+
+log = logging.getLogger(__name__)
 
 CENTRE_W_M = 0.15           # m: the centreline's width (ICAO Annex 14: 0.15 m on a taxiway, 0.3 m on a runway's)
 CENTRE_KIND = "taxi_centreline"
@@ -49,6 +63,16 @@ MIN_RUN_M = 0.5             # a centreline fragment shorter than this (a sliver 
 REACH_M = 150.0             # the margin round a tile whose cells the hook reads (a runway's and a way's join)
 CACHE_MAX = 8               # strokes kept per first Features (one per list of cells asked)
 HOLD_POINT = "holding_position"
+LEAD_MODES = ("gate", "remote")     # the stands (parkedaircraft's Craft.mode) that get a lead-in
+LEAD_RADIUS_K = 0.5                 # the lead-in's curve: the radius of this of the wingspan
+LEAD_MAX_M = 150.0                  # a lane meeting the axis further than this behind the nose is none
+LEAD_EXT_M = 80.0                   # a lane's end carried on to the axis by up to this far
+LEAD_STRAIGHT_M = 2.0               # the straight run along the axis at least this long
+LEAD_D_MIN_M = 2.0                  # the curve's tangent length at least this
+LEAD_MIN_SIN = 0.17                 # a lane within 10 degrees of the axis (sine) is not crossed by it
+ALONG_COS = 0.94                    # a lane end the nose points along (20 degrees) ...
+ALONG_LAT_M = 2.0                   # ... within this of the axis, is the stand's own lead-in
+STOP_BAR_M = 3.0                    # the stop bar's length across the axis
 _RAW = "_taxiway_raw"
 _MEMO = "_taxiway_marks"
 _SCENE = "_taxiway_scene"
@@ -367,6 +391,133 @@ def _scene(feats_list):
                  [(xy, half, x[3]) for (xy, half), x in zip(rw, runways)], sites)
 
 
+def _lanes(sc):
+    """The scene's way segments for the lead-ins, kept on it: (a (m, 2), unit direction t (m, 2), length (m,), first (m,)
+    and last (m,) of a way's, ends [(point, unit direction out of the way)])."""
+    got = sc.memo.get("lanes")
+    if got is None:
+        a, b, first, last, ends = [np.zeros((0, 2))], [np.zeros((0, 2))], [np.zeros(0, bool)], [np.zeros(0, bool)], []
+        for xy, *_ in sc.ways:
+            if len(xy) < 2:
+                continue
+            a.append(xy[:-1])
+            b.append(xy[1:])
+            f, l = np.zeros(len(xy) - 1, bool), np.zeros(len(xy) - 1, bool)
+            f[0], l[-1] = True, True
+            first.append(f)
+            last.append(l)
+            for p, q in ((xy[0], xy[1]), (xy[-1], xy[-2])):
+                e = p - q
+                ends.append((p, e / max(float(dnp.hypot(*e)), _EPS)))
+        a, b = np.concatenate(a), np.concatenate(b)
+        ln = dnp.hypot(*(b - a).T)
+        got = sc.memo["lanes"] = (a, (b - a) / np.maximum(ln, _EPS)[:, None], ln, np.concatenate(first),
+                                  np.concatenate(last), ends)
+    return got
+
+
+def _lead_line(lanes, n, u, r):
+    """(polyline (k, 2), True) of the lead-in of a stand whose nose is at n, the nose direction u (unit), the curve's
+    radius r: from the lane the axis (tail-ward from n) meets nearest to n, along it, round the arc into the straight run
+    to n; (None, True) where a lane already reaches n; (None, False) without a lane."""
+    a, t, ln, first, last, ends = lanes
+    best = None
+    for p, e in ends:                                   # (a lane's end the nose points along: its own lead-in)
+        v = n - p
+        along = float(v[0] * e[0] + v[1] * e[1])
+        lat = abs(float(v[0] * e[1] - v[1] * e[0]))
+        if float(e[0] * u[0] + e[1] * u[1]) >= ALONG_COS and lat <= ALONG_LAT_M and -2.0 <= along <= LEAD_MAX_M \
+                and (best is None or along < best[0]):
+            best = (along, p)
+    if best is not None:
+        return (None, True) if best[0] < 1.0 else (np.array([best[1], n]), True)
+    if not len(a):
+        return None, False
+    mid = a + t * (ln / 2.0)[:, None]
+    near = np.flatnonzero(dnp.hypot(*(mid - n).T) <= LEAD_MAX_M + ln / 2.0)
+    if not len(near):
+        return None, False
+    a_, t_, l_ = a[near], t[near], ln[near]
+    w = n - a_
+    det = t_[:, 0] * u[1] - t_[:, 1] * u[0]
+    ok = np.abs(det) >= LEAD_MIN_SIN
+    det = np.where(ok, det, 1.0)
+    tau = (w[:, 0] * u[1] - w[:, 1] * u[0]) / det                   # the axis (n - s u) meets the lane at a + tau t
+    s = (t_[:, 0] * w[:, 1] - t_[:, 1] * w[:, 0]) / det
+    cos = t_[:, 0] * u[0] + t_[:, 1] * u[1]
+    # (the way's sense that turns into the stand: the one that bends less; across it, the one with more way behind the meeting)
+    fwd = np.where(np.abs(cos) < 0.02, tau >= l_ - tau, cos > 0.0)
+    tp = np.where(fwd, tau, l_ - tau)                               # the meeting along that sense from its start
+    ext = np.where(fwd, last[near], first[near]) * LEAD_EXT_M       # (carried on past the way's end)
+    ca, sa = np.abs(cos), np.abs(det)
+    d = np.minimum(np.minimum(r * sa / (1.0 + ca), tp), s - LEAD_STRAIGHT_M)    # the arc's tangent length
+    ok &= (s <= LEAD_MAX_M) & (tp <= l_ + ext) & (d >= LEAD_D_MIN_M)
+    if not ok.any():
+        return None, False
+    k = int(np.argmin(np.where(ok, s + np.maximum(tp - l_, 0.0), np.inf)))
+    tt = t_[k] if fwd[k] else -t_[k]
+    start = a_[k] if fwd[k] else a_[k] + t_[k] * l_[k]
+    tpk, dk = float(tp[k]), float(d[k])
+    x = start + tt * tpk                                            # where the lane's line meets the axis: the control point
+    p0, p2 = x - tt * dk, x + u * dk
+    pts = [start + tt * min(tpk - dk, float(l_[k]))]
+    if float(dnp.hypot(*(p0 - pts[0]))) > 0.05:
+        pts.append(p0)                                              # (the lane carried on to the arc)
+    theta = dmath.atan2(float(sa[k]), float(ca[k]))
+    arc = dk * (1.0 + float(ca[k])) / float(sa[k]) * theta
+    m = min(40, max(6, int(arc / 1.5) + 1))
+    for i in range(1, m):
+        q = i / m
+        pts.append((1.0 - q) * (1.0 - q) * p0 + 2.0 * (1.0 - q) * q * x + q * q * p2)
+    pts += [p2, n]
+    return np.array(pts), True
+
+
+def _lead_lines(sc, stands):
+    """(lines, boxes) (_build's form) of the lead-ins and stop bars of the stands (parkedaircraft Craft), memoized on the
+    scene."""
+    st = [c for c in stands if c.mode in LEAD_MODES]
+    if not st:
+        return [], np.zeros((0, 4))
+    key = ("lead", tuple((c.kind, round(c.lat, 7), round(c.lon, 7), round(c.ne, 4), round(c.nn, 4)) for c in st))
+    got = sc.memo.get(key)
+    if got is not None:
+        return got
+    lanes = _lanes(sc)
+    e, nn, _ = sc.frame.geodetic_to_enu(np.array([c.lat for c in st]), np.array([c.lon for c in st]), np.zeros(len(st)))
+    out = []                                            # (xy (k, 2), kind)
+    for c, ce, cn in zip(st, np.asarray(e), np.asarray(nn)):
+        u = np.array([c.ne, c.nn])
+        u = u / max(float(dnp.hypot(*u)), _EPS)
+        length, span = pa.SPECS[c.kind][0], pa.SPECS[c.kind][1]
+        nose = np.array([ce, cn]) + u * (length / 2.0)
+        line, found = _lead_line(lanes, nose, u, LEAD_RADIUS_K * span)
+        if not found:
+            continue
+        if line is not None:
+            out.append(line)
+        v = np.array([-u[1], u[0]]) * (STOP_BAR_M / 2.0)
+        out.append(np.array([nose - v, nose + v]))
+    lines, boxes = [], []
+    for xy in out:
+        la, lo, _ = sc.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+        la, lo = np.asarray(la), np.asarray(lo)
+        lines.append((la, lo, CENTRE_W_M, CENTRE_KIND, COLOR))
+        boxes.append((la.min(), la.max(), lo.min(), lo.max()))
+    got = sc.memo[key] = (lines, np.array(boxes, np.float64).reshape(-1, 4))
+    return got
+
+
+def _all_marks(feats_list, stands):
+    """_marks plus the stands' lead-ins."""
+    lines, boxes = _marks(feats_list)
+    sc = scene(feats_list) if stands else None
+    if sc is None:
+        return lines, boxes
+    extra, xboxes = _lead_lines(sc, stands)
+    return (lines + extra, np.concatenate([boxes, xboxes])) if extra else (lines, boxes)
+
+
 def _cached(feats, slot, build):
     """build(feats), memoized on the first of feats under `slot` (CACHE_MAX lists, each checked to still hold the same
     live Features)."""
@@ -422,10 +573,11 @@ def _marks(feats_list):
     return _cached(feats, _MEMO, _build)
 
 
-def strokes(feats_list):
+def strokes(feats_list, stands=None):
     """The markings of the Features in feats_list (module docstring) as two-point strokes (lat0, lon0, lat1, lon1,
-    width, kind, color), [] for Features with no airport way in them."""
-    lines, _ = _marks(feats_list)
+    width, kind, color), [] for Features with no airport way in them; with `stands` (parkedaircraft's Craft), their
+    lead-ins too."""
+    lines, _ = _all_marks(feats_list, stands)
     return [(float(la[i]), float(lo[i]), float(la[i + 1]), float(lo[i + 1]), w, kind, color)
             for la, lo, w, kind, color in lines for i in range(len(la) - 1)]
 
@@ -452,17 +604,26 @@ def _pieces(ex, ey, box):
 
 def tile_chunks_md(md, keys, frame, tx, ty, elev, tile_bbox):
     """tile_chunks of the infrastructure Features of the map-data cells `keys` (mapdata.MapData md; the tile's cells
-    with REACH_M round it, roads.cells_of_tile)."""
-    return tile_chunks([md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure") for k in keys],
-                       frame, tx, ty, elev, tile_bbox)
+    with REACH_M round it, roads.cells_of_tile), with the lead-ins of the stands in them (parkedaircraft.kept_stands:
+    the cells' buildings and building parts decide where an aircraft stands)."""
+    infra = lambda k: md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+    feats = [infra(k) for k in keys]
+    stands = []
+    if any(pa.has_stands(f) for f in feats):
+        try:
+            stands = pa.kept_stands(keys, infra, pa.building_layers_fn(md))
+        except Exception as ex:                 # (the centrelines are worth more than the lead-ins)
+            log.warning("stand lead-ins: %s: %s", type(ex).__name__, ex)
+    return tile_chunks(feats, frame, tx, ty, elev, tile_bbox, stands)
 
 
-def tile_chunks(feats_list, frame, tx, ty, elev, tile_bbox):
+def tile_chunks(feats_list, frame, tx, ty, elev, tile_bbox, stands=None):
     """The taxiway markings (strokes) inside road tile (tx, ty) of `frame` as road chunks ({"m", "w", "tl", "p", "n":
     [[x, y, z], ...]}), as AirportGrader.tile_chunks does the runways': pieces of MARK_PIECE_M at most, each in the tile
     of its midpoint, nodes MARK_NODE_M apart, z from elev (the graded ground). feats_list: the infrastructure Features
-    of the cells around the tile (REACH_M). tile_bbox(tx, ty) -> (x0, y0, x1, y1)."""
-    lines, boxes = _marks(feats_list)
+    of the cells around the tile (REACH_M); stands: the Craft of those cells (their lead-ins are painted too).
+    tile_bbox(tx, ty) -> (x0, y0, x1, y1)."""
+    lines, boxes = _all_marks(feats_list, stands)
     if not lines:
         return []
     box = tile_bbox(tx, ty)

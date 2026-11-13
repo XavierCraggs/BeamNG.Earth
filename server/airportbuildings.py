@@ -11,7 +11,11 @@ context(frame, infra_layers, x0, y0) -> Context or None (no airport in the cells
 like the rings tile_buildings plans. Context.tower_parts(ring, at) / Context.terminal(ring, at) say what a footprint
 is: a tower as the parts of a shaft, a cab and a cap (the renderer draws them as any building's parts), a terminal as
 True (buildings.plan: the terminal look and a height by its size). A building with parts of its own is never asked:
-Heathrow's tower is an OSM stack of parts and was right already. Pure.
+Heathrow's tower is an OSM stack of parts and was right already. Context.airside(ring, at) says a footprint or a part of any
+size stands on the airside (within AIRSIDE_PAD_M of an apron or taxiway, AIRSIDE_GATE_M of a gate, neither a tower nor a
+hangar): Brisbane's piers, satellites and walkways come as many small parts or footprints with no height, and were brick
+houses (buildings.plan: glass and light panels, a flat roof, 6-9 m). pillars(ring) are the supports of a raised airside
+part (a walkway over a stand), square concrete columns. Pure.
 """
 import math
 import re
@@ -20,6 +24,7 @@ import numpy as np
 
 import aeroways
 import dnp
+import polygon
 
 GATE_CLASS = "airport_gate"
 TOWER_CLASS = "control_tower"   # (the class its parts are drawn as: no plant on the roofs, buildings._clutter)
@@ -64,6 +69,18 @@ TAN_8 = 0.41421356237309503     # tan(22.5 deg): the regular octagon's side, in 
 TERMINAL_MIN_M2 = 1500.0        # m2: a terminal's footprint at least this ...
 TERMINAL_GATES = 2              # ... with this many gate points ...
 TERMINAL_GATE_M = 40.0          # ... within this of its outline
+
+AIRSIDE_PAD_M = 30.0            # m: a building or part within this of an apron or taxiway pad is airside ...
+AIRSIDE_GATE_M = 60.0           # ... or within this of a gate point
+AIRSIDE_H_M = (6.0, 9.0)        # m: its height when not mapped (a pier's or a walkway's scale), by its seed
+AIRSIDE_RAISED_M = 2.0          # m: a part this far off the ground is a walkway or a bridge: it floats, on pillars
+PILLAR_M = 0.6                  # m: a pillar's side
+PILLAR_SPACING_M = 12.0         # m between them along the part's long axis (the ends in)
+PILLAR_INSET_M = 1.0            # m: the end pillars and the rows' inset from the part's outline
+PILLAR_TWIN_M = 5.0             # m: a part wider than this has a row near each long edge, else one down the middle
+PILLAR_MAX = 60                 # a part's pillars at most
+PILLAR_CLASS = "pillar"
+SAMPLE_M = 10.0                 # m: a footprint's outline sampled this finely for its distance to a pad
 
 _KEY = "_airport_scan"
 
@@ -147,13 +164,61 @@ def tower_parts(ring, h):
                                  "roof_color": CAP_COLOUR, "_tower": "cap"})]
 
 
+def _outline_samples(ring, step):
+    """Points along the closed outline ring (k, 2), at most `step` m apart."""
+    a, b = ring, np.roll(ring, -1, axis=0)
+    seg = dnp.hypot(b[:, 0] - a[:, 0], b[:, 1] - a[:, 1])
+    n = np.maximum(np.ceil(seg / step), 1.0).astype(np.int64)
+    return np.concatenate([a[i] + (b[i] - a[i]) * (np.arange(n[i]) / float(n[i]))[:, None] for i in range(len(a))])
+
+
+def pillars(ring):
+    """The pillars [(ring (4, 2), counter-clockwise)] under a raised part on footprint ring (k, 2): squares of PILLAR_M, one
+    every PILLAR_SPACING_M or less along the part's long axis (the first and last PILLAR_INSET_M in from its ends), in
+    a row near each long edge where the part is wider than PILLAR_TWIN_M, else down its middle; only where inside the
+    footprint, at most PILLAR_MAX. The long axis: the longest edge's direction, or across it where the part is longer
+    that way. Pure."""
+    ring = np.asarray(ring, np.float64)[:, :2]
+    if len(ring) > 1 and np.allclose(ring[0], ring[-1]):
+        ring = ring[:-1]
+    if len(ring) < 3:
+        return []
+    d = np.roll(ring, -1, axis=0) - ring
+    k = int(np.argmax(dnp.hypot(d[:, 0], d[:, 1])))
+    u = d[k] / max(float(dnp.hypot(d[k, 0], d[k, 1])), 1e-9)
+    v = np.array([-u[1], u[0]])
+    a, b = dnp.matmul(ring, u), dnp.matmul(ring, v)
+    if float(b.max() - b.min()) > float(a.max() - a.min()):
+        u, v = v, -u                            # (still a right-handed pair: v is u turned a quarter counter-clockwise)
+        a, b = dnp.matmul(ring, u), dnp.matmul(ring, v)
+    a0, a1, b0, b1 = float(a.min()), float(a.max()), float(b.min()), float(b.max())
+    length, width = a1 - a0, b1 - b0
+    if length > 2.0 * PILLAR_INSET_M + PILLAR_M:
+        along = np.linspace(a0 + PILLAR_INSET_M, a1 - PILLAR_INSET_M, max(1, math.ceil(length / PILLAR_SPACING_M)) + 1)
+    else:
+        along = np.array([(a0 + a1) / 2.0])
+    if width > PILLAR_TWIN_M:
+        across = np.array([b0 + PILLAR_INSET_M, b1 - PILLAR_INSET_M])
+    else:
+        across = np.array([(b0 + b1) / 2.0])
+    pts = np.array([x * u + y * v for x in along for y in across])
+    pts = pts[np.asarray(polygon.contains_points(ring, pts), bool)]
+    if not len(pts):
+        c = ring.mean(0)
+        pts = c[None] if bool(polygon.contains_points(ring, c[None])[0]) else pts
+    if len(pts) > PILLAR_MAX:
+        pts = pts[np.linspace(0, len(pts) - 1, PILLAR_MAX).round().astype(np.int64)]
+    h = PILLAR_M / 2.0
+    return [c + np.array([-h * u - h * v, h * u - h * v, h * u + h * v, -h * u + h * v]) for c in pts]
+
+
 class Context:
     """An airport's gates and pads round a tile, in metres relative to (x0, y0), made when asked for."""
 
     def __init__(self, frame, layers, x0, y0):
         self.frame, self.layers, self.x0, self.y0 = frame, layers, x0, y0
         self.intl = any(_scan(f)[1] for f in layers)
-        self._gates = self._pads = None
+        self._gates = self._pads = self._pad_rings = self._reach = None
 
     def gates(self):
         """The airport_gate points (m, 2)."""
@@ -179,6 +244,63 @@ class Context:
             else:
                 self._pads = np.empty((0, 2))
         return self._pads
+
+    def pad_rings(self):
+        """(the aprons' and taxiways' outlines [(k, 2)], their boxes' low and high corners (n, 2) each): aeroways.pads
+        without the runways' own strips, in metres relative to the tile."""
+        if self._pad_rings is None:
+            rings = []
+            for la, lo in aeroways.pads(self.layers, runways=False):
+                if len(la) >= 3:
+                    e, n, _ = self.frame.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), 0.0)
+                    rings.append(np.stack([np.asarray(e) - self.x0, np.asarray(n) - self.y0], 1))
+            self._pad_rings = (rings, np.array([r.min(0) for r in rings]).reshape(-1, 2),
+                               np.array([r.max(0) for r in rings]).reshape(-1, 2))
+        return self._pad_rings
+
+    def _airside_reach(self):
+        """The box (low corner, high corner) round every pad and gate that a building could be airside in, None if none."""
+        if self._reach is None:
+            _, lo, hi = self.pad_rings()
+            g = self.gates()
+            los = ([lo.min(0) - AIRSIDE_PAD_M] if len(lo) else []) + ([g.min(0) - AIRSIDE_GATE_M] if len(g) else [])
+            his = ([hi.max(0) + AIRSIDE_PAD_M] if len(hi) else []) + ([g.max(0) + AIRSIDE_GATE_M] if len(g) else [])
+            self._reach = (np.min(los, axis=0), np.max(his, axis=0)) if los else False
+        return self._reach or None
+
+    def airside(self, ring, at):
+        """Is the footprint ring (k, 2; relative to the tile) with attributes `at` a building or a part on the airside:
+        within AIRSIDE_PAD_M of an apron or taxiway pad (on one too), or within AIRSIDE_GATE_M of a gate point; not a
+        control tower (or its parts), a hangar or a parking structure. Any size: a pier, a satellite, a walkway."""
+        name, cls = str(at.get("name") or "").lower(), str(at.get("class") or "").lower()
+        if cls == TOWER_CLASS or at.get("_tower") or at.get("_pillar") or cls in NOT_TERMINAL_CLASS \
+                or any(w in name for w in NOT_TERMINAL_NAME) or TOWER_NAME.search(name):
+            return False
+        reach = self._airside_reach()
+        ring = np.asarray(ring, np.float64)[:, :2]
+        if reach is None or len(ring) < 3:
+            return False
+        lo, hi = ring.min(0), ring.max(0)
+        if (hi < reach[0]).any() or (lo > reach[1]).any():
+            return False
+        g = self.gates()
+        if len(g):
+            g = g[((g >= lo - AIRSIDE_GATE_M) & (g <= hi + AIRSIDE_GATE_M)).all(axis=1)]
+            if len(g) and (bool(polygon.contains_points(ring, g).any())
+                           or float(_outline_dist(g, ring).min()) <= AIRSIDE_GATE_M):
+                return True
+        rings, plo, phi = self.pad_rings()
+        near = np.flatnonzero(((phi >= lo - AIRSIDE_PAD_M) & (plo <= hi + AIRSIDE_PAD_M)).all(axis=1)) if len(rings) else ()
+        if not len(near):
+            return False
+        samples = _outline_samples(ring, SAMPLE_M)
+        for i in near:
+            r = rings[int(i)]
+            # (near its outline, over it or inside it, or a pad vertex inside the footprint: a pad inside it)
+            if float(_outline_dist(samples, r).min()) <= AIRSIDE_PAD_M or bool(polygon.contains_points(r, samples).any()) \
+                    or bool(polygon.contains_points(ring, r).any()):
+                return True
+        return False
 
     def near_pad(self, c, within=TOWER_PAD_M):
         p = self.pads()

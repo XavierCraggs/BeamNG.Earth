@@ -227,6 +227,110 @@ class TerminalTest(unittest.TestCase):
         self.assertFalse(shop.terminal)
 
 
+class AirsideTest(unittest.TestCase):
+    """Brisbane's piers, satellites and walkways: many small footprints or parts, no height, drawn as brick houses."""
+    PADS = infra(FIELD, apron(0, 0, 90, 90), apron(120, 0, 130, 90), gate(40, 40))
+
+    def spec(self, ring, pads=None, **at):
+        got = items(building(ring, **at), self.PADS if pads is None else pads)
+        self.assertEqual(len(got), 1)
+        return got[0][0]
+
+    def test_a_small_pier_by_an_apron_takes_the_terminal_look(self):
+        specs = [self.spec(rect(100 + 12 * k, 100, 10 + k % 3, 9 + k % 4)) for k in range(10)]
+        lo, hi = ab.AIRSIDE_H_M
+        for s in specs:
+            self.assertFalse(s.porch or s.wall or s.plain or s.steeple, "no house, shed or plain wall")
+            self.assertNotEqual(s.band, bld.BAND_BRICK)
+            self.assertNotIn(s.facade, bld.BRICK_TINTS[1:])
+            self.assertEqual(s.roof, "flat")
+            self.assertTrue(s.windows)
+            self.assertTrue(s.airside)
+            self.assertTrue(lo <= s.height <= hi, s.height)      # (6-9 m)
+        glass = [s for s in specs if s.facade.startswith(bld.OFFICE)]
+        self.assertTrue(0 < len(glass) < len(specs), "glass and light panels, by the seed")
+        for s in specs:
+            if s not in glass:
+                self.assertIn(s.facade, bld.AIRSIDE_PANEL_TINTS)
+                self.assertEqual(s.band, bld.BAND_PANEL)
+
+    def test_the_same_building_off_an_airport_is_as_before(self):
+        b = building(rect(100, 100, 12, 10))        # (its id seeds its look: the same one both ways)
+        off = items(b, None, airport=False)[0][0]
+        self.assertFalse(off.airside)
+        far = infra(FIELD, apron(-2500, -2500, 90, 90), gate(-2500, -2500))
+        got = items(b, far)[0][0]
+        for k in ("facade", "band", "height", "roof", "wall", "windows"):
+            self.assertEqual(getattr(got, k), getattr(off, k), k)
+        self.assertFalse(got.airside)
+
+    def test_within_30_m_of_a_pad_or_60_m_of_a_gate(self):
+        self.assertTrue(self.spec(rect(110, 100, 10, 10)).airside, "20 m from the apron's corner")
+        self.assertFalse(self.spec(rect(190, 190, 10, 10), pads=infra(FIELD, apron(0, 0, 90, 90))).airside, "100 m off")
+        self.assertTrue(self.spec(rect(190, 190, 10, 10), pads=infra(FIELD, gate(150, 190))).airside, "40 m from a gate")
+        self.assertFalse(self.spec(rect(230, 230, 10, 10), pads=infra(FIELD, gate(150, 190))).airside, "over 60 m")
+        # (a long thin pier across a taxiway: its ends are far from the pavement, its middle is on it)
+        way = (mapgeom.LINE, [(200, 100), (200, 250)], "taxiway")
+        self.assertTrue(self.spec(rect(150, 170, 100, 6), pads=infra(FIELD, way)).airside)
+
+    def test_not_a_tower_a_hangar_or_a_garage(self):
+        for at in (dict(name="Hangar 3"), {"class": "hangar"}, {"class": "parking_garage"}):
+            self.assertFalse(self.spec(rect(110, 100, 20, 15), **at).airside, at)
+
+    def test_a_mapped_height_is_kept_and_a_terminal_keeps_its_sizing(self):
+        self.assertAlmostEqual(self.spec(rect(110, 100, 12, 10), height=14.0).height, 14.0, delta=0.7)
+        term = self.spec(rect(100, 100, 60, 30), name="Terminal 1")
+        self.assertFalse(term.airside)
+        self.assertEqual(term.facade, bld.OFFICE)
+        self.assertAlmostEqual(term.height, float(np.clip(8 + np.sqrt(1800) / 12, 12, 20)), places=3)
+
+    def test_a_small_airside_roof_has_no_plant(self):
+        small = self.spec(rect(110, 100, 12, 10))
+        m = bld.Mesh()
+        bld._clutter(m, small, small.ring, 8.0, None)
+        self.assertEqual(m.n, 0, "(returns before it asks the kit for boxes)")
+
+    def test_a_raised_airside_part_floats_on_pillars(self):
+        b = building(rect(100, 100, 40, 8), name="Pier B walkway", has_parts=1.0)
+        key = b.ids[0]
+        walk = Feats(["w1"], [rect(100, 100, 40, 8)], building_id=[key], height=[8.0], min_height=[5.0],
+                     num_floors=[np.nan], min_floor=[np.nan])
+        got = items(b, self.PADS, [walk])
+        deck = [s for s, _, _ in got if s.cls != "pillar"]
+        pills = [s for s, _, _ in got if s.cls == "pillar"]
+        self.assertEqual(len(deck), 1)
+        self.assertAlmostEqual(deck[0].min_h, 5.0, places=3, msg="it still floats, as mapped")
+        self.assertEqual(len(pills), 10, "5 stations (12 m apart or less) in a pair of rows")
+        for p in pills:
+            self.assertEqual((p.min_h, p.facade, p.windows), (0.0, "bne_precast", False))
+            self.assertAlmostEqual(p.height, 5.0 - 0.02, places=3)
+            self.assertAlmostEqual(abs(bld._area2(p.ring)) / 2, ab.PILLAR_M ** 2, places=3)
+            c = p.ring.mean(0)
+            self.assertTrue(100 <= c[0] <= 140 and 100 <= c[1] <= 108, "under the part")
+        ys = sorted({round(float(p.ring.mean(0)[1]), 1) for p in pills})
+        self.assertEqual(ys, [101.0, 107.0], "a row near each long edge")
+        xs = sorted({round(float(p.ring.mean(0)[0]), 1) for p in pills})
+        self.assertLessEqual(float(np.diff(xs).max()), ab.PILLAR_SPACING_M + 0.1)
+        self.assertGreater(len(bld.build(got)[0]), 0)
+        # (off the airport, or low: none)
+        self.assertEqual(len(items(b, self.PADS, [walk], airport=False)), 1)
+        low = Feats(["w2"], [rect(100, 100, 40, 8)], building_id=[key], height=[8.0], min_height=[1.5],
+                    num_floors=[np.nan], min_floor=[np.nan])
+        self.assertEqual(len(items(b, self.PADS, [low])), 1)
+
+    def test_pillars_down_the_middle_of_a_narrow_part_and_inside_an_l(self):
+        got = ab.pillars(np.array(rect(0, 0, 30, 4)[:-1], np.float64))
+        self.assertEqual(len(got), 4)
+        self.assertEqual({round(float(g.mean(0)[1]), 3) for g in got}, {2.0})
+        for g in got:
+            self.assertGreater(float(bld._area2(g)), 0.0, "counter-clockwise")
+        ell = np.array([(0, 0), (30, 0), (30, 8), (8, 8), (8, 30), (0, 30)], np.float64)
+        import polygon
+        for g in ab.pillars(ell):
+            self.assertTrue(bool(polygon.contains_points(ell, g.mean(0)[None])[0]))
+        self.assertLessEqual(len(ab.pillars(np.array(rect(0, 0, 900, 20)[:-1], np.float64))), ab.PILLAR_MAX)
+
+
 class UnchangedTest(unittest.TestCase):
     def snapshot(self, its):
         return [(s.ring.tolist(), s.height, s.min_h, s.floors, s.facade, s.roof, s.roof_mat, s.windows) for s, _, _ in its]

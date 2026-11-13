@@ -258,6 +258,111 @@ class IlsMasts(unittest.TestCase):
         self.assertEqual(len(whole) - 4, len(al.runway_lights(runway(LONG))))
 
 
+def layer(name, kind, rows, cls, sub):
+    """Features of (east, north) lines (kind LINE) or rings (POLYGON) in FRAME, one class and subtype."""
+    ids = np.array([f"c{i:03d}" for i in range(len(rows))])
+    geoms = [(kind, [[lonlat(list(r) + ([r[0]] if kind == mapgeom.POLYGON else []))]]) for r in rows]
+    f = mapgeom.build(name, ids, geoms)
+    f.attrs = {"class": mapgeom.text_column([cls] * len(rows)), "subtype": mapgeom.text_column([sub] * len(rows)),
+               "tags": mapgeom.text_column(["{}"] * len(rows)), "surface": mapgeom.text_column([None] * len(rows))}
+    return f
+
+
+def box_at(x, y, w=20.0, d=20.0):
+    return [(x - w / 2, y - d / 2), (x + w / 2, y - d / 2), (x + w / 2, y + d / 2), (x - w / 2, y + d / 2)]
+
+
+class Clearance(unittest.TestCase):
+    """Approach lights, PAPIs and ILS aerials are not put on the pavement, inside buildings or on roads."""
+    BIG = (-1500.0, -400.0, 4500.0, 400.0)
+
+    def rows(self, rw=None, box=BIG, apron=(), buildings=(), roads=(), runway_line=False):
+        infra = [area(r) for r in apron]
+        if runway_line:
+            infra.append(way([(-500.0, 0.0), (LONG + 500.0, 0.0)], cls="runway"))
+        f = feats(*infra) if infra else None
+        b = layer("buildings", mapgeom.POLYGON, list(buildings), "", "") if buildings else None
+        r = layer("roads", mapgeom.LINE, list(roads), "service", "road") if roads else None
+        rw = rw or runway(LONG)
+        return al.tile_rows(FRAME, box, lambda k: f, lambda k: [rw], lambda la, lo: np.full(np.shape(la), 12.0), keys=[0],
+                            roads_fn=(lambda k: r) if r is not None else None,
+                            buildings_fn=(lambda k: b) if b is not None else None)
+
+    @staticmethod
+    def of(rows, group):
+        return sorted((r[1], r[2]) for r in rows if r[0] == group)
+
+    def approach(self, rows):
+        """The approach lights' (east, north): the white glow rows outside the runway between its edge lights' rows ..."""
+        return [r for r in rows if r[0] == al.GROUPS[al.WHITE] and (r[1] < -10.0 or r[1] > LONG + 10.0)
+                and abs(r[2]) < 16.0]
+
+    def test_nothing_in_the_way_changes_nothing(self):
+        base = self.rows()
+        self.assertEqual(len(self.approach(base)), 80)
+        self.assertEqual(len([r for r in base if r[0] in al.ILS_H]), 4)
+        far = self.rows(apron=[box_at(1500.0, 300.0, 100.0, 60.0)], buildings=[box_at(1500.0, -300.0)],
+                        roads=[[(1500.0, -400.0), (1500.0, 400.0)]])
+        self.assertEqual(far, base)
+
+    def test_a_localizer_on_an_apron_is_left_out_and_the_approach_row_stops_before_it(self):
+        pad = box_at(LONG + 315.0, 0.0, 130.0, 80.0)            # (Brisbane's: the domestic apron past the end)
+        got = self.rows(apron=[pad])
+        locs = self.of(got, "ils_loc")
+        self.assertEqual(len(locs), 1)
+        self.assertLess(locs[0][0], 0.0)                         # (the west one stays)
+        self.assertEqual(len(self.of(got, "ils_gs")), 2)
+        east = [r for r in self.approach(got) if r[1] > LONG]
+        self.assertEqual(len(east), 8, "the row from 30 m to 240 m: it ends before the apron's edge (250 m)")
+        self.assertLess(max(r[1] for r in east), LONG + 250.0)
+        self.assertEqual(len([r for r in self.approach(got) if r[1] < 0.0]), 40, "the other end whole")
+
+    def test_the_apron_alone_is_what_counts_not_the_runways_own_mapped_paving(self):
+        self.assertEqual(self.rows(runway_line=True), self.rows())
+
+    def test_a_papi_unit_in_a_building_is_left_out(self):
+        out = WIDTH / 2 + al.PAPI_OFF_M
+        base = self.rows()
+        got = self.rows(buildings=[box_at(al.PAPI_AT_M, out + al.PAPI_STEP_M, 6.0, 6.0)])
+        self.assertEqual(len(base) - len(got), 1)
+        red = al.GROUPS[al.RED]
+        self.assertEqual(len([r for r in base if r[0] == red]) - len([r for r in got if r[0] == red]), 1, "(the second unit)")
+
+    def test_a_road_within_5_m_drops_only_the_light_on_it(self):
+        base = self.rows()
+        got = self.rows(roads=[[(-92.0, -200.0), (-92.0, 200.0)]])           # 2 m from the light 90 m out
+        west = sorted(r[1] for r in self.approach(got) if r[1] < 0.0)
+        self.assertEqual(len(west), len([r for r in self.approach(base) if r[1] < 0.0]) - 1, "the row goes on over it")
+        self.assertFalse(any(abs(x + 90.0) < 0.5 for x in west))
+        self.assertEqual(len(self.approach(got)), len(self.approach(base)) - 1)
+        near = self.rows(roads=[[(-96.5, -200.0), (-96.5, 200.0)]])          # 6.5 m off the light: clear
+        self.assertEqual(len(self.approach(near)), len(self.approach(base)))
+        foot = layer("roads", mapgeom.LINE, [[(-92.0, -200.0), (-92.0, 200.0)]], "footway", "road")
+        rw = runway(LONG)
+        got = al.tile_rows(FRAME, self.BIG, lambda k: None, lambda k: [rw], lambda la, lo: np.full(np.shape(la), 12.0),
+                           keys=[0], roads_fn=lambda k: foot)
+        self.assertEqual(len(self.approach(got)), 80, "a footpath is no road")
+
+    def test_a_mast_with_its_half_width_clear_of_a_building(self):
+        # (the localizer array is 30 m wide: a building 17-23 m off its centre clears it, one 11-17 m off is in its width)
+        self.assertEqual(len(self.of(self.rows(buildings=[box_at(LONG + 315.0 + 20.0, 0.0, 6.0, 6.0)]), "ils_loc")), 2)
+        self.assertEqual(len(self.of(self.rows(buildings=[box_at(LONG + 315.0 + 14.0, 0.0, 6.0, 6.0)]), "ils_loc")), 1)
+        self.assertEqual(len(self.of(self.rows(buildings=[box_at(LONG + 315.0, 0.0, 6.0, 6.0)]), "ils_loc")), 1)
+
+    def test_each_tile_decides_alike(self):
+        pad = box_at(LONG + 315.0, 0.0, 130.0, 80.0)
+        whole = self.rows(apron=[pad])
+        a, b = self.rows(apron=[pad], box=(-1500.0, -400.0, 1500.0, 400.0)), \
+            self.rows(apron=[pad], box=(1500.0, -400.0, 4500.0, 400.0))
+        self.assertEqual(sorted(map(tuple, a + b)), sorted(map(tuple, whole)))
+
+    def test_a_closed_runway_and_a_closed_airport_have_no_ils_or_approach_lights(self):
+        for rw in (runway(LONG, closed=1), runway(LONG, type="closed")):
+            self.assertEqual(al.ils_masts(rw), [])
+            self.assertEqual(len([r for r in self.rows(rw=rw) if r[0] in al.ILS_H]), 0)
+            self.assertEqual(len(self.approach(self.rows(rw=rw))), 0)
+
+
 class Shapes(unittest.TestCase):
     """The generated shapes (tools/build_ils.py) are the ones the rows are made for."""
     SHAPES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",

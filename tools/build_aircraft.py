@@ -47,7 +47,8 @@ DIMS = {                        # kind: (length m, wing span m, tail fin top hei
     "wide": (63.7, 60.1, 17.5),
 }
 COL_FIT = 0.9                   # the collision boxes' half sizes as a fraction of the skin's (a box's corners stand off an ellipse)
-COL_MIN_T = 0.15                # m: the least half thickness of a collision wing, tailplane or fin section
+COL_MIN_T = 0.4                 # m: the least half thickness of a collision wing, tailplane or fin section (at
+                                # 0.15 a car's nodes went through the fin and tailplane between two physics steps)
 LODS = (160, 16)                # the pixel sizes the two levels of detail start at (the node names' suffixes)
 MATERIALS = {                   # name -> (baseColorFactor, metallic, roughness)
     "bne_ac_white": ((0.90, 0.90, 0.88, 1.0), 0.0, 0.45),
@@ -325,9 +326,11 @@ def build(kind, lod):
                        c + ra * R_p - ta * tip_w / 2, c + ra * r_sp * 0.8 - ta * root_w / 2], c, away=True)
 
     info = {}
+    gear_col = []                   # (x, y, half x, half y, top z): the gear's collision boxes, from the ground
     if kind == "light":
         prop(0.0, zc0 - 0.02, yn, yn + p["nose_ext"], 0.17, 0.95, 2, 80.0, 0.12, 0.07)
         ys_ = yn - 3.3
+        gear_col = [(s * 1.25, ys_, 0.2, 0.3, zc0 - 0.5) for s in (1.0, -1.0)] + [(0.0, yn - 1.6, 0.15, 0.25, zc0 - 0.58)]
         for side in (1.0, -1.0):                         # spring-steel mains, the wing struts
             strut(np.array([side * 0.40, ys_, zc0 - 0.50]), np.array([side * 1.25, ys_, 0.30]), 0.04)
             wheel(side * 1.25, ys_, 0.27, 0.27, 0.16)
@@ -382,6 +385,10 @@ def build(kind, lod):
                 wheel(side * xm, ym, rw, rw, ww)
         yg = yn - (6.5 if big else 4.7)
         rn, wn = (0.55, 0.90) if big else (0.38, 0.45)
+        # (the gear's collision: a box a leg from the ground to the wing or the belly; a car's nodes went through it)
+        gear_col = [(side * xm, ym, ww / 2.0 + 0.1, (1.4 + rw) if big else rw, wz(xm * 0.8) - thick(xm * 0.8) / 2.0)
+                    for side in (1.0, -1.0)]
+        gear_col.append((0.0, yg, wn / 2.0 + 0.1, rn, prof(yg)[2] - prof(yg)[1] + 0.1))
         strut(np.array([0.0, yg, prof(yg)[2] - prof(yg)[1] + 0.1]), np.array([0.0, yg, rn]), 0.2 if big else 0.1)
         wheel(0.0, yg, rn, rn, wn)
 
@@ -392,7 +399,7 @@ def build(kind, lod):
         wing=(x0, x1, le_y, chord, thick, wz),
         fin=(fz0, tail_h, fin_le, fin_c),
         stab=(sx0, sx1, lambda x: sle0 - ssw_t * (x - sx0), stab_c, lambda x: sz + sdh_t * (x - sx0)),
-        engines=[] if kind == "light" else [(xe, yf, ze, R, Ln)])
+        engines=[] if kind == "light" else [(xe, yf, ze, R, Ln)], gear=gear_col)
     return m, info
 
 
@@ -439,6 +446,8 @@ def collision(kind):
     for xe, yf, ze, R, Ln in c["engines"]:
         for side in (1.0, -1.0):
             box([rect(side * xe, y, ze, R * COL_FIT, R * COL_FIT) for y in (yf, yf - Ln)])
+    for gx, gy, hx, hy, top in c["gear"]:
+        box([rect(gx, y, top / 2.0, hx, top / 2.0) for y in (gy + hy, gy - hy)])
     return m
 
 
