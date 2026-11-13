@@ -948,6 +948,19 @@ do -- parked aircraft (server parkedaircraft.py): four models at 1:1 (the tail f
       g .. ' shows out to ' .. far .. ' m, by day, and is no barrier')
   end
 end
+do -- the ILS aerials (server airfieldlights.py ils_masts): two models at 1:1, never solid, one spelling, shown by day to 2 km
+  for _, a in ipairs({ { 'ils_loc', 3.0 }, { 'ils_gs', 15.0 } }) do
+    local g, h = a[1], a[2]
+    local shape, sc = trees.pick(g, h, 0.7)
+    T.check(trees.CATALOG[g] and #trees.CATALOG[g] == 1 and shape == trees.CATALOG[g][1][1]
+      and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9,
+      g .. ': its model at 1:1')
+    T.check(trees.CATALOG[g][1][2] == h, g .. ': the catalogue height is the model\'s top')
+    T.check(trees.NO_COLLIDE[g] == true and trees.ONE_SPELLING[g] == true, g .. ' never collides, one spelling')
+    T.check(trees.GROUP_MAX_M[g] == 2000 and not trees.isBarrier(g) and not trees.groupOff[g],
+      g .. ' shows out to 2 km, by day, and is no barrier')
+  end
+end
 
 T.check(countChecks > 50 and #countMiss == 0, 'the running item count matches a full count at each of '
   .. countChecks .. ' checks' .. (#countMiss > 0 and (' (' .. table.concat(countMiss, '; ') .. ')') or ''))

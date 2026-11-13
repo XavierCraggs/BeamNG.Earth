@@ -3510,6 +3510,11 @@ class Server:
                     props.extend(parkedaircraft.tile_rows(anchor.frame, box, infra_fn, bld_fn, elev))
                 except Exception as ex:
                     log.warning("parked aircraft: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+                try:   # (ground vehicles at the stands, apron masts, containers by the hangars: airsideprops)
+                    import airsideprops
+                    props.extend(airsideprops.tile_rows(anchor.frame, box, infra_fn, bld_fn, elev))
+                except Exception as ex:
+                    log.warning("airside props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             try:       # (solar farms, container terminals, marinas, trailer parks, construction sites)
                 props.extend(places.tile_rows(anchor.frame, box, self.mapdata, elev, near_roads, self.country(anchor)))
             except fast.NativeMissing:

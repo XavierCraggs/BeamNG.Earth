@@ -26,7 +26,8 @@ to the edge, each slot kept by hash (GA_PCT), at most GA_MAX per apron (the lowe
 Clearance (whole aircraft, fuselage + wing + tailplane rectangles, not a disc): dropped where it meets a building of
 OBSTACLE_MIN_M2 or more (BUILDING_CLEAR_M margin; jet bridges and small sheds touching a gate excepted), a runway or
 stopway (half its width + RUNWAY_CLEAR_M), a taxiway (its half width), a taxilane's centreline (one the nose points along is the stand's lead-in: none), or
-another placed aircraft (AIRCRAFT_CLEAR_M). Gates are placed first (in position order, so closely mapped gates keep every
+another placed aircraft (AIRCRAFT_CLEAR_M), then a final pass (drop_overlaps) drops any aircraft whose footprint
+overlaps one kept already, the longer kinds kept first. Gates are placed first (in position order, so closely mapped gates keep every
 other one), then the aprons' rows; tile_rows drops an aircraft of one cell that overlaps another cell's. STATS counts why
 gates got none (debug).
 
@@ -91,7 +92,9 @@ _SHAPES = {}
 STATS = collections.Counter()   # debug: why gates got no aircraft (cleared by the caller; see _gate_craft)
 
 
-Craft = collections.namedtuple("Craft", "kind lat lon ne nn")      # ne, nn: the nose's east / north direction
+Craft = collections.namedtuple("Craft", "kind lat lon ne nn mode", defaults=("",))   # ne, nn: the nose's east / north direction;
+                                                # mode: "gate" (nose to a terminal), "remote" (a stand off the terminals),
+                                                # "ga" (a general-aviation row)
 
 
 def _crc(text):
@@ -567,7 +570,7 @@ def _gate_craft(sc, world, small, obstacles):
                     break
             if why is None:
                 world.add(kind, cx, cy, nx, ny)
-                out.append((kind, cx, cy, nx, ny))
+                out.append((kind, cx, cy, nx, ny, "gate" if term is not None else "remote"))
                 STATS["placed_" + kind] += 1
                 break
         if why is not None:
@@ -622,7 +625,7 @@ def _ga_craft(sc, world):
             nx, ny = -inward[0], -inward[1]
             if n_ok < GA_MAX and world.clear("light", cx, cy, nx, ny, inside=ring):
                 world.add("light", cx, cy, nx, ny)
-                out.append(("light", float(cx), float(cy), float(nx), float(ny)))
+                out.append(("light", float(cx), float(cy), float(nx), float(ny), "ga"))
                 n_ok += 1
     return out
 
@@ -646,7 +649,8 @@ def stands(feats, buildings=None):
         obstacles, small = _buildings(sc, buildings)
         world = _World(sc, obstacles)
         placed = _gate_craft(sc, world, small, obstacles) + _ga_craft(sc, world)
-        out = [Craft(k, *sc.latlon(x, y), nx, ny) for k, x, y, nx, ny in placed]
+        placed = [placed[j] for j in drop_overlaps(placed)]     # (the final pass: none overlaps another)
+        out = [Craft(k, *sc.latlon(x, y), nx, ny, mode) for k, x, y, nx, ny, mode in placed]
     feats.__dict__[_KEY] = (buildings, out)
     return out
 
@@ -687,29 +691,43 @@ def _near_cells(key, feats):
     return out
 
 
-def _dedupe(items, lat, lon):
-    """Indices of the items kept, deterministic whatever the order (position order): an aircraft drops where it overlaps a
-    kept one of another cell (the cells place their own gates' aircraft without each other's)."""
-    order = sorted(range(len(items)), key=lambda j: (round(float(lat[j]), 6), round(float(lon[j]), 6), items[j].kind))
-    kx = aeroways.M_PER_DEG * dnp.cos(np.radians(lat))
-    kept, placed = [], []                           # placed: (kind, x, y, nx, ny) in a local plane
+def _overlap(a, b, margin=AIRCRAFT_CLEAR_M):
+    """Do the aircraft a, b ((kind, x, y, nx, ny) in a plane) come within `margin` of each other (footprints: the oriented
+    rectangles of their kinds' dimensions)?"""
+    if math.hypot(a[1] - b[1], a[2] - b[2]) > _radius(a[0]) + _radius(b[0]) + margin:
+        return False
+    pa_, pb = _world(_local_points(a[0]), *a[1:5]), _world(_local_points(b[0]), *b[1:5])
+    return bool(_in_rects(a[0], *a[1:5], pb, margin).any() or _in_rects(b[0], *b[1:5], pa_, margin).any())
+
+
+def drop_overlaps(items):
+    """The final pass: the indices (ascending) of the aircraft kept of items [(kind, x, y, nx, ny, ...)] (a plane in metres,
+    nose direction (nx, ny)): the longer kinds first, then by position, each dropped where its footprint (its kind's
+    dimensions, AIRCRAFT_CLEAR_M margin) overlaps one kept already. Deterministic whatever the order."""
+    order = sorted(range(len(items)), key=lambda j: (-SPECS[items[j][0]][0], round(float(items[j][2]), 3),
+                                                     round(float(items[j][1]), 3), items[j][0]))
+    kept, placed = [], []
     for j in order:
-        c = items[j]
-        x, y = float(lon[j] - lon[order[0]]) * float(kx[j]), float(lat[j] - lat[order[0]]) * aeroways.M_PER_DEG
-        hit = False
-        for k2, x2, y2, nx2, ny2 in placed:
-            if math.hypot(x2 - x, y2 - y) > _radius(c.kind) + _radius(k2) + AIRCRAFT_CLEAR_M:
-                continue
-            pts = _world(_local_points(k2), x2, y2, nx2, ny2)
-            if _in_rects(c.kind, x, y, c.ne, c.nn, pts, AIRCRAFT_CLEAR_M).any() or                     _in_rects(k2, x2, y2, nx2, ny2, _world(_local_points(c.kind), x, y, c.ne, c.nn), AIRCRAFT_CLEAR_M).any():
-                hit = True
-                break
-        if hit:
-            STATS["cross_cell"] += 1
+        a = tuple(items[j][:5])
+        if any(_overlap(a, b) for b in placed):
             continue
         kept.append(j)
-        placed.append((c.kind, x, y, c.ne, c.nn))
+        placed.append(a)
     return sorted(kept)
+
+
+def _dedupe(items, lat, lon):
+    """Indices of the items (Craft) kept: drop_overlaps in a local plane. An aircraft drops where it overlaps a kept one of
+    another cell (the cells place their own gates' aircraft without each other's)."""
+    if not items:
+        return []
+    kx = aeroways.M_PER_DEG * dnp.cos(np.radians(lat))
+    j0 = min(range(len(items)), key=lambda j: (round(float(lat[j]), 6), round(float(lon[j]), 6), items[j].kind))
+    plane = [(c.kind, float(lon[j] - lon[j0]) * float(kx[j]), float(lat[j] - lat[j0]) * aeroways.M_PER_DEG, c.ne, c.nn)
+             for j, c in enumerate(items)]
+    kept = drop_overlaps(plane)
+    STATS["cross_cell"] += len(items) - len(kept)
+    return kept
 
 
 def tile_rows(frame, box, infra_fn, buildings_fn, elev, keys=None):

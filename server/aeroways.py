@@ -4,7 +4,8 @@ only the runways were, so the rest of an airfield read as dirt in the ground lay
 pads(feats_list) -> [(lat (k,), lon (k,))]: the Overture "infrastructure" Features (subtype "airport") of the cells
 around a block, as pads the way surface.lot_pads gives the parking lots: each apron's outer ring, and each taxiway
 and taxilane (class "taxiway" / "taxilane", lines) buffered to its width, one mitred outline per run of gentle bends
-and an octagon at each end and sharp bend (where it meets another way, an apron or a runway: no notch). A cell of a
+and an octagon at each end and sharp bend (where it meets another way, an apron or a runway: no notch); the mapped
+runway and stopway lines (also paved) end square. A cell of a
 big airport is a few hundred outlines, not one rectangle per segment (Brisbane: 4407 pads, 63 ms a 512² paint). The width is
 the OSM `width` tag when it reads as a length (23, "23 m", "75 ft"), else a default by class: a taxiway of an
 international airport (an "international_airport" aerodrome in the same cell's Features) is a code E strip, the rest
@@ -79,10 +80,11 @@ def _unpaved(feats, i, tags):
     return str(value or "").strip().lower() in UNPAVED
 
 
-def _buffer(lat, lon, width):
+def _buffer(lat, lon, width, butt=False):
     """A line (lat, lon (n,)) buffered to width as [(lat, lon)] pads: a mitred outline per run of bends gentler than
-    SHARP_TURN_DEG, an octagon (circumscribed on the half width) at each end and sharp bend. Metric frame: equirectangular about the
-    first point (an airfield is a few km: millimetres)."""
+    SHARP_TURN_DEG, an octagon (circumscribed on the half width) at each end and sharp bend; butt: flat ends (a runway's
+    pavement stops square at the line's end, no octagon beyond it; the sharp bends keep theirs). Metric frame:
+    equirectangular about the first point (an airfield is a few km: millimetres)."""
     lat0, lon0 = float(lat[0]), float(lon[0])
     kx = M_PER_DEG * dmath.cos(math.radians(lat0))
     x = (np.asarray(lon, np.float64) - lon0) * kx
@@ -121,7 +123,7 @@ def _buffer(lat, lon, width):
             start = k
     a = (np.arange(JOIN_SIDES) + 0.5) * 2.0 * math.pi / JOIN_SIDES
     ring = np.c_[dnp.cos(a), dnp.sin(a)] * (half / dmath.cos(math.pi / JOIN_SIDES))
-    ends = [0, len(x) - 1] + [j for j in range(1, len(x) - 1) if brk[j]]
+    ends = ([] if butt else [0, len(x) - 1]) + [j for j in range(1, len(x) - 1) if brk[j]]
     rings += [ring + (x[j], y[j]) for j in ends]
     return [(lat0 + r[:, 1] / M_PER_DEG, lon0 + r[:, 0] / kx) for r in rings]
 
@@ -297,13 +299,14 @@ def _feats_pads(feats):
         if cls[i] in (RUNWAY, STOPWAY):
             # OurAirports paints the runway between its two ends (airportgrade.runway_pads); the mapped line also
             # runs on over the pavement past them (a stopway, a blast pad, the turn pad a taxiway joins at the very
-            # end: Brisbane's taxiway stopped ~100 m short of the runway's end), so it is paved too, at its width
+            # end: Brisbane's taxiway stopped ~100 m short of the runway's end), so it is paved too, at its width,
+            # its ends square (an octagon's cap stuck out past the runway's end into the grass: Heathrow 27R)
             if kind == 2 and not _unpaved(feats, i, tags):
                 w = width_tag(tags.get("width")) or (RUNWAY_INTL_M if intl else RUNWAY_M)
                 lines = [np.asarray(ln, np.float64) for part in feats.parts(i) for ln in part if len(ln) >= 2]
                 runways += [(ln, w / 2.0) for ln in lines]
                 for ln in lines:
-                    out += _buffer(ln[:, 1], ln[:, 0], w)
+                    out += _buffer(ln[:, 1], ln[:, 0], w, butt=True)
             continue
         if _unpaved(feats, i, tags):
             continue

@@ -1900,6 +1900,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                 props.extend(parkedaircraft.tile_rows(frame, box, infra_fn, bld_fn, elev))
             except Exception as ex:
                 log.warning("parked aircraft: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            try:       # (ground vehicles at the stands, apron masts, containers by the hangars: airsideprops)
+                import airsideprops
+                props.extend(airsideprops.tile_rows(frame, box, infra_fn, bld_fn, elev))
+            except Exception as ex:
+                log.warning("airside props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         try:           # (solar farms, container terminals, marinas, trailer parks, construction sites)
             props.extend(places.tile_rows(frame, box, _s.md, elev, near_roads, country))
         except fast.NativeMissing:

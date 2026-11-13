@@ -7,13 +7,26 @@ runway_lights(rw) -> Lights: only a runway with lighted set and not closed (nor 
 equal steps, a light at each end) EDGE_OUT_M outside the edge both sides, the last min(CAUTION_M, a third) of each end
 yellow (ICAO Annex 14's caution zone); a green threshold bar across the runway at each threshold (the
 displaced one, when the data has it) and a red end bar BAR_OUT_M beyond each end, a light every BAR_SPACING_M across.
+Approach lights and PAPI (kinds "approach", "papi", in runway_lights): before each end of a lit paved runway at a large
+airport or over APPROACH_MIN_RUNWAY_M, a white centreline row from APPROACH_STEP_M out every APPROACH_STEP_M to
+APPROACH_LEN_M (a simple 900 m line) with a crossbar of APPROACH_BAR_W_M at APPROACH_BAR_AT_M; at every lit paved runway of
+PAPI_MIN_RUNWAY_M or more a PAPI at each landing end: four lights PAPI_STEP_M apart, the first PAPI_OFF_M left of the
+runway edge (as the landing aircraft sees it) PAPI_AT_M past the threshold, the two nearer the runway red and the two
+outer white (the on-slope look). The lights stand on the ground (the extended centreline is not checked for water,
+roads or buildings: the row's `elev` puts a light on whatever ground the grade gives).
+ils_masts(rw) -> [Mast]: the ILS aerials of a paved open runway over ILS_MIN_RUNWAY_M, forest rows of the mod's static
+groups ils_loc (a localizer array, a 30 m wide, 3 m high row of dipoles on a frame) and ils_gs (a 15 m glide-slope lattice
+mast): the localizer of each approach LOC_AT_M past the far end on the centreline (between the approach lights' rows)
+facing down the runway, the glide-slope mast GS_OFF_M off the centreline GS_AT_M past the threshold, on the side opposite
+the PAPI, facing the approach. Shapes: tools/build_ils.py, trees.lua CATALOG (origin on the ground, front local +Y).
 taxiway_lights(feats, runways) -> Lights: blue lights TAXI_SPACING_M apart along both edges (TAXI_OUT_M outside) of the
 paved taxiways (infrastructure Features: subtype "airport", class "taxiway"; the width, the unpaved test and the
 defaults are aeroways') at airports whose nearest open runway (within TAXI_REACH_M) is lighted; none inside an apron,
 inside a runway's half width + RUNWAY_CLEAR_M, nor within another taxiway's or taxilane's pavement (a junction's, the
 inner side of a tight bend) nor on a way tagged lit=no.
 tile_rows(frame, box, infra_fn, runways_fn, elev) -> forest rows [group, x, y, z, yaw, scale, height, rank] of the
-lights a road tile owns (the group's shape is 1 m high: height 1), as areaprops' rows.
+lights a road tile owns (the group's shape is 1 m high: height 1), as areaprops' rows, and of the ILS masts (their own
+groups, the catalogue's height, the yaw the server's, as windsocks').
 
 Every light is a pure function of its runway's data or its Features, kept: a runway's by its data's signature (a bounded
 module cache), a Features' on the Features by the runways it was asked with (so every tile of a cell shares them). A
@@ -32,17 +45,34 @@ import runwaygeom
 
 WHITE, GREEN, RED, BLUE, YELLOW = "white", "green", "red", "blue", "yellow"
 COLOURS = (WHITE, GREEN, RED, BLUE, YELLOW)
-EDGE, THRESHOLD, END, TAXI = "edge", "threshold", "end", "taxi"
-KINDS = (EDGE, THRESHOLD, END, TAXI)
+EDGE, THRESHOLD, END, TAXI, APPROACH, PAPI = "edge", "threshold", "end", "taxi", "approach", "papi"
+KINDS = (EDGE, THRESHOLD, END, TAXI, APPROACH, PAPI)
 # The mod's group per colour: one glow ball shape + tinted night materials each (tools/build_lamp_glow.py's balls in the
 # colour: nightlights.lua MATERIALS / trees.lua CATALOG, GROUP_MAX_M, groupOff, setGroupEnabled at dusk).
 GROUPS = {c: "afl_" + c for c in COLOURS}
+ILS_GROUPS = {"loc": "ils_loc", "gs": "ils_gs"}      # the ILS aerials' groups (tools/build_ils.py, trees.lua CATALOG)
+ILS_H = {"ils_loc": 3.0, "ils_gs": 15.0}             # m: their catalogue heights (the shapes' tops)
 GROUP_H = 1.0                   # m: the catalog height of the glow shapes (a row's height over it is its scale)
 LIFT_M = 0.3                    # m: a light's centre over the ground
 
 EDGE_SPACING_M = 60.0           # runway edge lights (FAA AC 150/5340-30 / ICAO: at most 60 m)
 EDGE_OUT_M = 1.0                # m outside the runway edge
 CAUTION_M = 600.0               # the yellow end zone of the edge lights (or a third of the runway: the shorter)
+APPROACH_MIN_RUNWAY_M = 1800.0  # approach lights on a runway longer than this (or at a large airport)
+APPROACH_LEN_M = 900.0          # m: the approach lights' line (from the runway's end out)
+APPROACH_STEP_M = 30.0          # m between the centreline lights
+APPROACH_BAR_AT_M = 300.0       # the crossbar's distance from the end
+APPROACH_BAR_W_M = 30.0         # its width, a light every APPROACH_BAR_STEP_M
+APPROACH_BAR_STEP_M = 3.0
+PAPI_MIN_RUNWAY_M = 900.0       # a PAPI on a lit paved runway this long (300 m past each threshold: the units clear)
+PAPI_AT_M = 300.0               # m past the threshold
+PAPI_OFF_M = 15.0               # the first unit this far outside the runway's edge, on the landing aircraft's left
+PAPI_STEP_M = 9.0               # m between the four units
+ILS_MIN_RUNWAY_M = 1800.0       # the ILS aerials on a runway longer than this
+LOC_AT_M = 315.0                # m past the far end: the localizer (between the approach lights' 300 m and 330 m rows)
+GS_AT_M = 300.0                 # m past the threshold: the glide-slope mast
+GS_OFF_M = 120.0                # m off the runway's centreline
+FACE_M = 10.0                   # m: a mast's second point (the way its front faces)
 BAR_SPACING_M = 4.0             # across the threshold and end bars
 BAR_OUT_M = 1.0                 # the end bar this far beyond the runway end
 DISPLACED_MAX = 1.0 / 3.0       # a displaced threshold past this share of the runway is a data error: none
@@ -86,7 +116,7 @@ class Lights:
 # ------------------------------------------------------------------------------------------------- the runways
 def _signature(rw):
     return (rw.key, bool(rw.lighted), bool(rw.closed), rw.le.lat, rw.le.lon, rw.he.lat, rw.he.lon, float(rw.width_m),
-            rw.le.displaced_m, rw.he.displaced_m)
+            rw.le.displaced_m, rw.he.displaced_m, bool(rw.paved), rw.airport_type, rw.surface)
 
 
 def _on(rw):
@@ -100,6 +130,39 @@ def _bar(s, width, colour, kind):
     return np.full(len(t), s), t, np.full(len(t), COLOURS.index(colour)), np.full(len(t), KINDS.index(kind))
 
 
+def _displaced(end, L):
+    """An end's displaced threshold length (0 when the data has none or a doubtful one)."""
+    d = float(end.displaced_m or 0.0)
+    return d if 0.0 < d <= L * DISPLACED_MAX else 0.0
+
+
+def _row(s, t, colour, kind):
+    """Lights at (s, t) (arrays or numbers) of one colour and kind, as (s, t, colour, kind) lists."""
+    s, t = np.atleast_1d(np.asarray(s, np.float64)), np.atleast_1d(np.asarray(t, np.float64))
+    s, t = np.broadcast_arrays(s, t)
+    return s.copy(), t.copy(), np.full(len(s), COLOURS.index(colour)), np.full(len(s), KINDS.index(kind))
+
+
+def _approach_parts(rw, L):
+    """The approach lights (a white centreline row and the crossbar) before each end, the PAPIs at each landing end, as
+    (s, t, colour, kind) lists."""
+    parts = []
+    if rw.paved and (L > APPROACH_MIN_RUNWAY_M or rw.airport_type == "large_airport"):
+        k = np.arange(1, int(round(APPROACH_LEN_M / APPROACH_STEP_M)) + 1) * APPROACH_STEP_M
+        n_bar = int(round(APPROACH_BAR_W_M / APPROACH_BAR_STEP_M))
+        bar = np.linspace(-APPROACH_BAR_W_M / 2.0, APPROACH_BAR_W_M / 2.0, n_bar + 1)
+        bar = bar[np.abs(bar) > 1e-6]                       # (the centreline's light stands at the middle)
+        for sign, base in ((-1.0, 0.0), (1.0, L)):
+            parts.append(_row(base + sign * k, 0.0, WHITE, APPROACH))
+            parts.append(_row(base + sign * APPROACH_BAR_AT_M, bar, WHITE, APPROACH))
+    if rw.paved and L >= PAPI_MIN_RUNWAY_M:
+        # (the landing aircraft's left: +t flying toward the high end, -t flying back)
+        for at, side in ((_displaced(rw.le, L) + PAPI_AT_M, 1.0), (L - _displaced(rw.he, L) - PAPI_AT_M, -1.0)):
+            for i in range(4):
+                parts.append(_row(at, side * (rw.width_m / 2.0 + PAPI_OFF_M + i * PAPI_STEP_M), RED if i < 2 else WHITE, PAPI))
+    return parts
+
+
 def _lights_of(rw):
     g = runwaygeom.geometry(rw)
     L, W = g.length, g.width
@@ -110,12 +173,12 @@ def _lights_of(rw):
     parts = [(np.r_[s, s], np.r_[np.full(len(s), -(W / 2.0 + EDGE_OUT_M)), np.full(len(s), W / 2.0 + EDGE_OUT_M)],
               np.r_[colour, colour], np.full(2 * len(s), KINDS.index(EDGE)))]
     for at_le, end in ((True, rw.le), (False, rw.he)):
-        d = float(end.displaced_m or 0.0)
-        d = d if 0.0 < d <= L * DISPLACED_MAX else 0.0
+        d = _displaced(end, L)
         sign = 1.0 if at_le else -1.0
         base = 0.0 if at_le else L
         parts.append(_bar(base + sign * d, W, GREEN, THRESHOLD))
         parts.append(_bar(base - sign * BAR_OUT_M, W, RED, END))
+    parts += _approach_parts(rw, L)
     ss, tt, cc, kk = (np.concatenate(p) for p in zip(*parts))
     lat, lon = g.latlon(ss, tt)
     return Lights(lat, lon, cc, kk)
@@ -131,6 +194,49 @@ def runway_lights(rw):
         if len(_RUNWAYS) >= CACHE_MAX:
             _RUNWAYS.clear()
         got = _RUNWAYS[key] = _lights_of(rw)
+    return got
+
+
+# ------------------------------------------------------------------------------------------------- the ILS aerials
+class Mast:
+    """An ILS aerial: its group, its point, and a second point 10 m in front of it (lat_to, lon_to: the way it faces)."""
+    __slots__ = ("group", "lat", "lon", "lat_to", "lon_to")
+
+    def __init__(self, group, lat, lon, lat_to, lon_to):
+        self.group, self.lat, self.lon, self.lat_to, self.lon_to = group, float(lat), float(lon), float(lat_to), float(lon_to)
+
+
+_MASTS = {}
+
+
+def _masts_of(rw):
+    g = runwaygeom.geometry(rw)
+    L = g.length
+    out = []
+    # (the localizer past the far end faces down the runway; the glide-slope mast faces the approach, off the side the
+    # PAPI is not on: landing toward the high end the PAPI is at +t, back the other way at -t)
+    for at, face, t, group in (
+            (L + LOC_AT_M, -1.0, 0.0, ILS_GROUPS["loc"]),
+            (-LOC_AT_M, 1.0, 0.0, ILS_GROUPS["loc"]),
+            (_displaced(rw.le, L) + GS_AT_M, -1.0, -GS_OFF_M, ILS_GROUPS["gs"]),
+            (L - _displaced(rw.he, L) - GS_AT_M, 1.0, GS_OFF_M, ILS_GROUPS["gs"])):
+        la, lo = (float(a[0]) for a in g.latlon([at], [t]))
+        la2, lo2 = (float(a[0]) for a in g.latlon([at + face * FACE_M], [t]))
+        out.append(Mast(group, la, lo, la2, lo2))
+    return out
+
+
+def ils_masts(rw):
+    """The ILS aerials [Mast] of a runway (airports.Runway): none unless paved, open, on land and over ILS_MIN_RUNWAY_M;
+    memoised by its data."""
+    if not rw.paved or rw.closed or rw.surface == "water" or runwaygeom.geometry(rw).length <= ILS_MIN_RUNWAY_M:
+        return []
+    key = _signature(rw)
+    got = _MASTS.get(key)
+    if got is None:
+        if len(_MASTS) >= CACHE_MAX:
+            _MASTS.clear()
+        got = _MASTS[key] = _masts_of(rw)
     return got
 
 
@@ -314,7 +420,7 @@ def tile_rows(frame, box, infra_fn, runways_fn, elev, keys=None):
     if keys is None:
         keys = got[0]
     la, lo = got[1]
-    parts, seen = [], {}
+    parts, masts, seen = [], [], {}
     for k in keys:
         runways = list(runways_fn(k) or ())
         if not runways:
@@ -323,8 +429,13 @@ def tile_rows(frame, box, infra_fn, runways_fn, elev, keys=None):
             if rw.key not in seen:
                 seen[rw.key] = True
                 parts.append(runway_lights(rw))
+                masts += ils_masts(rw)
         parts.append(taxiway_lights(infra_fn(k), runways))
-    lights = Lights.join(parts)
+    return _light_rows(frame, box, Lights.join(parts), elev, la, lo) + _mast_rows(frame, box, masts, elev, la, lo)
+
+
+def _light_rows(frame, box, lights, elev, la, lo):
+    """tile_rows' glow rows of the lights the box owns."""
     if not len(lights):
         return []
     pad = 0.0005                            # (degrees: the box's corners' lat / lon, a little wider)
@@ -347,3 +458,34 @@ def tile_rows(frame, box, infra_fn, runways_fn, elev, keys=None):
     groups = [GROUPS[COLOURS[c]] for c in lights.colour[near].tolist()]
     return [[g, round(float(x), 2), round(float(y), 2), round(float(h_), 2), 0.0, 1.0, GROUP_H, 0.0]
             for g, x, y, h_ in zip(groups, e, n, z)]
+
+
+def _yaw_along(east, north):
+    """The row yaw of a shape whose front (local +Y) faces (east, north): the server's, counter-clockwise from +x, less 90."""
+    return (math.degrees(dmath.atan2(north, east)) - 90.0) % 360.0
+
+
+def _mast_rows(frame, box, masts, elev, la, lo):
+    """tile_rows' rows [group, x, y, z, yaw, 1, catalogue height, 0] of the ILS masts the box owns (on the ground)."""
+    pad = 0.0005
+    masts = [m for m in masts if la.min() - pad <= m.lat <= la.max() + pad and lo.min() - pad <= m.lon <= lo.max() + pad]
+    if not masts:
+        return []
+    lat, lon, lat2, lon2 = (np.array([getattr(m, f) for m in masts], np.float64) for f in ("lat", "lon", "lat_to", "lon_to"))
+    e, n, _ = frame.geodetic_to_enu(lat, lon, 0.0)
+    e2, n2, _ = frame.geodetic_to_enu(lat2, lon2, 0.0)
+    e, n, e2, n2 = (np.asarray(a, np.float64) for a in (e, n, e2, n2))
+    own = np.flatnonzero(np.asarray(geotiles.box_owns(box, e, n), bool))
+    if not len(own):
+        return []
+    h = np.asarray(elev(lat[own], lon[own]), np.float64)
+    z = np.asarray(frame.geodetic_to_enu(lat[own], lon[own], h)[2], np.float64)
+    rows, seen = [], set()
+    for j, zz in zip(own.tolist(), z):
+        key = (masts[j].group, round(float(e[j]) * 2.0), round(float(n[j]) * 2.0))
+        if key in seen:                     # (the same runway from two cells: one mast)
+            continue
+        seen.add(key)
+        rows.append([masts[j].group, round(float(e[j]), 2), round(float(n[j]), 2), round(float(zz), 2),
+                     round(_yaw_along(float(e2[j] - e[j]), float(n2[j] - n[j])), 1), 1.0, ILS_H[masts[j].group], 0.0])
+    return rows

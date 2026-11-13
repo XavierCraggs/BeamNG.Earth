@@ -176,6 +176,23 @@ class Pads(unittest.TestCase):
         along = aeroways.pads([feats(rw, taxiway((-200, 5), (200, 5)))])
         self.assertFalse(covered(along, 0, 25))
 
+    def test_runway_and_stopway_lines_end_square_taxiways_keep_the_octagon(self):
+        # the octagon's cap stuck out past a runway's end into the grass (Heathrow 27R): a runway or stopway line is
+        # paved flat to its end, a taxiway's end still has its octagon, and a runway's sharp bend keeps its join
+        for cls in ("runway", "stopway"):
+            rw = (line((-500, 0), (500, 0)), cls, "airport", {"width": "45"}, None)
+            pads = aeroways.pads([feats(rw, taxiway((0, 400), (50, 400)))])      # (a runway is paved with the ways)
+            self.assertTrue(covered(pads, 499, 20), cls)
+            self.assertFalse(covered(pads, 505, 0), cls)
+            self.assertFalse(covered(pads, -505, 0), cls)
+            self.assertFalse(covered(pads, 505, 20), cls)
+        tw = aeroways.pads([feats(taxiway((-200, 0), (200, 0), tags={"width": "30"}))])
+        self.assertTrue(covered(tw, 205, 0))
+        bend = (line((-300, 0), (0, 0), (0, 300)), "runway", "airport", {"width": "45"}, None)
+        pads = aeroways.pads([feats(bend, taxiway((600, 600), (650, 600)))])
+        self.assertTrue(covered(pads, 12, -12))
+        self.assertFalse(covered(pads, 0, 305))
+
     def test_degenerate_lines_are_skipped(self):
         got = aeroways.pads([feats(taxiway((0, 0), (0, 0)), taxiway((5, 5), (5, 5), (60, 5)))])
         self.assertTrue(covered(got, 30, 5))

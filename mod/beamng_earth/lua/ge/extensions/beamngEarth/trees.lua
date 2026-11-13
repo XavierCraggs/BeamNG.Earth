@@ -383,6 +383,32 @@ for _, a in ipairs({ { 'ac_light', 2.7, 800 }, { 'ac_turboprop', 7.6, 1500 }, { 
   M.GROUP_MAX_M[a[1]] = a[3]
   M.ONE_SPELLING[a[1]] = true
 end
+-- ILS aerials at the long runways' ends (server airfieldlights.py ils_masts, tools/build_ils.py): a localizer array (a 30 m
+-- wide, 3 m high row of dipoles) and a 15 m glide-slope lattice mast, origin on the ground, the front local +Y (the row's yaw
+-- faces the approach). Never solid (frangible in life), one spelling, shown out to 2 km (a speck past that).
+for _, a in ipairs({ { 'ils_loc', 3.0 }, { 'ils_gs', 15.0 } }) do
+  M.CATALOG[a[1]] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. a[1], a[2] } }
+  M.GROUP_MAX_M[a[1]] = 2000
+  M.ONE_SPELLING[a[1]] = true
+  M.NO_COLLIDE[a[1]] = true
+end
+-- Ground support vehicles round the parked aircraft, containers and cones by the hangars (server airsideprops.py,
+-- tools/build_gse.py): three liveries each (white, yellow, grey; containers white, grey, blue), picked by the row's rank
+-- (airsideprops.rank_for), solid like the aircraft but the cones, shown out to 600 m.
+for _, a in ipairs({ { 'tug', 1.8 }, { 'cart', 1.1 }, { 'pushback', 1.77 }, { 'belt', 2.54 }, { 'fuel', 2.9 },
+                     { 'catering', 4.4 }, { 'stairs', 3.4 }, { 'container', 2.59 } }) do
+  local names = a[1] == 'container' and { 'white', 'grey', 'blue' } or { 'white', 'yellow', 'grey' }
+  local g = 'gse_' .. a[1]
+  M.CATALOG[g] = {}
+  for _, n in ipairs(names) do
+    table.insert(M.CATALOG[g], { '/levels/beamng_earth/art/shapes/beamngEarth/bne_gse_' .. a[1] .. '_' .. n, a[2] })
+  end
+  M.GROUP_MAX_M[g] = 600
+end
+M.CATALOG.gse_cone = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_gse_cone', 0.70 } }
+M.GROUP_MAX_M.gse_cone = 300
+M.ONE_SPELLING.gse_cone = true
+M.NO_COLLIDE.gse_cone = true
 M.GROUP_MAX_M.jersey = 4000
 M.GROUP_MAX_M.jersey_end = 4000
 M.GROUP_MAX_M.cable = 1500
@@ -860,6 +886,8 @@ local function setup()
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/golf_flag.materials.json')
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/windsock.materials.json')
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/aircraft.materials.json')
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/ils.materials.json')
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/gse.materials.json')
   if FS and readFile and writeFile then
     local ok, made = pcall(staticSignal)
     if ok and made then M.CATALOG.signal[1][1] = M.STATIC_SIGNAL
