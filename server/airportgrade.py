@@ -32,7 +32,9 @@ MARK_PIECE_M = 50.0         # strokes cut into pieces this long, each in the til
 MARK_NODE_M = 10.0          # ... with a node this often (they follow the graded ground)
 RUNWAY_PAD_SHOULDER_M = 1.5    # m of paved shoulder painted each side of a runway (runway_pads)
 MARK_LOOK = {"white": {"m": "line_runway_white", "tl": 6.4, "p": 2},      # mod: levels/beamng_earth/art/runway
-             "yellow": {"m": "line_runway_yellow", "tl": 6.4, "p": 2}}
+             "yellow": {"m": "line_runway_yellow", "tl": 6.4, "p": 2},
+             "black": {"m": "line_runway_black", "tl": 6.4, "p": 2},      # (the stand marks' borders and lettering, taxiwaymarks)
+             "red": {"m": "line_runway_red", "tl": 6.4, "p": 2}}          # (the equipment restraint lines and the bridges' hatching)
 
 
 class AirportGrader:
