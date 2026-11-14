@@ -934,16 +934,22 @@ do -- an airfield windsock (server windsocks.py): its model at 1:1 (6.47 m), nev
   T.check(trees.GROUP_MAX_M.windsock == 1500 and not trees.isBarrier('windsock') and not trees.groupOff.windsock,
     'a windsock shows out to 1.5 km, by day, and is no barrier')
 end
-do -- parked aircraft (server parkedaircraft.py): four models at 1:1 (the tail fin's height), never solid, one spelling
+do -- parked aircraft (server parkedaircraft.py): four models at 1:1 (the tail fin's height) in seven liveries, solid, picked by rank
+  local names = { 'white', 'red', 'navy', 'sky', 'green', 'orange', 'purple' }
+  T.check(#trees.AIRCRAFT_LIVERIES == #names, 'seven aircraft liveries')
   for _, a in ipairs({ { 'ac_light', 2.7, 800 }, { 'ac_turboprop', 7.6, 1500 }, { 'ac_narrow', 11.8, 2500 },
                        { 'ac_wide', 17.5, 3000 } }) do
     local g, h, far = a[1], a[2], a[3]
-    local shape, sc = trees.pick(g, h, 0.7)
-    T.check(trees.CATALOG[g] and #trees.CATALOG[g] == 1 and shape == trees.CATALOG[g][1][1]
-      and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9,
-      g .. ': its model at 1:1')
-    T.check(trees.CATALOG[g][1][2] == h, g .. ': the catalogue height is the tail fin height')
-    T.check(not trees.NO_COLLIDE[g] and trees.ONE_SPELLING[g] == true, g .. ' is solid (a collision mesh in the .dae), one spelling')
+    T.check(trees.CATALOG[g] and #trees.CATALOG[g] == #names, g .. ': a spelling a livery')
+    for i, n in ipairs(names) do
+      T.check(trees.CATALOG[g][i][1] == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g .. '_' .. n
+        and trees.CATALOG[g][i][2] == h, g .. ': ' .. n .. ' (the catalogue height is the tail fin height)')
+      -- the rank the server writes (parkedaircraft.rank_for: (3 * count + i + 0.5) / 7919) picks livery i
+      local shape, sc = trees.pick(g, h, (3 * #names + (i - 1) + 0.5) / 7919)
+      T.check(shape == trees.CATALOG[g][i][1] and math.abs(sc - 1) < 1e-9, g .. ': rank for ' .. n .. ' picks it at 1:1')
+    end
+    T.check(trees.pick(g, h, 0.0) == trees.CATALOG[g][1][1], g .. ': rank 0 is the plain white')
+    T.check(not trees.NO_COLLIDE[g] and not trees.ONE_SPELLING[g], g .. ' is solid (a collision mesh in the .dae), several spellings')
     T.check(trees.GROUP_MAX_M[g] == far and not trees.isBarrier(g) and not trees.groupOff[g],
       g .. ' shows out to ' .. far .. ' m, by day, and is no barrier')
   end

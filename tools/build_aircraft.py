@@ -3,10 +3,14 @@ aircraft.materials.json), for the airports' apron stands (server parkedaircraft.
 
     python tools/build_aircraft.py
 
-    bne_ac_light      a four-seat high-wing single (nose propeller, fixed tricycle gear)
-    bne_ac_turboprop  a regional twin turboprop, high wing, T-tail
-    bne_ac_narrow     a narrow-body twin-turbofan jet, low wing, underwing engines
-    bne_ac_wide       a wide-body twin-turbofan jet, low wing, large engines, six-wheel main bogies
+    bne_ac_light_<livery>      a four-seat high-wing single (nose propeller, fixed tricycle gear)
+    bne_ac_turboprop_<livery>  a regional twin turboprop, high wing, T-tail
+    bne_ac_narrow_<livery>     a narrow-body twin-turbofan jet, low wing, underwing engines
+    bne_ac_wide_<livery>       a wide-body twin-turbofan jet, low wing, large engines, six-wheel main bogies
+
+Seven liveries of each (LIVERIES: plain white, and a white fuselage with a red / navy / sky blue / green / orange / purple
+tail fin, some with a thin cheatline of the same colour under the window row, some with a coloured belly). Each its own .dae
+(the forest props are one mesh each) sharing the mesh, LODs and collision, differing in the tail, cheatline and belly materials.
 
 Z up, nose along local +Y, the origin on the ground under the aircraft's centre (half the length back from the nose tip),
 the wheels on z = 0, scale 1 = real size, so the model's height is its tail fin's top (DIMS: length / span / tail height,
@@ -22,10 +26,11 @@ m; trees.lua's catalogue carries the tail height). The right wing is +X. Built f
                turboprop, two underwing nacelles on pylons on the jets, each with its dark inlet and exhaust faces
     gear       struts and wheel cylinders: the nose leg, two main legs (a six-wheel bogie each on the wide-body)
 
-Four flat colour materials (aircraft.materials.json, double sided): bne_ac_white, bne_ac_grey, bne_ac_dark (windows, engine
-inlets and exhausts), bne_ac_tyre (tyres, propeller blades). No textures, no logos, no livery. Two levels of detail (nodes
-bne_ac_<kind>160 and <kind>16: the engine draws them by pixel size, as the other bne props) and a low-poly collision mesh
-(Colmesh_bne_ac_<kind>-1, collision() below: a few tapered boxes for the fuselage, wings, fin, tailplane and, where they
+Ten flat colour materials (aircraft.materials.json, double sided): bne_ac_white, bne_ac_grey, bne_ac_dark (windows, engine
+inlets and exhausts), bne_ac_tyre (tyres, propeller blades), and the six livery colours bne_ac_red, _navy, _sky, _green,
+_orange, _purple. No textures, no logos, no real airline's colours. Two levels of detail (nodes
+bne_ac_<kind>_<livery>160 and <kind>_<livery>16: the engine draws them by pixel size, as the other bne props) and a low-poly
+collision mesh (Colmesh_bne_ac_<kind>_<livery>-1, collision() below: a few tapered boxes for the fuselage, wings, fin, tailplane and, where they
 hang low, the engines; the landing gear is left out), so a car or a person is stopped by a parked aircraft.
 """
 import json
@@ -55,8 +60,28 @@ MATERIALS = {                   # name -> (baseColorFactor, metallic, roughness)
     "bne_ac_grey": ((0.62, 0.64, 0.67, 1.0), 0.15, 0.55),
     "bne_ac_dark": ((0.05, 0.06, 0.08, 1.0), 0.0, 0.15),
     "bne_ac_tyre": ((0.03, 0.03, 0.03, 1.0), 0.0, 0.9),
+    "bne_ac_red": ((0.70, 0.09, 0.09, 1.0), 0.0, 0.45),
+    "bne_ac_navy": ((0.05, 0.10, 0.33, 1.0), 0.0, 0.45),
+    "bne_ac_sky": ((0.28, 0.60, 0.86, 1.0), 0.0, 0.45),
+    "bne_ac_green": ((0.08, 0.46, 0.22, 1.0), 0.0, 0.45),
+    "bne_ac_orange": ((0.93, 0.47, 0.08, 1.0), 0.0, 0.45),
+    "bne_ac_purple": ((0.38, 0.18, 0.52, 1.0), 0.0, 0.45),
 }
 W, G, D, T = "bne_ac_white", "bne_ac_grey", "bne_ac_dark", "bne_ac_tyre"
+# The liveries, in the order trees.lua catalogues them (the server's parkedaircraft.LIVERIES is the same list; the index is
+# the row's choice): (name, colour material or None, a cheatline under the window row, a coloured belly). The tail fin takes
+# the colour; the first is the plain white aircraft.
+LIVERIES = (
+    ("white", None, False, False),
+    ("red", "bne_ac_red", True, False),
+    ("navy", "bne_ac_navy", False, False),
+    ("sky", "bne_ac_sky", False, True),
+    ("green", "bne_ac_green", True, False),
+    ("orange", "bne_ac_orange", False, False),
+    ("purple", "bne_ac_purple", False, True),
+)
+CHEAT_M = 0.009                 # the cheatline's width as a fraction of the aircraft's length (at least CHEAT_MIN_M)
+CHEAT_MIN_M = 0.10
 FOIL = [(0.0, 0.0), (0.2, 0.55), (0.55, 0.5), (1.0, 0.0), (0.55, -0.4), (0.2, -0.45)]   # (chord fraction, thickness fraction)
 
 # The numbers per kind. Fuselage: rx / rz the cabin's half width / half height, zc its centreline's height over the ground,
@@ -190,9 +215,21 @@ def foil(O, cvec, tvec, t):
     return np.array([O + s * cvec + h * t * np.asarray(tvec) for s, h in FOIL])
 
 
-def build(kind, lod):
-    """The Mesh of one level of detail of an aircraft kind (lod 0 or 1), and its measured pieces for the report."""
+def livery_spec(livery):
+    """(name, colour material or None, cheatline, coloured belly) of a livery by name."""
+    for spec in LIVERIES:
+        if spec[0] == livery:
+            return spec
+    raise KeyError(livery)
+
+
+def build(kind, lod, livery="white"):
+    """The Mesh of one level of detail of an aircraft kind (lod 0 or 1) in a livery (a LIVERIES name), and its measured
+    pieces for the report."""
     p = AC[kind]
+    _name, tint, cheat, belly = livery_spec(livery)
+    TAIL = tint or W                                    # the fin's material
+    BELLY = tint if (tint and belly) else G
     L, span, tail_h = DIMS[kind]
     hi = lod == 0
     kf, kn, kw, ks = (24, 16, 12, 6) if hi else (8, 6, 8, 3)         # sides: fuselage, nacelles and spinners, wheels, struts
@@ -227,7 +264,7 @@ def build(kind, lod):
     for d in ds:
         a, b, zc = prof(yn - d)
         rings.append(np.array([[a * math.cos(t), yn - d, zc + b * math.sin(t)] for t in ang]))
-    body = lambda n: G if n[2] < -0.6 else W
+    body = lambda n: BELLY if n[2] < -0.6 else W
     m.loft(body, rings, caps=(W, W))
     f = 1.0 / math.cos(math.pi / kf) + 0.004                # the skin's polygon sits inside the ellipse: lift the patches
 
@@ -254,6 +291,18 @@ def build(kind, lod):
             ya, yb = yn - d, yn - d - length
             quad = [skin(ya, dc - dh, side), skin(yb, dc - dh, side), skin(yb, dc + dh, side), skin(ya, dc + dh, side)]
             m.poly(D, quad, np.array([0.0, ya, prof(ya)[2]]))
+
+    # --- the cheatline: a thin band of the livery's colour along the cabin just under the window row, on both sides
+    if cheat and tint:
+        width = max(CHEAT_MIN_M, CHEAT_M * L)
+        half = math.degrees(width / 2.0 / max(p["rz"], 1e-6))           # (the band's half angle round the skin)
+        mid = dc - dh - half * 1.4                                       # (a gap of 0.4 half widths under the windows)
+        d0, d1 = w0, Lf - tl * 0.5
+        n_seg = max(2, int(math.ceil((d1 - d0) / 3.0))) if hi else 3
+        ys = [yn - (d0 + (d1 - d0) * i / n_seg) for i in range(n_seg + 1)]
+        for side in (1.0, -1.0):
+            P = [[skin(y, mid - half, side), skin(y, mid + half, side)] for y in ys]
+            m.grid(tint, P, [np.array([0.0, y, prof(y)[2]]) for y in ys])
 
     # --- wing
     ld, cr, ct, sweep, dih, tr, tt, x0, zk = p["wing"]
@@ -282,7 +331,7 @@ def build(kind, lod):
     fin_c = lambda z: fcr + (fct - fcr) * (z - fz0) / fh
     st = [foil(np.array([0.0, fin_le(z), z]), np.array([0.0, -fin_c(z), 0.0]), [1, 0, 0], 0.12 * fin_c(z))
           for z in (fz0, tail_h)]
-    m.loft(W, st, caps=(W, W), smooth=False)
+    m.loft(TAIL, st, caps=(TAIL, TAIL), smooth=False)
     tt_ = kind == "turboprop"
     if tt_:                                             # T-tail: the tailplane on the fin's top, its root chord at the tip's
         sle0, sz = fin_le(tail_h) - 0.1, tail_h - 0.30
@@ -403,9 +452,9 @@ def build(kind, lod):
     return m, info
 
 
-def parts(kind, lod):
-    """{material: (vertices, normals, triangles)} of one level of detail."""
-    return build(kind, lod)[0].finish()
+def parts(kind, lod, livery="white"):
+    """{material: (vertices, normals, triangles)} of one level of detail in a livery."""
+    return build(kind, lod, livery)[0].finish()
 
 
 def tri_count(pt):
@@ -421,10 +470,15 @@ def _f(a):
     return " ".join(f"{float(v):.4f}" for v in np.asarray(a).ravel())
 
 
+_COLLISION = {}
+
+
 def collision(kind):
     """The collision Mesh (one material, flat faces): a tapered box a part, each a closed convex prism. The fuselage's
     cross-section a rectangle inside the skin's ellipse (COL_FIT), the wings, tailplane and fin lofted between two
     rectangular sections, the underwing engines a box each; under 150 triangles."""
+    if kind in _COLLISION:
+        return _COLLISION[kind]
     c = build(kind, 1)[1]["col"]
     m = Mesh()
     box = lambda ring_list: m.loft(W, ring_list, caps=(W, W), smooth=False)
@@ -448,6 +502,7 @@ def collision(kind):
             box([rect(side * xe, y, ze, R * COL_FIT, R * COL_FIT) for y in (yf, yf - Ln)])
     for gx, gy, hx, hy, top in c["gear"]:
         box([rect(gx, y, top / 2.0, hx, top / 2.0) for y in (gy + hy, gy - hy)])
+    _COLLISION[kind] = m
     return m
 
 
@@ -475,13 +530,14 @@ def _geometry(gid, pt):
             f'<vertices id="{gid}-v"><input semantic="POSITION" source="#{gid}-p"/></vertices>\n{blocks}</mesh></geometry>\n')
 
 
-def collada(kind):
-    """One .dae: base00 > start01 > a node per level of detail (named <name><pixel size>), one geometry each, and the
-    collision mesh (Colmesh_<name>-1; an empty collision-1 node beside start01, as the other bne props)."""
-    name = "bne_ac_" + kind
+def collada(kind, livery="white"):
+    """One .dae of an aircraft kind in a livery: base00 > start01 > a node per level of detail (named <name><pixel size>),
+    one geometry each, and the collision mesh (Colmesh_<name>-1; an empty collision-1 node beside start01, as the other
+    bne props); name = bne_ac_<kind>_<livery>."""
+    name = f"bne_ac_{kind}_{livery}"
     geoms, nodes = [], []
     for size, lod in zip(LODS, (0, 1)):
-        pt = parts(kind, lod)
+        pt = parts(kind, lod, livery)
         gid = f"{name}{size}-g"
         geoms.append(_geometry(gid, pt))
         nodes.append(f'<node id="{name}{size}" name="{name}{size}"><instance_geometry url="#{gid}"><bind_material><technique_common>'
@@ -516,7 +572,7 @@ def collada(kind):
 
 
 def materials():
-    """The materials file: the four flat materials, double sided."""
+    """The materials file: the flat materials (the four basics and the six livery colours), double sided."""
     out = {}
     for name, (rgba, metal, rough) in MATERIALS.items():
         out[name] = {"name": name, "mapTo": name, "class": "Material", "version": 1.5,
@@ -530,11 +586,14 @@ def materials():
 def main():
     import staging
     for kind in DIMS:
-        for fname, text in (("bne_ac_" + kind + ".dae", collada(kind)),):
-            path = os.path.join(OUT, fname)
+        old = os.path.join(OUT, "bne_ac_" + kind + ".dae")        # (the one unliveried model of before)
+        if os.path.exists(old):
+            os.remove(old)
+        for lv in LIVERIES:
+            path = os.path.join(OUT, f"bne_ac_{kind}_{lv[0]}.dae")
             tmp = staging.tmp_for(path)
             with open(tmp, "w", newline="\n") as f:
-                f.write(text)
+                f.write(collada(kind, lv[0]))
             staging.replace(tmp, path)
             print(path, os.path.getsize(path), "bytes")
     path = os.path.join(OUT, "aircraft.materials.json")

@@ -373,15 +373,21 @@ M.CATALOG.windsock = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_windso
 M.GROUP_MAX_M.windsock = 1500
 M.ONE_SPELLING.windsock = true
 M.NO_COLLIDE.windsock = true
--- Parked aircraft on the aprons (server parkedaircraft.py, tools/build_aircraft.py): four unbranded models at 1:1, the
--- height the tail fin's top, the origin on the ground under the aircraft's centre, the nose along local +Y (the row's yaw
--- turns it). A few a tile and solid (a low-poly collision mesh each in the .dae, live within SOLID_M like the lamps): one
--- spelling each, shown out to the distance their size is worth (a light single 8 m long to 800 m, a 64 m wide-body to 3 km).
+-- Parked aircraft on the aprons (server parkedaircraft.py, tools/build_aircraft.py): four models at 1:1, the height the
+-- tail fin's top, the origin on the ground under the aircraft's centre, the nose along local +Y (the row's yaw turns it).
+-- Seven liveries of each (unbranded: plain white, or a white fuselage with a red / navy / sky / green / orange / purple tail
+-- fin, some with a cheatline or a coloured belly; one .dae each, the forest props being one mesh each), picked by the row's
+-- rank (parkedaircraft.rank_for: the server chooses an airport's few "airlines" and a stand's among them). A few a tile and
+-- solid (a low-poly collision mesh each in the .dae, live within SOLID_M like the lamps), shown out to the distance their
+-- size is worth (a light single 8 m long to 800 m, a 64 m wide-body to 3 km).
+M.AIRCRAFT_LIVERIES = { 'white', 'red', 'navy', 'sky', 'green', 'orange', 'purple' }
 for _, a in ipairs({ { 'ac_light', 2.7, 800 }, { 'ac_turboprop', 7.6, 1500 }, { 'ac_narrow', 11.8, 2500 },
                      { 'ac_wide', 17.5, 3000 } }) do
-  M.CATALOG[a[1]] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. a[1], a[2] } }
+  M.CATALOG[a[1]] = {}
+  for _, n in ipairs(M.AIRCRAFT_LIVERIES) do
+    table.insert(M.CATALOG[a[1]], { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. a[1] .. '_' .. n, a[2] })
+  end
   M.GROUP_MAX_M[a[1]] = a[3]
-  M.ONE_SPELLING[a[1]] = true
 end
 -- ILS aerials at the long runways' ends (server airfieldlights.py ils_masts, tools/build_ils.py): a localizer array (a 30 m
 -- wide, 3 m high row of dipoles) and a 15 m glide-slope lattice mast, origin on the ground, the front local +Y (the row's yaw

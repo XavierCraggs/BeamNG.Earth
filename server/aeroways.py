@@ -11,6 +11,11 @@ the OSM `width` tag when it reads as a length (23, "23 m", "75 ft"), else a defa
 international airport (an "international_airport" aerodrome in the same cell's Features) is a code E strip, the rest
 of the world's a code B or C one. A way or apron whose surface (the column, or the tags') is unpaved (grass, dirt,
 gravel) is left to the land cover. Pure; each Features' pads are kept on it, so every tile of a cell shares them.
+
+boundaries(feats_list) -> [(lat (k,), lon (k,))]: an airport's boundary for the ground painters (surface.photo_lots mows the
+infield inside it): the aerodrome polygons of the Features (class "international_airport", "airport", "airfield" ... in
+subtype "airport"), else, for Features with pads, the pads' hull grown by INFIELD_GROW_M. gates(feats_list) -> [(lat, lon)]:
+the gate and parking-position points (the aprons' stands' centrelines: the oil and tyre stains).
 """
 import json
 import math
@@ -45,6 +50,9 @@ FILLET_MIN_RUN_M = 2.0      # a fillet with less room than this on an edge is le
 STRAIGHT_DEG = 20.0         # an edge is straight while it stays within this of its first direction (_straight)
 SHARP_TURN_DEG = 60.0       # a bend sharper than this: the outline breaks there and an octagon holds the join
 UNPAVED = {"grass", "dirt", "gravel", "ground", "sand", "unpaved", "earth", "compacted", "fine_gravel"}
+INFIELD_GROW_M = 150.0      # the pads' hull grown this far is the boundary of an airport the map draws no aerodrome polygon for
+HULL_DIRS = 24              # the hull is the polygon through the pads' extreme points in this many directions (grown by an octagon)
+GATE_CLASSES = ("airport_gate", "parking_position")
 M_PER_DEG = 6371008.8 * math.pi / 180.0
 FOOT_M = 0.3048
 _WIDTH = re.compile(r"^\s*([0-9]+(?:[.,][0-9]+)?)\s*(m|ft|')?\s*$", re.I)
@@ -356,6 +364,91 @@ def _kept(feats_list, key, build):
             got = feats.__dict__[key] = build(feats)
         out += got
     return out
+
+
+def _is_aerodrome(c):
+    """Is an infrastructure class (subtype "airport") an aerodrome (an airport polygon) rather than a heliport, a seaplane
+    base, a closed field or a way / apron / building?"""
+    c = str(c)
+    if c == AERODROME:
+        return True
+    if "heliport" in c or "seaplane" in c or "closed" in c:
+        return False
+    return c.endswith(("airport", "airfield", "airstrip", "aerodrome"))
+
+
+def _grown_hull(rings, grow):
+    """The convex hull of rings [(lat, lon)] grown by `grow` m, as (lat, lon): the polygon through the points' extreme ones in
+    HULL_DIRS directions (a few dozen points, not the pads' tens of thousands), each swelled by an octagon (equirectangular
+    about the first point). None for no points."""
+    rings = [(np.asarray(la, np.float64), np.asarray(lo, np.float64)) for la, lo in rings if len(la)]
+    if not rings:
+        return None
+    lat0, lon0 = float(rings[0][0][0]), float(rings[0][1][0])
+    kx = M_PER_DEG * dmath.cos(math.radians(lat0))
+    xy = np.concatenate([np.c_[(lo - lon0) * kx, (la - lat0) * M_PER_DEG] for la, lo in rings])
+    a = np.arange(HULL_DIRS) * (2.0 * math.pi / HULL_DIRS)
+    cs, sn = dnp.cos(a), dnp.sin(a)
+    ext = xy[np.argmax(xy[:, :1] * cs[None, :] + xy[:, 1:] * sn[None, :], axis=0)]
+    o = (np.arange(JOIN_SIDES) + 0.5) * 2.0 * math.pi / JOIN_SIDES
+    swell = np.c_[dnp.cos(o), dnp.sin(o)] * (grow / dmath.cos(math.pi / JOIN_SIDES))
+    h = _hull((ext[:, None, :] + swell[None, :, :]).reshape(-1, 2))
+    if len(h) < 3:
+        return None
+    return lat0 + h[:, 1] / M_PER_DEG, lon0 + h[:, 0] / kx
+
+
+def _feats_boundary(feats):
+    sub, cls = feats.attrs.get("subtype"), feats.attrs.get("class")
+    if sub is None or cls is None:
+        return []
+    air = np.asarray(sub).astype(str) == SUBTYPE
+    if not air.any():
+        return []
+    cls = np.asarray(cls).astype(str)
+    out = []
+    for i in np.flatnonzero(air):
+        if int(feats.kind[i]) == 3 and _is_aerodrome(cls[i]):
+            for part in feats.parts(int(i)):
+                if part and len(part[0]) >= 3:
+                    ring = np.asarray(part[0], np.float64)
+                    out.append((ring[:, 1], ring[:, 0]))
+    if out:
+        return out
+    pads_ = _kept([feats], _KEY, lambda f: _feats_pads(f))      # (the pads, kept as pads() keeps them)
+    hull = _grown_hull(pads_, INFIELD_GROW_M) if pads_ else None
+    return [] if hull is None else [hull]
+
+
+def boundaries(feats_list):
+    """[(lat (k,), lon (k,))]: the airports' boundaries of the Features in feats_list (see the module docstring); [] for
+    Features with no airport in them."""
+    return _kept(feats_list, _KEY + "_boundary", _feats_boundary)
+
+
+def _feats_gates(feats):
+    sub, cls = feats.attrs.get("subtype"), feats.attrs.get("class")
+    if sub is None or cls is None:
+        return []
+    air = np.asarray(sub).astype(str) == SUBTYPE
+    cls = np.asarray(cls).astype(str)
+    gate = air & np.isin(cls, GATE_CLASSES)
+    tags = feats.attrs.get("tags")
+    if tags is not None:
+        t = np.asarray(tags).astype(str)
+        gate |= air & ((np.char.find(t, '"gate"') >= 0) | (np.char.find(t, "parking_position") >= 0))
+    out = []
+    for i in np.flatnonzero(gate & (np.asarray(feats.kind) == 1)):
+        parts = feats.parts(int(i))
+        if parts and parts[0] and len(parts[0][0]):
+            pt = np.asarray(parts[0][0], np.float64)[0]
+            out.append((float(pt[1]), float(pt[0])))
+    return out
+
+
+def gates(feats_list):
+    """[(lat, lon)]: the gate and parking-position points of the Features in feats_list (the aircraft stands)."""
+    return _kept(feats_list, _KEY + "_gates", _feats_gates)
 
 
 def aprons(feats_list):

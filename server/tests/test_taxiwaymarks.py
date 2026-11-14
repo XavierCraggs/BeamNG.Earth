@@ -220,6 +220,41 @@ class TileChunks(unittest.TestCase):
             self.assertLessEqual(float(np.hypot(*np.diff(p[:, :2], axis=0).T).sum()), airportgrade.MARK_PIECE_M + 1e-6)
         self.assertEqual(self.chunks(f, 0, 40), [])
 
+    def border_points(self, f, stands=None, tx=0, edge=SIDE):
+        """(the nodes of tile (tx, 0)'s chunks, the nodes of tile (tx + 1, 0)'s) lying on their shared edge x = edge."""
+        run = lambda t: [c for c in tm.tile_chunks([f], FRAME, t, 0, lambda la, lo: np.full(len(la), 7.0), self.bbox, stands)]
+        a, b = run(tx), run(tx + 1)
+        for chunks, box in ((a, self.bbox(tx, 0)), (b, self.bbox(tx + 1, 0))):         # (nothing outside its own tile)
+            for c in chunks:
+                for x, y, _z in c["n"]:
+                    self.assertTrue(box[0] - 1e-3 <= x <= box[2] + 1e-3 and box[1] - 1e-3 <= y <= box[3] + 1e-3, (x, y))
+        on = lambda chunks: sorted((round(x, 2), round(y, 2)) for c in chunks for x, y, _z in c["n"] if abs(x - edge) < 1e-3)
+        return on(a), on(b), a, b
+
+    def test_a_line_across_two_tiles_is_painted_in_both_and_the_pieces_join(self):
+        f = feats(taxiway((150, 100), (400, 100)))                  # across the edge x = 256
+        left, right, a, b = self.border_points(f)
+        self.assertTrue(a and b)
+        self.assertEqual(left, right)
+        self.assertEqual(left, [(256.0, 100.0)])                    # (the two pieces end and begin at the same point)
+        length = lambda cs: sum(float(np.hypot(*np.diff(np.array(c["n"])[:, :2], axis=0).T).sum()) for c in cs)
+        self.assertAlmostEqual(length(a), 256.0 - 150.0, delta=0.01)
+        self.assertAlmostEqual(length(b), 400.0 - 256.0, delta=0.01)
+
+    def test_a_line_that_leaves_a_tile_and_comes_back_is_painted_in_its_parts(self):
+        f = feats(taxiway((150, 100), (300, 100), (300, 130), (150, 130)))      # out across x = 256 and back
+        left, right, a, b = self.border_points(f)
+        self.assertEqual(left, right)
+        self.assertEqual(left, [(256.0, 100.0), (256.0, 130.0)])
+        length = lambda cs: sum(float(np.hypot(*np.diff(np.array(c["n"])[:, :2], axis=0).T).sum()) for c in cs)
+        self.assertAlmostEqual(length(a), 2 * (256.0 - 150.0), delta=0.01)      # (both parts in the first tile)
+        self.assertAlmostEqual(length(b), 2 * (300.0 - 256.0) + 30.0, delta=0.01)       # (the bend, one part, in the next)
+
+    def test_a_bend_on_the_edge_and_a_line_along_it_are_not_lost(self):
+        f = feats(taxiway((256, 20), (256, 200)))                   # along the edge: painted (by both, at worst)
+        _l, _r, a, b = self.border_points(f)
+        self.assertTrue(a or b)
+
     def test_bends_are_one_polyline(self):
         f = feats(taxiway((10, 10), (10, 30), (30, 30)))
         v = self.chunks(f, 0, 0)
@@ -286,7 +321,7 @@ class LeadIns(unittest.TestCase):
 
     def test_a_lane_that_ends_short_is_carried_on(self):
         f = feats(taxiway((-120, 0), (-30, 0), cls="taxilane"))
-        segs, _ = self.painted(f, craft("narrow", 0.0, 60.0, 0.0, 1.0))
+        segs, _ = self.painted(f, craft("narrow", 0.0, 40.0, 0.0, 1.0))
         self.assertAlmostEqual(segs[0][0], -30.0, 1)                    # from the lane's end ...
         self.assertAlmostEqual(segs[0][1], 0.0, 1)
         self.assertAlmostEqual(segs[0][2], -tm.LEAD_RADIUS_K * self.NARROW[1], delta=0.5)   # ... straight on to where the curve starts
@@ -308,6 +343,70 @@ class LeadIns(unittest.TestCase):
         self.assertEqual(len(segs), 2)                                  # a straight line and the bar
         self.assertAlmostEqual(segs[0][1], 40.0, 1)
         self.assertAlmostEqual(segs[0][3], 60.0 + self.NARROW[0] / 2.0, 2)
+
+    @staticmethod
+    def length(segs):
+        return sum(float(np.hypot(s[2] - s[0], s[3] - s[1])) for s in segs)
+
+    def test_no_lead_in_longer_than_the_cap(self):
+        f = feats(self.LANE)
+        near = self.painted(f, craft("narrow", 0.0, 40.0, 0.0, 1.0))[0]
+        self.assertTrue(near)
+        self.assertLessEqual(self.length(near[:-1]), tm.LEAD_LINE_MAX_M)
+        self.assertTrue(self.painted(f, craft("narrow", 0.0, 110.0, 0.0, 1.0))[0])         # (nose 128.8 m on: within the cap)
+        self.assertEqual(self.painted(f, craft("narrow", 0.0, 320.0, 0.0, 1.0))[0], [])    # (well past it)
+
+    def test_never_across_the_pad_of_a_taxiway_that_is_not_its_own_lane(self):
+        stand = craft("narrow", 0.0, 60.0, 0.0, 1.0)
+        across = feats(self.LANE, taxiway((-4, 20), (-4, 45)))              # a taxiway's pad (15 m wide) under the run
+        self.assertEqual(self.painted(across, stand)[0], [])
+        beside = feats(self.LANE, taxiway((-40, 20), (-40, 45)))
+        self.assertTrue(self.painted(beside, stand)[0])
+        lane = feats(self.LANE, taxiway((-4, 20), (-4, 45), cls="taxilane"))   # (a taxilane is the apron's: no pad)
+        self.assertTrue(self.painted(lane, stand)[0])
+        over_runway = feats(self.LANE, runway((-100, 40), (100, 40)))             # (and a runway's is not to be crossed)
+        self.assertEqual(self.painted(over_runway, stand)[0], [])
+
+    def test_the_lane_it_leaves_may_be_a_taxiway_and_another_lane_is_tried_when_the_nearest_crosses_a_pad(self):
+        stand = craft("narrow", 0.0, 60.0, 0.0, 1.0)
+        own = feats(taxiway((-120, 0), (100, 0)))                           # a taxiway: its own lane
+        segs = self.painted(own, stand)[0]
+        self.assertAlmostEqual(segs[0][1], 0.0, 1)
+        both = feats(self.LANE, taxiway((-120, 30), (100, 30)))             # the taxiway nearer: it is the lane it leaves
+        self.assertAlmostEqual(self.painted(both, stand)[0][0][1], 30.0, 1)
+
+    def test_a_stand_listed_twice_or_overlapped_paints_one_lead_in(self):
+        f = feats(self.LANE)
+        one = craft("narrow", 0.0, 60.0, 0.0, 1.0)
+        twin = craft("narrow", 0.0, 60.0, 0.0, 1.0)
+        got = tm.strokes([f], [one])
+        self.assertEqual(tm.strokes([f], [one, twin]), got)
+        self.assertEqual(tm.strokes([f], [one, craft("light", 0.0, 62.0, 0.0, 1.0)]), got)    # (a shorter kind on top: not kept)
+        self.assertEqual(tm.strokes([f], [one, craft("light", 0.0, 62.0, 0.0, 1.0, "ga")]), got)
+
+    def test_a_lead_in_and_its_stop_bar_across_two_tiles_are_painted_by_both_and_join(self):
+        lane = taxiway((100, 0), (420, 0), cls="taxilane")
+        f = feats(lane)
+        st = [craft("narrow", 255.0, 60.0, 0.0, 1.0)]               # its stop bar and the lane's run cross x = 256
+        tc = TileChunks()
+        run = lambda t: tm.tile_chunks([f], FRAME, t, 0, lambda la, lo: np.full(len(la), 7.0), tc.bbox, st)
+        base = lambda t: tm.tile_chunks([f], FRAME, t, 0, lambda la, lo: np.full(len(la), 7.0), tc.bbox)
+        for t in (0, 1):
+            self.assertGreater(len(run(t)), len(base(t)))           # (the lead-in is in both tiles)
+        on = lambda cs: sorted((round(x, 2), round(y, 2)) for c in cs for x, y, _z in c["n"] if abs(x - tc.SIDE) < 1e-3)
+        want = on(run(0))
+        self.assertTrue(want)
+        self.assertEqual(want, on(run(1)))                          # (every piece's end on the edge has its partner)
+        self.assertGreater(len(want), len(on(base(0))))             # (more than the lane's: the stop bar's)
+
+    def test_chunks_paint_a_listed_twice_stand_once_across_tiles(self):
+        f = feats(self.LANE)
+        tc = TileChunks()
+        run = lambda stands: [c for tx in range(-2, 2) for ty in range(-2, 2) for c in
+                              tm.tile_chunks([f], FRAME, tx, ty, lambda la, lo: np.full(len(la), 7.0), tc.bbox, stands)]
+        length = lambda cs: sum(float(np.hypot(*np.diff(np.array(c["n"])[:, :2], axis=0).T).sum()) for c in cs)
+        st = craft("narrow", 0.0, 60.0, 0.0, 1.0)
+        self.assertAlmostEqual(length(run([st, st])), length(run([st])), places=3)
 
     def test_chunks_carry_the_lead_in_each_in_one_tile(self):
         f = feats(self.LANE)

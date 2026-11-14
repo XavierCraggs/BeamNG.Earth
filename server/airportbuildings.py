@@ -8,9 +8,9 @@ infrastructure (subtype airport) says where the airfield is: its gate points (cl
 taxiways (aeroways.pads).
 
 context(frame, infra_layers, x0, y0) -> Context or None (no airport in the cells): relative to the tile's (x0, y0)
-like the rings tile_buildings plans. Context.tower_parts(ring, at) / Context.terminal(ring, at) say what a footprint
-is: a tower as the parts of a shaft, a cab and a cap (the renderer draws them as any building's parts), a terminal as
-True (buildings.plan: the terminal look and a height by its size). A building with parts of its own is never asked:
+like the rings tile_buildings plans. Context.tower_parts(ring, at) says whether a footprint is a tower: the parts
+of a shaft, a cab and a cap (the renderer draws them as any building's parts). What is a terminal, a pier, a jet bridge, a
+walkway (the terminal look, a height by its size: terminal_height) is airportroles' (buildings.tile_buildings asks it). A building with parts of its own is never asked:
 Heathrow's tower is an OSM stack of parts and was right already. Context.airside(ring, at) says a footprint or a part of any
 size stands on the airside (within AIRSIDE_PAD_M of an apron or taxiway, AIRSIDE_GATE_M of a gate, neither a tower nor a
 hangar): Brisbane's piers, satellites and walkways come as many small parts or footprints with no height, and were brick
@@ -66,9 +66,7 @@ GLASS = "glass"
 SHAFT = "concrete"
 TAN_8 = 0.41421356237309503     # tan(22.5 deg): the regular octagon's side, in halves of its across flats
 
-TERMINAL_MIN_M2 = 1500.0        # m2: a terminal's footprint at least this ...
-TERMINAL_GATES = 2              # ... with this many gate points ...
-TERMINAL_GATE_M = 40.0          # ... within this of its outline
+TERMINAL_H_M = (12.0, 20.0)     # m: a terminal's height when not mapped, by its size (terminal_height): 8 m + sqrt(area) / 12
 
 AIRSIDE_PAD_M = 30.0            # m: a building or part within this of an apron or taxiway pad is airside ...
 AIRSIDE_GATE_M = 60.0           # ... or within this of a gate point
@@ -129,6 +127,11 @@ def _outline_dist(pts, ring):
     t = np.clip((px * ab[None, :, 0] + py * ab[None, :, 1])
                 / np.maximum(ab[:, 0] * ab[:, 0] + ab[:, 1] * ab[:, 1], 1e-12)[None], 0.0, 1.0)
     return dnp.hypot(px - t * ab[None, :, 0], py - t * ab[None, :, 1]).min(axis=1)
+
+
+def terminal_height(area):
+    """The height (m) a terminal of `area` m2 is drawn at when the map gives none: two or three tall glass storeys, by its size."""
+    return float(np.clip(8.0 + math.sqrt(max(float(area), 0.0)) / 12.0, TERMINAL_H_M[0], TERMINAL_H_M[1]))
 
 
 def octagon(c, across):
@@ -342,21 +345,3 @@ class Context:
             if 4.0 * math.pi * area / max(per * per, 1e-9) < TOWER_COMPACT or not self.near_pad(ring.mean(0)):
                 return None
         return tower_parts(ring, self.tower_height(at))
-
-    def terminal(self, ring, at):
-        """Is the footprint ring (k, 2; relative to the tile) with attributes `at` an airport terminal: its name's
-        (TERMINAL_NAME), or TERMINAL_MIN_M2 of it with TERMINAL_GATES gate points within TERMINAL_GATE_M of its outline."""
-        name, cls = str(at.get("name") or "").lower(), str(at.get("class") or "").lower()
-        if cls in NOT_TERMINAL_CLASS or any(w in name for w in NOT_TERMINAL_NAME):
-            return False
-        if any(w in name for w in TERMINAL_NAME):
-            return True
-        ring = np.asarray(ring, np.float64)[:, :2]
-        if _area(ring) < TERMINAL_MIN_M2:
-            return False
-        g = self.gates()
-        if len(g) < TERMINAL_GATES:
-            return False
-        lo, hi = ring.min(0) - TERMINAL_GATE_M, ring.max(0) + TERMINAL_GATE_M
-        g = g[((g >= lo) & (g <= hi)).all(axis=1)]
-        return len(g) >= TERMINAL_GATES and int((_outline_dist(g, ring) <= TERMINAL_GATE_M).sum()) >= TERMINAL_GATES

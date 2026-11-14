@@ -40,6 +40,9 @@ class Feats:
         self.rings = [lonlat(r) for r in rings]
         self.attrs = {k: np.array(v, object if isinstance(v[0], str) else np.float64) for k, v in attrs.items()}
 
+    def __len__(self):
+        return len(self.ids)
+
     def parts(self, i):
         return [[self.rings[i]]]
 
@@ -311,7 +314,9 @@ class AirsideTest(unittest.TestCase):
         self.assertFalse(self.spec(rect(230, 230, 10, 10), pads=infra(FIELD, gate(150, 190))).airside, "over 60 m")
         # (a long thin pier across a taxiway: its ends are far from the pavement, its middle is on it)
         way = (mapgeom.LINE, [(200, 100), (200, 250)], "taxiway")
-        self.assertTrue(self.spec(rect(150, 170, 100, 6), pads=infra(FIELD, way)).airside)
+        self.assertTrue(self.spec(rect(150, 170, 100, 6), pads=infra(FIELD, way, apron(0, 0, 90, 90))).airside)
+        # (an airfield with no apron or gate mapped has no airportroles zone: a shed by its taxiway keeps its own look)
+        self.assertFalse(self.spec(rect(150, 170, 100, 6), pads=infra(FIELD, way)).airside)
 
     def test_not_a_tower_a_hangar_or_a_garage(self):
         for at in (dict(name="Hangar 3"), {"class": "hangar"}, {"class": "parking_garage"}):
@@ -369,6 +374,123 @@ class AirsideTest(unittest.TestCase):
         for g in ab.pillars(ell):
             self.assertTrue(bool(polygon.contains_points(ell, g.mean(0)[None])[0]))
         self.assertLessEqual(len(ab.pillars(np.array(rect(0, 0, 900, 20)[:-1], np.float64))), ab.PILLAR_MAX)
+
+
+class RolesTest(unittest.TestCase):
+    """buildings.tile_buildings draws each footprint and part by its airportroles role."""
+    PADS = infra(FIELD, apron(0, 0, 300, 100), gate(121, 78))
+    TERM = rect(100, 100, 60, 30)
+
+    def parts(self, rows):
+        """A parts layer: (id, ring, height, min_height) rows of building 'term' (the terminal's key is the caller's)."""
+        return lambda key: Feats([r[0] for r in rows], [r[1] for r in rows], building_id=[key] * len(rows),
+                                 height=[r[2] for r in rows], min_height=[r[3] for r in rows],
+                                 num_floors=[np.nan] * len(rows), min_floor=[np.nan] * len(rows))
+
+    def test_a_raised_block_of_a_terminal_stands_on_the_ground_a_storey_stays_up(self):
+        b = building(self.TERM, name="Terminal 1", has_parts=1.0)
+        # a part over a drive (raised, thick, nothing under it): on the ground; a storey on a lower part of it: raised
+        p = self.parts([("low", rect(100, 100, 30, 30), 8.0, 0.0), ("storey", rect(104, 104, 22, 22), 16.0, 8.0),
+                        ("over", rect(135, 100, 25, 30), 14.0, 6.0)])(b.ids[0])
+        got = items(b, self.PADS, [p])
+        self.assertEqual(sorted((round(s.min_h, 2), round(s.height, 2)) for s, _, _ in got),
+                         [(0.0, 8.0), (0.0, 14.0), (8.0, 8.0)], "the part over the drive is 14 m from the ground now")
+        self.assertTrue(all(s.terminal or s.airside for s, _, _ in got), "the terminal look on every part")
+        self.assertEqual(sum(s.terminal for s, _, _ in got), 3, "(the block over the drive is inside the terminal's outline)")
+        off = items(b, self.PADS, [p], airport=False)
+        self.assertIn((6.0, 8.0), sorted((round(s.min_h, 2), round(s.height, 2)) for s, _, _ in off), "(off an airport: as mapped)")
+
+    def sparse(self, extra=(), **at):
+        """The terminal (has parts, 60 x 30 m) with parts over a third of it: a 20 x 30 m part, 14 m tall, and `extra` rows
+        (id, ring, height, min_height). -> the items"""
+        b = building(self.TERM, name="Terminal 1", has_parts=1.0, **at)
+        rows = [("wing", rect(100, 100, 20, 30), 14.0, 0.0)] + list(extra)
+        return items(b, self.PADS, [self.parts(rows)(b.ids[0])])
+
+    @staticmethod
+    def wide(got, w):
+        """The specs whose footprint is w m wide (east-west)."""
+        return [s for s, _, _ in got if round(float(np.ptp(s.ring[:, 0]))) == w]
+
+    def test_a_terminal_with_sparse_parts_is_drawn_as_well(self):
+        """Brisbane's curved domestic terminal: parts over a fraction of a big footprint: the rest was never drawn."""
+        got = self.sparse()
+        mass = self.wide(got, 60)
+        self.assertEqual(len(mass), 1, "the whole footprint too")
+        self.assertTrue(mass[0].terminal)
+        self.assertEqual(mass[0].min_h, 0.0)
+        self.assertAlmostEqual(mass[0].height, 14.0, places=3, msg="no height mapped: its parts' top")
+        self.assertEqual(self.wide(got, 20), [], "a part as tall as the mass, standing in it: not drawn twice (z-fighting)")
+        got = self.sparse([("tall", rect(130, 105, 20, 20), 30.0, 0.0)])
+        self.assertEqual(sorted(round(s.height, 2) for s, _, _ in got), [14.0, 30.0], "a taller part is drawn on the mass")
+        got = self.sparse(height=11.0)
+        self.assertAlmostEqual(self.wide(got, 60)[0].height, 11.0, places=3, msg="its mapped height when it has one")
+        got = self.sparse([("roof", rect(105, 131, 48, 6), 9.0, 6.0)])
+        self.assertAlmostEqual(self.wide(got, 60)[0].height, 14.0, places=3, msg="a roof part's top is no terminal height")
+        b = building(self.TERM, name="Terminal 1", has_parts=1.0)
+        rows = [("wing", rect(100, 100, 20, 30), 14.0, 0.0)]
+        off = items(b, self.PADS, [self.parts(rows)(b.ids[0])], airport=False)
+        self.assertEqual(len(off), 1, "(off an airport: its one part, as it was)")
+
+    def test_parts_covering_most_of_a_terminal_leave_it_to_them(self):
+        b = building(self.TERM, name="Terminal 1", has_parts=1.0)
+        rows = [("a", rect(100, 100, 40, 30), 12.0, 0.0), ("b", rect(140, 100, 20, 30), 15.0, 0.0)]
+        got = items(b, self.PADS, [self.parts(rows)(b.ids[0])])
+        self.assertEqual(sorted(round(s.height, 2) for s, _, _ in got), [12.0, 15.0], "just the two parts")
+
+    def test_a_roof_part_keeps_its_own_heights(self):
+        got = self.sparse([("roof", rect(105, 131, 48, 6), 9.0, 6.0)])
+        roof = self.wide(got, 48)
+        self.assertEqual(len(roof), 1)
+        self.assertEqual((round(roof[0].min_h, 2), round(roof[0].height, 2)), (6.0, 3.0), "its mapped 6 to 9 m, not the terminal's")
+        self.assertFalse(roof[0].terminal)
+
+    def test_a_block_inside_a_terminal_has_the_terminal_look(self):
+        feats = Feats(["t", "blk", "far"], [self.TERM, rect(110, 105, 20, 15), rect(200, 20, 20, 15)], **{
+            "class": ["", "", ""], "height": [np.nan, 8.0, 8.0], "num_floors": [np.nan] * 3, "min_height": [np.nan] * 3,
+            "name": ["Terminal 1", "", ""], "has_parts": [0.0] * 3})
+        got = {round(float(s.ring[:, 0].min())): s for s, _, _ in items(feats, self.PADS)}
+        self.assertTrue(got[110].terminal, "mostly inside a terminal's outline")
+        self.assertFalse(got[200].terminal)
+        self.assertEqual(got[110].roof, "flat")
+
+    def test_a_jet_bridge_stays_raised_on_pillars(self):
+        bridge = Feats(["jb", "t"], [rect(121, 80, 3.5, 22), self.TERM], **{
+            "class": ["", ""], "height": [7.0, np.nan], "num_floors": [np.nan] * 2, "min_height": [4.0, np.nan],
+            "name": ["", "Terminal 1"], "has_parts": [0.0, 0.0]})
+        got = items(bridge, self.PADS)
+        deck = [s for s, _, _ in got if s.cls != "pillar" and s.min_h > 0]
+        pills = [s for s, _, _ in got if s.cls == "pillar"]
+        self.assertEqual(len(deck), 1)
+        self.assertAlmostEqual(deck[0].min_h, 4.0, places=3, msg="it floats, as mapped")
+        self.assertTrue(deck[0].airside)
+        self.assertGreaterEqual(len(pills), 2)
+        for p in pills:
+            self.assertAlmostEqual(p.height, 4.0 - 0.02, places=3)
+        self.assertEqual(len(items(bridge, self.PADS, airport=False)), 2, "(off an airport: no pillars)")
+
+    def test_a_roof_on_a_terminals_front_keeps_its_own_heights_or_a_canopys(self):
+        """Brisbane's strips along its domestic terminal: class-roof footprints, drawn at their own mapped heights (a canopy's
+        6 m underside and 1 m thickness where none is mapped), never the terminal's height."""
+        feats = Feats(["t", "front", "mapped", "far"], [self.TERM, rect(110, 131, 40, 7), rect(110, 140, 40, 7),
+                                                         rect(110, 160, 40, 7)], **{
+            "class": ["", "roof", "roof", "roof"], "height": [np.nan, np.nan, 9.0, np.nan], "num_floors": [np.nan] * 4,
+            "min_height": [np.nan, np.nan, 5.0, np.nan], "name": ["Terminal 1", "", "", ""], "has_parts": [0.0] * 4})
+        got = {round(float(s.ring[:, 1].min())): s for s, _, _ in items(feats, self.PADS)}
+        self.assertTrue(got[100].terminal)
+        self.assertFalse(got[131].terminal, "a canopy, no terminal")
+        self.assertEqual((got[131].min_h, got[131].height), (bld.CANOPY_UNDERSIDE_M, 2.5), "6 m up (a slab at least 2.5 m)")
+        self.assertEqual(got[140].min_h, 5.0, "its mapped underside")
+        self.assertAlmostEqual(got[140].height, 4.0, places=3, msg="9 m top over 5 m: 4 m thick")
+        self.assertNotAlmostEqual(got[131].height, ab.terminal_height(1800.0), places=1)
+
+    def test_a_hangar_and_a_car_park_have_no_airside_look(self):
+        feats = Feats(["h", "c"], [rect(200, 20, 30, 20), rect(200, 60, 30, 20)], **{
+            "class": ["hangar", "parking_garage"], "height": [np.nan] * 2, "num_floors": [np.nan] * 2,
+            "min_height": [np.nan] * 2, "name": ["", ""], "has_parts": [0.0] * 2})
+        for s, _, _ in items(feats, self.PADS):
+            self.assertFalse(s.airside)
+            self.assertFalse(s.terminal)
 
 
 class UnchangedTest(unittest.TestCase):

@@ -274,8 +274,8 @@ class ApronPhoto(unittest.TestCase):
         out = sf.photo_lots(rgb, FRAME, -128.0, -128.0, 256.0, [f])
         band, rest = inside & lane, inside & ~lane
         self.assertGreater(abs(float(was[band].mean()) - float(was[rest].mean())), 40.0, "(the band the aerial had)")
-        self.assertLess(abs(float(out[band].mean()) - float(out[rest].mean())), 3.0, "one surface")
-        self.assertLess(float(out[band].std()), 3.0)
+        self.assertLess(abs(float(np.median(out[band])) - float(np.median(out[rest]))), 3.0, "one surface")
+        self.assertLess(float(out[band].std()), 8.0, "(a few joints, no asphalt band)")
         self.assertTrue((rgb == np.where(inside[..., None] & lane[..., None], np.array(self.ASPHALT, np.uint8),
                                          rgb)).all(), "the photo itself untouched")
 
@@ -285,8 +285,9 @@ class ApronPhoto(unittest.TestCase):
         out = sf.photo_lots(rgb, FRAME, -128.0, -128.0, 256.0, [f])
         cols = np.arange(256)[None, :] - 128
         grass = ~inside & lane & (np.abs(cols) > 66)           # (the lane's overshoot past the apron's edge)
+        mown = sf._infield_grass(rgb, FRAME, -128.0, -128.0, 256.0, [f])      # (the infield's own pull to a mown green)
         self.assertGreater(int((was[grass] != rgb[grass]).any(axis=1).sum()), 100, "(painted before)")
-        self.assertLessEqual(int((out[grass] != rgb[grass]).any(axis=1).sum()), 4, "(the pad's overshoot left as grass)")
+        self.assertLessEqual(int((out[grass] != mown[grass]).any(axis=1).sum()), 4, "(the pad's overshoot left as grass)")
         core = ~lane & (np.abs(cols) < 56) & (np.abs(np.arange(256)[:, None] - 128) < 56)
         self.assertTrue((out[core] != rgb[core]).any(axis=1).all(), "the paving still painted")
 
@@ -296,6 +297,61 @@ class ApronPhoto(unittest.TestCase):
         got = sf.photo_lots(rgb, FRAME, -32.0, -32.0, 64.0, [lot])
         self.assertTrue(np.array_equal(got, sf.photo_pads(rgb, FRAME, -32.0, -32.0, 64.0, sf.lot_pads([lot]))))
         self.assertTrue((got[32, 32] != rgb[32, 32]).any())
+
+
+def point(e, n):
+    return (mapgeom.POINT, [[lonlat([e], [n])]])
+
+
+class Boundaries(unittest.TestCase):
+    """The airport's boundary for the infield (aeroways.boundaries) and the gates (aeroways.gates)."""
+
+    def inside(self, ring_list, e, n):
+        return covered(ring_list, e, n)
+
+    def test_the_aerodrome_polygon_is_the_boundary(self):
+        f = feats(intl_field(), (poly((0, 0), (100, 0), (100, 60), (0, 60)), "apron", "airport", {}, None))
+        got = aeroways.boundaries([f])
+        self.assertEqual(len(got), 1)
+        self.assertTrue(self.inside(got, 800, 800))
+        self.assertFalse(self.inside(got, 1000, 0))
+
+    def test_other_aerodrome_classes_count_but_not_a_heliport_or_a_closed_field(self):
+        box = poly((-300, -300), (300, -300), (300, 300), (-300, 300))
+        for cls, n in (("airport", 1), ("regional_airport", 1), ("military_airfield", 1), ("private_airstrip", 1),
+                       ("heliport", 0), ("seaplane_base", 0), ("closed_airport", 0), ("runway", 0)):
+            f = feats((box, cls, "airport", {}, None))
+            self.assertEqual(len(aeroways.boundaries([f])), n, cls)
+        self.assertEqual(aeroways.boundaries([feats((box, "airport", "recreation", {}, None))]), [])
+
+    def test_without_a_polygon_the_pads_hull_grown_150_m(self):
+        f = feats(taxiway((0, 0), (400, 0)),
+                  (poly((100, 100), (300, 100), (300, 200), (100, 200)), "apron", "airport", {}, None))
+        got = aeroways.boundaries([f])
+        self.assertEqual(len(got), 1)
+        for e, n in ((200, 150), (0, 0), (400, 0), (-100, 0), (200, 330), (200, -100)):
+            self.assertTrue(self.inside(got, e, n), (e, n))
+        for e, n in ((-200, 0), (600, 0), (200, 400), (200, -200), (900, 900)):
+            self.assertFalse(self.inside(got, e, n), (e, n))
+        self.assertEqual(len(aeroways.boundaries([f])), 1, "kept: the same again")
+
+    def test_none_for_anywhere_else(self):
+        lot = feats((poly((-20, -20), (20, -20), (20, 20), (-20, 20)), "parking", "transit", {}, None))
+        self.assertEqual(aeroways.boundaries([lot, None]), [])
+        self.assertEqual(aeroways.gates([lot, None]), [])
+
+    def test_gates_are_the_gate_and_parking_position_points(self):
+        f = feats((point(5, 6), "airport_gate", "airport", {}, None),
+                  (point(30, 6), "parking_position", "airport", {}, None),
+                  (point(50, 6), "other", "airport", {"aeroway": "gate"}, None),
+                  (point(70, 6), "other", "airport", {}, None),
+                  (point(90, 6), "airport_gate", "recreation", {}, None))
+        got = aeroways.gates([f])
+        self.assertEqual(len(got), 3)
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([5.0, 30.0, 50.0]), np.array([6.0, 6.0, 6.0]), 0.0)
+        for (a, b), x, y in zip(got, la, lo):
+            self.assertAlmostEqual(a, float(x), 9)
+            self.assertAlmostEqual(b, float(y), 9)
 
 
 if __name__ == "__main__":
