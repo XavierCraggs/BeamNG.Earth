@@ -1,4 +1,4 @@
-"""build_airfield_lights.py: the airfield lights' glow balls (mod/.../art/shapes/beamngEarth/bne_afl_<colour>.dae, one
+﻿"""build_airfield_lights.py: the airfield lights' glow balls (mod/.../art/shapes/beamngEarth/bne_afl_<colour>.dae, one
 shape per colour: white, green, red, blue, yellow; airfield_lights.materials.json), night only, the street lamps' far
 glow (build_lamp_glow.py: the same ball in the engine's detail levels, one material per level) made small and tinted.
 server/airfieldlights.py emits one forest row per light in the group afl_<colour>; trees.lua catalogues the groups
@@ -18,7 +18,7 @@ import os
 
 import build_lamp_glow as lg
 
-AFL_SCALE = 0.35                                    # each ball's size against the lamp glow's, at every level
+AFL_SCALE = 0.6                                     # each ball's size against the lamp glow's, at every level
 COLOURS = {                                         # nightlights.lua AFL_COLOURS (its emissive colours; the same)
     "white": (1.0, 0.95, 0.85),
     "green": (0.2, 1.0, 0.35),

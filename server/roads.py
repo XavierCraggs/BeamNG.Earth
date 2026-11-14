@@ -12127,6 +12127,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     if clearance_out is not None or (props is not None and walks is not None):
         import furniture
         clearance = furniture.RoadClearance(traffic_lines, traffic_decks, bounds=own_box)
+        if aero_xy:                                 # (no pole, tower or wire on an apron, taxiway or runway: airsidekeep)
+            import airsidekeep
+            clearance.airside = airsidekeep.Keep(aero_xy)
         if clearance_out is not None:
             clearance_out.append(clearance)
     sign_decks = [(np.asarray(ch["n"], np.float64), ch["w"] / 2) for ch in chunks if ch.get("deck")] if props is not None else ()

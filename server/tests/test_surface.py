@@ -584,6 +584,21 @@ class LotTest(unittest.TestCase):
         self.assertTrue(np.array_equal(out[30, 11], np.round((240 + paved) / 2)))   # half covered
         self.assertTrue(np.array_equal(out[2, 2], [240, 240, 240]) and np.array_equal(rgb[30, 30], [240, 240, 240]))
 
+    def test_off_green_leaves_grass_and_softens_its_edge(self):
+        """photo_pads(off_green=True) (an airfield's paving): coverage goes where the photo is grass, over 3 x 3 pixels,
+        and nowhere else; off it, photo_pads is as it was."""
+        rgb = np.full((32, 32, 3), 150, np.uint8)
+        rgb[:, 16:] = (70, 110, 50)                     # grass on the east half
+        cov = np.ones((32, 32), np.float32)
+        out = sf._off_green(rgb, cov)
+        self.assertTrue((out[:, :14] == 1.0).all(), "pavement: kept whole")
+        self.assertTrue((out[:, 18:] == 0.0).all(), "grass: none")
+        self.assertTrue(((out[:, 14:18] >= 0.0) & (out[:, 14:18] <= 1.0)).all())
+        self.assertTrue((np.diff(out[10, 13:19]) <= 1e-6).all(), "falling across the edge, not a stair of noise")
+        self.assertIs(sf._off_green(rgb, np.zeros((32, 32), np.float32)).dtype, np.dtype(np.float32))
+        self.assertTrue(np.array_equal(cov, np.ones((32, 32), np.float32)), "the input untouched")
+        self.assertEqual(float(sf._off_green(np.full((8, 8, 3), 150, np.uint8), np.ones((8, 8), np.float32)).min()), 1.0)
+
 
     def test_dirt_track_visible_on_pale_ground(self):
         """A dirt track painted into a pale field photo stays clearly darker than it (a farm track near Suchy Dul read

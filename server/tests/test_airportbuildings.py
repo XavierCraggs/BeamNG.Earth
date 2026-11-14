@@ -247,12 +247,52 @@ class AirsideTest(unittest.TestCase):
             self.assertTrue(s.windows)
             self.assertTrue(s.airside)
             self.assertTrue(lo <= s.height <= hi, s.height)      # (6-9 m)
-        glass = [s for s in specs if s.facade.startswith(bld.OFFICE)]
-        self.assertTrue(0 < len(glass) < len(specs), "glass and light panels, by the seed")
+        panels = [s for s in specs if s.band == bld.BAND_OFFICE2 and s.facade in bld.AIRSIDE_PANEL_TINTS]
+        self.assertTrue(panels and len({s.facade for s in specs}) > 1, "glass and light panels, by the seed")
         for s in specs:
-            if s not in glass:
-                self.assertIn(s.facade, bld.AIRSIDE_PANEL_TINTS)
-                self.assertEqual(s.band, bld.BAND_PANEL)
+            self.assertEqual(material(s), bld.OFFICE, "the curtain wall's sheet, never FACADE's house windows")
+            self.assertIn(s.band, (bld.BAND_OFFICE, bld.BAND_OFFICE2))
+
+    def test_a_box_of_any_size_or_class_never_takes_the_house_facade(self):
+        """Brisbane's jet bridge cabs and stair blocks: 4 to 60 m boxes (a retail or house class, a mapped brick wall) with
+        the plaster window sheet's sash windows."""
+        for w, d in ((4, 6), (4, 9), (6, 12), (10, 10), (30, 60)):
+            for at in ({}, {"class": "retail"}, {"class": "house"}, {"class": "garage_shed"},
+                       {"facade_material": "brick", "facade_color": "#a04030"}):
+                s = self.spec(rect(110, 100, w, d), **at)
+                self.assertTrue(s.airside, (w, d, at))
+                self.assertEqual(material(s), bld.OFFICE, (w, d, at))
+                self.assertFalse(s.shop or s.wall or s.plain or s.porch, (w, d, at))
+
+    def test_a_mapped_pitched_tiled_roof_is_flat_membrane_or_metal(self):
+        """Brisbane's domestic concourse: a mapped hipped roof in terracotta tiles; a terminal's, a pier's or a walkway's
+        roof is flat and never tiles, whatever the map says, and has no house features."""
+        pitched = dict(roof_shape="hipped", roof_material="tiles", roof_color="#b5532f", roof_height=4.0)
+        for shape in ("gabled", "hipped", "pyramidal", "skillion", "mansard"):
+            at = dict(pitched, roof_shape=shape)
+            for ring, extra in ((rect(110, 100, 6, 5), {}), (rect(110, 100, 8, 60), {}), (rect(100, 100, 60, 30), {}),
+                                (rect(100, 100, 60, 30), {"name": "Domestic Terminal"}),
+                                (rect(100, 100, 8, 14), {"name": "Concourse B"})):
+                s = self.spec(ring, **dict(at, **extra))
+                self.assertEqual(s.roof, "flat", (shape, extra))
+                self.assertIn(s.roof_mat.split("|")[0], (bld.ROOF_FLAT, bld.ROOF_METAL), (shape, extra, s.roof_mat))
+                self.assertFalse(s.hf or s.skel or s.porch or s.steeple or s.wall, (shape, extra))
+
+    def test_a_small_terminal_by_name_is_no_house(self):
+        for name in ("Terminal 2", "Concourse C"):
+            for w, d in ((6, 8), (10, 12), (14, 9)):
+                s = self.spec(rect(100, 100, w, d), name=name)
+                self.assertEqual((s.roof, s.facade), ("flat", bld.OFFICE), (name, w, d))
+                self.assertFalse(s.wall or s.porch or s.plain or s.steeple, (name, w, d))
+                self.assertFalse(s.roof_mat.startswith(bld.ROOF_TILES))
+
+    def test_a_tower_stays_flat_under_a_mapped_pitch(self):
+        got = items(building(rect(100, 100, 8, 8), name="Control Tower", roof_shape="hipped", roof_material="tiles"),
+                    self.PADS)
+        self.assertTrue(got)
+        for s, _, _ in got:
+            self.assertEqual(s.roof, "flat")
+            self.assertNotEqual(material(s).split("|")[0], bld.ROOF_TILES)
 
     def test_the_same_building_off_an_airport_is_as_before(self):
         b = building(rect(100, 100, 12, 10))        # (its id seeds its look: the same one both ways)

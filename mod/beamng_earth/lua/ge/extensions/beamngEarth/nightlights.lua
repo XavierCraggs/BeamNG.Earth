@@ -1,4 +1,4 @@
--- Night lighting (the user, 2026-10-27: "work on night lighting"; GitHub #3): after dusk the buildings' windows light
+﻿-- Night lighting (the user, 2026-10-27: "work on night lighting"; GitHub #3): after dusk the buildings' windows light
 -- up. Their materials carry night emissive maps (tools/build_night_windows.py: about half the plaster sheet's windows,
 -- the curtain walls and shopfronts with some bays dimmed), dark by day (emissiveFactor 0 in buildings.materials.json);
 -- this turns them on and off with the stock environment's own day / night (core_environment.getLightState, the switch
@@ -43,7 +43,7 @@ end
 -- colour, the balls' light the lamps' by AFL_NITS_FACTOR (a runway's fittings are dimmer than a sodium head, and
 -- there are thousands of them in a row); the groups are on at night with the lamps' glow (AFL_GROUPS, below)
 M.AFL_COLOURS = { white = '1 0.95 0.85', green = '0.2 1 0.35', red = '1 0.12 0.08', blue = '0.2 0.4 1', yellow = '1 0.75 0.15' }
-M.AFL_NITS_FACTOR = 0.7
+M.AFL_NITS_FACTOR = 1.3     -- (0.7 read as specks from a car's height at Brisbane, 2026-11-14)
 -- by colour, on top: a runway's edge, threshold and end lights are high intensity, far brighter than the taxiways'
 -- blue edge lights (Brisbane at dusk, 2026-11-12: the runway's white read fainter than the blue)
 M.AFL_COLOUR_GAIN = { white = 3.5, yellow = 3.5, green = 3.5, red = 3.5, blue = 1.5 }

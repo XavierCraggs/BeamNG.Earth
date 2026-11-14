@@ -235,8 +235,8 @@ class Orientation(unittest.TestCase):
 class Buildings(unittest.TestCase):
     CANOPY = [(-12, 6), (12, 6), (12, 12), (-12, 12)]
 
-    def gate_with(self, *blds):
-        f = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
+    def gate_with(self, *blds, f=None):
+        f = f or feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
         return pa.stands(f, [buildings(TERMINAL)] + list(blds))
 
     def test_a_canopy_or_walkway_part_pulls_the_aircraft_back(self):
@@ -288,6 +288,38 @@ class Buildings(unittest.TestCase):
         for c in got:
             for r in sheds:
                 self.assertFalse(pa._pip(np.array(r), footprint(c)).any())
+
+    def test_a_narrow_bridge_by_the_gate_is_no_obstacle_to_its_aircraft(self):
+        f = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)         # (the ids fix the type: the same one)
+        base = self.gate_with(f=f)
+        bridge = [(8, 20), (12, 20), (12, 32), (8, 32)]                    # (4 x 12 m, off the gate: by the wing)
+        shed = [(8, 20), (16, 20), (16, 26), (8, 26)]                      # (8 x 6 m: a building)
+        got = self.gate_with(buildings(bridge, prefix="n"), f=f)
+        self.assertEqual(len(got), 1)
+        self.assertAlmostEqual(en(got[0])[1], en(base[0])[1], 1)           # (where it stood without it)
+        moved = self.gate_with(buildings(shed, prefix="s"), f=f)
+        self.assertEqual(len(moved), 1)
+        self.assertGreater(en(moved[0])[1], en(base[0])[1] + 1.0)          # (pulled back from the shed)
+        far = [(8 + 60, 20), (12 + 60, 20), (12 + 60, 32), (8 + 60, 32)]
+        sc = pa._scene(feats(aerodrome("regional_airport"), gate(0.0)))
+        obstacles, _small = pa._buildings(sc, buildings(bridge, shed, far))
+        self.assertEqual(sorted(obstacles.narrow), [0, 2])                 # (the shed is not narrow)
+
+    def test_a_raised_part_is_no_obstacle_to_the_wings_but_to_the_fuselage(self):
+        f = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
+        base = self.gate_with(f=f)
+        c = en(base[0])
+        wing = [(8, c[1] - 3), (16, c[1] - 3), (16, c[1] + 3), (8, c[1] + 3)]          # over a wing, beside the fuselage
+        body = [(-3, c[1] - 3), (3, c[1] - 3), (3, c[1] + 3), (-3, c[1] + 3)]          # over the fuselage
+
+        def raised(ring, height):
+            p = parts(ring)
+            p.attrs["min_height"] = np.array([height])
+            return p
+        self.assertAlmostEqual(en(self.gate_with(raised(wing, 4.0), f=f)[0])[1], c[1], 1)
+        self.assertGreater(en(self.gate_with(raised(wing, 0.0), f=f)[0])[1], c[1] + 1.0)
+        got = self.gate_with(raised(body, 4.0), f=f)
+        self.assertTrue(not got or en(got[0])[1] > c[1] + 1.0)             # (the fuselage still meets it)
 
     def test_kept_stands_is_what_tile_rows_places(self):
         f, _ = gates_row(4, 80.0, occupied=True)
@@ -347,6 +379,16 @@ class Apron(unittest.TestCase):
         self.assertEqual(pa.stands(plain, None), [])
         ga = feats(aerodrome(), (poly(self.APRON), "apron", {}, "General Aviation Apron"))
         self.assertTrue(0 < len(pa.stands(ga, None)) <= pa.GA_MAX)
+
+    def test_a_gates_aircraft_stands_on_the_paving(self):
+        def run(apron):
+            f = feats(aerodrome("regional_airport"), (poly(apron), "apron", {}), gate(0.0), occupied=True)
+            return [c for c in pa.stands(f, buildings(TERMINAL)) if c.mode == "gate"]
+        free = pa.stands(feats(aerodrome("regional_airport"), gate(0.0), occupied=True), buildings(TERMINAL))
+        self.assertEqual(len(free), 1)                                  # (a cell that maps no apron: not asked)
+        self.assertEqual(len(run([(-60, 0), (60, 0), (60, 80), (-60, 80)])), 1)         # (the whole stand on it)
+        self.assertEqual(run([(-60, 0), (60, 0), (60, 14), (-60, 14)]), [])             # (the main gear on the grass)
+        self.assertEqual(run([(-60, 40), (60, 40), (60, 90), (-60, 90)]), [])           # (the nose gear on the grass)
 
     def test_a_hangar_on_the_apron_is_kept_off(self):
         hangar = [(-150, 100), (-60, 100), (-60, 140), (-150, 140)]

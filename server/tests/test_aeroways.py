@@ -242,6 +242,62 @@ class Painted(unittest.TestCase):
         self.assertIs(sf.paint_lots(idx, la, lo, [None]), idx)
 
 
+class ApronPhoto(unittest.TestCase):
+    """Brisbane's international apron: a taxiway across it a darker band, a pale haze past the paving onto the grass."""
+    GRASS, CONCRETE, ASPHALT = (70, 110, 50), (185, 183, 178), (95, 95, 95)
+
+    def scene(self):
+        apron = (poly((-60, -60), (60, -60), (60, 60), (-60, 60)), "apron", "airport", {}, None)
+        f = feats(intl_field(), apron, taxiway((-90, -20), (90, 20)))
+        px, size = 256, 256.0
+        e, n = np.meshgrid((np.arange(px) + 0.5) * size / px - 128, 128 - (np.arange(px) + 0.5) * size / px)
+        inside = (np.abs(e) < 62) & (np.abs(n) < 62)
+        lane = np.abs(n - 20 * e / 90) * np.cos(np.arctan(20 / 90)) < 11.5           # (the lane's 23 m, as the photo has it)
+        rgb = np.empty((px, px, 3), np.uint8)
+        rgb[:] = self.GRASS
+        rgb[inside] = self.CONCRETE
+        rgb[lane & (np.abs(e) < 90)] = self.ASPHALT         # (the aerial's real asphalt lane, across the apron and past it)
+        rgb[lane & ~inside] = self.GRASS                    # ... where the lane runs over grass in the photo
+        return f, rgb, inside, lane
+
+    def test_ways_and_aprons_are_told_apart(self):
+        f, _, _, _ = self.scene()
+        self.assertEqual(len(aeroways.aprons([f])), 1)
+        self.assertGreaterEqual(len(aeroways.ways([f])), 1)
+        self.assertEqual(len(aeroways.aprons([f])) + len(aeroways.ways([f])), len(aeroways.pads([f], runways=False)))
+        self.assertEqual(aeroways.aprons([None]), [])
+        self.assertEqual(aeroways.ways([feats(taxiway((-30, 0), (30, 0), surface="grass"))]), [])
+
+    def test_a_taxiway_across_an_apron_takes_the_aprons_tone(self):
+        f, rgb, inside, lane = self.scene()
+        was = sf.photo_pads(rgb, FRAME, -128.0, -128.0, 256.0, sf.lot_pads([f]))
+        out = sf.photo_lots(rgb, FRAME, -128.0, -128.0, 256.0, [f])
+        band, rest = inside & lane, inside & ~lane
+        self.assertGreater(abs(float(was[band].mean()) - float(was[rest].mean())), 40.0, "(the band the aerial had)")
+        self.assertLess(abs(float(out[band].mean()) - float(out[rest].mean())), 3.0, "one surface")
+        self.assertLess(float(out[band].std()), 3.0)
+        self.assertTrue((rgb == np.where(inside[..., None] & lane[..., None], np.array(self.ASPHALT, np.uint8),
+                                         rgb)).all(), "the photo itself untouched")
+
+    def test_the_grass_the_photo_shows_is_not_painted_over(self):
+        f, rgb, inside, lane = self.scene()
+        was = sf.photo_pads(rgb, FRAME, -128.0, -128.0, 256.0, sf.lot_pads([f]))
+        out = sf.photo_lots(rgb, FRAME, -128.0, -128.0, 256.0, [f])
+        cols = np.arange(256)[None, :] - 128
+        grass = ~inside & lane & (np.abs(cols) > 66)           # (the lane's overshoot past the apron's edge)
+        self.assertGreater(int((was[grass] != rgb[grass]).any(axis=1).sum()), 100, "(painted before)")
+        self.assertLessEqual(int((out[grass] != rgb[grass]).any(axis=1).sum()), 4, "(the pad's overshoot left as grass)")
+        core = ~lane & (np.abs(cols) < 56) & (np.abs(np.arange(256)[:, None] - 128) < 56)
+        self.assertTrue((out[core] != rgb[core]).any(axis=1).all(), "the paving still painted")
+
+    def test_parking_lots_are_painted_as_before(self):
+        lot = feats((poly((-20, -20), (20, -20), (20, 20), (-20, 20)), "parking", "transit", {}, None))
+        rgb = np.full((64, 64, 3), (70, 110, 50), np.uint8)       # (a lot over grass: still painted, no airport near)
+        got = sf.photo_lots(rgb, FRAME, -32.0, -32.0, 64.0, [lot])
+        self.assertTrue(np.array_equal(got, sf.photo_pads(rgb, FRAME, -32.0, -32.0, 64.0, sf.lot_pads([lot]))))
+        self.assertTrue((got[32, 32] != rgb[32, 32]).any())
+
+
 if __name__ == "__main__":
     unittest.main()
 

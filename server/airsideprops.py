@@ -20,8 +20,9 @@ centreline is no obstacle: a stand's lead-in runs through the nose):
                 at the aft door);
   stairs        remote stands: at the forward left door, the platform at the fuselage.
 Apron masts: along the edge of each apron of at least MAST_APRON_MIN_M2 every MAST_SPACING_M (a hash picks the start),
-MAST_INSET_M inside the edge, skipping a spot on a taxiway's or runway's pavement (or by a taxilane's centreline), within
-MAST_STAND_M of an aircraft, or at a building.
+MAST_INSET_M inside the edge (so inside the apron's polygon), skipping a spot on a taxiway's or runway's pavement, within
+MAST_TAXI_M of a taxiway's or taxilane's centreline or MAST_RUNWAY_M of a runway's (an apron's grass island between them
+takes none), within MAST_STAND_M of an aircraft or MAST_GATE_M of a gate, or at a building.
 Clutter: by each hangar or cargo building (class hangar / warehouse / industrial, or named hangar, cargo, freight, logistic
 or maintenance; CLUTTER_MIN_M2 to CLUTTER_MAX_M2) on or by an apron (within CLUTTER_APRON_M): a row of 2-4 20 ft cargo
 containers (some stacked two high) along its longest free wall, CLUTTER_OFFSET_M off it, and a cone at each corner of the
@@ -70,6 +71,9 @@ MAST_INSET_M = 1.2
 MAST_STAND_M = 3.0
 MAST_BUILDING_M = 2.0
 MAST_LANE_M = 4.0               # m from a taxilane's centreline
+MAST_TAXI_M = 25.0              # m from any taxiway's or taxilane's centreline (wing tips pass)
+MAST_RUNWAY_M = 60.0            # m from a runway's centreline
+MAST_GATE_M = 10.0              # m from a gate's point (a stand, occupied or not)
 MAST_APART_M = 40.0
 MAST_MAX = 30                   # an apron's
 CLUTTER_CLASSES = {"hangar", "warehouse", "industrial", "cargo"}
@@ -131,6 +135,16 @@ class _Site:
         self.exempt = frozenset(exempt)         # indexes of the obstacles that are no obstacle to a vehicle (jet bridges)
         self.crafts = crafts                    # [(kind, x, y, nx, ny)]
         self.placed = []                        # (kind, cx, cy, hx, hy, pts)
+        self.taxi = self._segs(sc.lanes)        # the taxiways' and taxilanes' centrelines, the runways' (a, b)
+        self.runway = self._segs(sc.runways)
+        self.gates = np.array([[g[1], g[2]] for g in sc.gates]).reshape(-1, 2)
+
+    @staticmethod
+    def _segs(lines):
+        lines = [ln for ln in lines if len(ln) >= 2]
+        if not lines:
+            return np.zeros((0, 2)), np.zeros((0, 2))
+        return np.concatenate([ln[:-1] for ln in lines]), np.concatenate([ln[1:] for ln in lines])
 
     def free(self, kind, cx, cy, hx, hy, aircraft_m=CLEAR_AIRCRAFT_M, pavement=True):
         """Is a `kind` vehicle at (cx, cy), its +Y along (hx, hy), clear of the buildings, the aircraft, the vehicles
@@ -166,9 +180,10 @@ class _Site:
     def add(self, kind, cx, cy, hx, hy):
         self.placed.append((kind, cx, cy, hx, hy, _box_pts(kind, cx, cy, hx, hy)))
 
-    def point_free(self, x, y, ring, building_m, lane_m, stand_m):
+    def point_free(self, x, y, ring, building_m, lane_m, stand_m, taxi_m=0.0, runway_m=0.0, gate_m=0.0):
         """May a mast stand at (x, y): inside `ring`, off the buildings, the pavement of runways and taxiways, the
-        taxilanes' centrelines (lane_m) and the aircraft (stand_m)?"""
+        taxilanes' centrelines (lane_m), the aircraft (stand_m), and clear of every taxiway's and taxilane's centreline
+        (taxi_m), runway's centreline (runway_m) and gate point (gate_m)?"""
         p = np.array([[x, y]])
         if not pa._pip(ring, p)[0]:
             return False
@@ -182,6 +197,11 @@ class _Site:
             d = pa._seg_dist(p, w.a, w.b)[0]
             if (d < np.where(w.centre, lane_m, w.half)).any():
                 return False
+        for (a, b), m in ((self.taxi, taxi_m), (self.runway, runway_m)):
+            if m > 0.0 and len(a) and pa._seg_dist(p, a, b).min() < m:
+                return False
+        if gate_m > 0.0 and len(self.gates) and float(dnp.hypot(*(self.gates - (x, y)).T).min()) < gate_m:
+            return False
         for k2, x2, y2, nx2, ny2 in self.crafts:
             if math.hypot(x2 - x, y2 - y) <= pa._radius(k2) + stand_m and pa._in_rects(k2, x2, y2, nx2, ny2, p, stand_m)[0]:
                 return False
@@ -292,7 +312,7 @@ def _masts(site):
             x, y = float(p[0]), float(p[1])
             if got >= MAST_MAX or any(math.hypot(x - x2, y - y2) < MAST_APART_M for x2, y2 in out):
                 continue
-            if site.point_free(x, y, ring, MAST_BUILDING_M, MAST_LANE_M, MAST_STAND_M):
+            if site.point_free(x, y, ring, MAST_BUILDING_M, MAST_LANE_M, MAST_STAND_M, MAST_TAXI_M, MAST_RUNWAY_M, MAST_GATE_M):
                 out.append((x, y))
                 got += 1
     return out

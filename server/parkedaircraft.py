@@ -79,6 +79,15 @@ BRIDGE_MAX_M2 = 300.0
 BRIDGE_MIN_M, BRIDGE_CAP_M = 12.0, 50.0
 BRIDGE_SIDE_M = 1.5             # m between a bridge's side and the fuselage
 OBSTACLE_MIN_M2 = 1.0           # a building or part smaller than this is a sliver
+NARROW_W_M = 6.0                # a building or part this narrow and NARROW_RATIO times as long is a bridge or a finger:
+NARROW_RATIO = 2.0              # ... no obstacle to the aircraft of a gate within NARROW_NEAR_M of it
+NARROW_LEN_MAX_M = 60.0         # (a longer one is a wall)
+NARROW_NEAR_M = 40.0
+NARROW_WING_M = 60.0            # ... and one this near any gate (a neighbour's) is none to the wings and the tailplane
+RAISED_MIN_M = 3.0              # a part raised this far (min_height) is no obstacle to the wings and the tailplane
+NOSE_GEAR_K = 0.12              # the nose gear this many lengths behind the nose,
+MAIN_GEAR_K = 0.58              # the main gear this many behind it,
+MAIN_TRACK_K = 0.10             # each leg this many spans off the axis: all on the paving (aprons and taxiways)
 BUILDING_CLEAR_M = 1.5
 PULL_BACK_MAX_M = 15.0          # a gate's aircraft that meets a building moves tail-ward by up to this far
 PULL_BACK_STEP_M = 1.5
@@ -127,6 +136,12 @@ def _rects(kind):
             (wing_at - chord / 2.0, wing_at + chord / 2.0, -span / 2.0, span / 2.0),
             (tail_at - TAIL_CHORD_K * chord, tail_at + TAIL_CHORD_K * chord, -TAIL_SPAN_K * span / 2.0,
              TAIL_SPAN_K * span / 2.0)]
+
+
+def _fuselage_n(kind):
+    """How many of _local_points(kind)'s first points are the fuselage's."""
+    u0, u1, v0, v1 = _rects(kind)[0]
+    return (max(2, int(math.ceil((u1 - u0) / STEP_M)) + 1)) * (max(2, int(math.ceil((v1 - v0) / STEP_M)) + 1))
 
 
 def _local_points(kind):
@@ -260,6 +275,7 @@ class _Scene:
         self.gates, self.aprons, self.aerodromes = [], [], []
         self.lines = []                         # (xy (n, 2), half width, mode): "pavement" or "centre"
         self.lanes = []                         # the taxiways' and taxilanes' lines (xy (n, 2))
+        self.runways = []                       # the runways' lines (xy (n, 2))
         self.intl = False
 
     def xy(self, ring):
@@ -357,6 +373,8 @@ def _scene(feats):
                         sc.lines.append((xy, half, mode))
                         if c in ("taxiway", "taxilane"):
                             sc.lanes.append(xy)
+                        elif c == "runway":
+                            sc.runways.append(xy)
     return sc
 
 
@@ -381,6 +399,9 @@ class _World:
     def __init__(self, sc, rings):
         self.sc = sc
         self.rings = rings                      # obstacle buildings: (ring, (x0, y0, x1, y1))
+        self.raised = set(getattr(rings, "raised", ()))     # indexes of the rings raised over the wings and the tailplane
+        self.narrow = tuple(sorted(getattr(rings, "narrow", ())))   # ... of the narrow, elongated ones
+        self.paving = None                      # [(ring, bbox)] the aprons' and taxiways' pads (None: not tested)
         self.placed = []                        # (kind, x, y, nx, ny)
         segs = [(ln[:-1], ln[1:], np.full(len(ln) - 1, h), np.full(len(ln) - 1, m == "centre"))
                 for ln, h, m in sc.lines]
@@ -397,18 +418,40 @@ class _World:
         """Does an aircraft of `kind` at (x, y) heading (nx, ny) keep clear (and, with `inside` (a ring), lie in it)?"""
         return self.why(kind, x, y, nx, ny, inside) is None
 
+    def narrow_near(self, x, y, near=NARROW_NEAR_M):
+        """The indexes of the narrow, elongated rings (bridges, fingers) within `near` m of (x, y)."""
+        return tuple(oi for oi in self.narrow if float(dnp.hypot(*(self.rings[oi][0] - (x, y)).T).min()) <= near)
+
+    def paved(self, kind, x, y, nx, ny):
+        """Are the aircraft's nose gear and both main legs on the paving (always, where it is not tested)?"""
+        if not self.paving:
+            return True
+        length, span = SPECS[kind][0], SPECS[kind][1]
+        local = np.array([[length / 2.0 - NOSE_GEAR_K * length, 0.0],
+                          [length / 2.0 - MAIN_GEAR_K * length, MAIN_TRACK_K * span],
+                          [length / 2.0 - MAIN_GEAR_K * length, -MAIN_TRACK_K * span]])
+        pts = _world(local, x, y, nx, ny)
+        for p in pts:
+            q = p[None]
+            if not any(x0 <= p[0] <= x1 and y0 <= p[1] <= y1 and _pip(ring, q)[0] for ring, (x0, y0, x1, y1) in self.paving):
+                return False
+        return True
+
     def why(self, kind, x, y, nx, ny, inside=None, ignore=()):
         """None where an aircraft of `kind` at (x, y) heading (nx, ny) keeps clear (and lies in the ring `inside`), else
-        the first thing it meets: "outside", "building", "taxiway" (runways, stopways, taxiways), "taxilane", "aircraft".
-        ignore: indexes into self.rings of buildings that are no obstacle (a gate's own jet bridges)."""
+        the first thing it meets: "outside", "building", "taxiway" (runways, stopways, taxiways), "taxilane", "aircraft",
+        "unpaved" (a gear leg off the paving). ignore: indexes into self.rings of buildings that are no obstacle (a gate's
+        own jet bridges); a raised part is one to the fuselage only."""
         pts = _world(_local_points(kind), x, y, nx, ny)
+        n_fus = _fuselage_n(kind)
         r = _radius(kind) + BUILDING_CLEAR_M
         if inside is not None and not _pip(inside, pts).all():
             return "outside"
         for oi, (ring, (x0, y0, x1, y1)) in enumerate(self.rings):
             if x0 - r > x or x1 + r < x or y0 - r > y or y1 + r < y or oi in ignore:
                 continue
-            if _pip(ring, pts).any() or _seg_dist(pts, ring, np.roll(ring, -1, axis=0)).min() < BUILDING_CLEAR_M:
+            hit = pts[:n_fus] if oi in self.raised else pts
+            if _pip(ring, hit).any() or _seg_dist(hit, ring, np.roll(ring, -1, axis=0)).min() < BUILDING_CLEAR_M:
                 return "building"
         if len(self.a):
             lo, hi = np.minimum(self.a, self.b) - r, np.maximum(self.a, self.b) + r
@@ -427,16 +470,48 @@ class _World:
             if _in_rects(k2, x2, y2, nx2, ny2, pts, AIRCRAFT_CLEAR_M).any() or \
                     _in_rects(kind, x, y, nx, ny, _world(_local_points(k2), x2, y2, nx2, ny2), AIRCRAFT_CLEAR_M).any():
                 return "aircraft"
-        return None
+        return None if self.paved(kind, x, y, nx, ny) else "unpaved"
 
     def add(self, kind, x, y, nx, ny):
         self.placed.append((kind, x, y, nx, ny))
 
 
+class _Rings(list):
+    """The obstacle rings [(ring, bbox)], with the indexes of the raised ones (`raised`: a part's min_height of at least
+    RAISED_MIN_M) and of the narrow, elongated ones (`narrow`: bridges and fingers)."""
+
+    def __init__(self):
+        super().__init__()
+        self.raised, self.narrow = set(), set()
+
+
+def _extent(ring):
+    """(length, width) m of the ring's smallest bounding rectangle (along one of its edges)."""
+    best = None
+    e = np.roll(ring, -1, axis=0) - ring
+    n = dnp.hypot(e[:, 0], e[:, 1])
+    for k in np.flatnonzero(n > 1e-6):
+        u = e[k] / n[k]
+        du, dv = dnp.matmul(ring, u), dnp.matmul(ring, np.array([-u[1], u[0]]))
+        a, b = float(du.max() - du.min()), float(dv.max() - dv.min())
+        if best is None or a * b < best[0] * best[1]:
+            best = (a, b)
+    return (0.0, 0.0) if best is None else (max(best), min(best))
+
+
+def _num(col, i):
+    """A numeric column's value at i, 0 where it is missing."""
+    try:
+        v = float(col[i])
+    except (TypeError, ValueError, IndexError):
+        return 0.0
+    return v if v == v else 0.0
+
+
 def _buildings(sc, bld):
-    """(obstacle rings [(ring, bbox)], small buildings [(ring, area, index in the obstacles)]) of the buildings and the
-    building parts Features (one, or a list), in the plane: every footprint is an obstacle, whatever its height."""
-    obstacles, small = [], []
+    """(obstacle rings [(ring, bbox)] (a _Rings), small buildings [(ring, area, index in the obstacles)]) of the buildings
+    and the building parts Features (one, or a list), in the plane: every footprint is an obstacle, whatever its height."""
+    obstacles, small = _Rings(), []
     blds = [b for b in _flat(bld) if len(b)]
     if not blds:
         return obstacles, small
@@ -454,6 +529,7 @@ def _buildings(sc, bld):
         under = bld.attrs.get("is_underground")
         if int(bld.kind[i]) != 3 or (under is not None and bool(under[i])):
             continue
+        lift = _num(bld.attrs.get("min_height"), i) if bld.attrs.get("min_height") is not None else 0.0
         for pi, part in enumerate(bld.parts(i)):
             if not part or len(part[0]) < 3:
                 continue
@@ -470,6 +546,11 @@ def _buildings(sc, bld):
             if area >= OBSTACLE_MIN_M2:
                 if area < BRIDGE_MAX_M2:
                     small.append((r, area, len(obstacles)))
+                if lift >= RAISED_MIN_M:
+                    obstacles.raised.add(len(obstacles))
+                length, width = _extent(r)
+                if width <= NARROW_W_M and NARROW_RATIO * width <= length <= NARROW_LEN_MAX_M:
+                    obstacles.narrow.add(len(obstacles))
                 obstacles.append((r, (float(r[:, 0].min()), float(r[:, 1].min()), float(r[:, 0].max()),
                                       float(r[:, 1].max()))))
     return obstacles, small
@@ -628,16 +709,17 @@ def _gate_tries(kind, gx, gy, bearing, term, small):
     return tagged + tries
 
 
-def _first_clear(world, kind, tries):
+def _first_clear(world, kind, tries, extra=()):
     """(None, (x, y, nx, ny)) of the first of the tries (centre, nose direction, ignored obstacles) that clears, one that
-    meets a building tried again pulled back along its axis (not where a jet bridge fixes the door), else (why, None)."""
+    meets a building tried again pulled back along its axis (not where a jet bridge fixes the door), else (why, None).
+    extra: obstacles that are none to any of the tries (the narrow bridges and fingers by the gate)."""
     why = "no_terminal"
     for cx, cy, nx, ny, ign in tries:
         for k in range(int(PULL_BACK_MAX_M / PULL_BACK_STEP_M + 1e-9) + 1):
             if k and ign:
                 break
             x, y = cx - nx * k * PULL_BACK_STEP_M, cy - ny * k * PULL_BACK_STEP_M
-            why = world.why(kind, x, y, nx, ny, ignore=ign)
+            why = world.why(kind, x, y, nx, ny, ignore=tuple(ign) + tuple(extra))
             if why != "building":
                 break
         if why is None:
@@ -648,6 +730,8 @@ def _first_clear(world, kind, tries):
 def _gate_craft(sc, world, small, obstacles):
     out = []
     gates = sorted(sc.gates, key=lambda g: (round(g[1], 1), round(g[2], 1), g[0]))   # (along a row: alternates stay)
+    for gid, gx, gy, _b, _p in gates:                   # (a neighbour's bridge by a gate: the wings pass under it)
+        world.raised.update(world.narrow_near(gx, gy, NARROW_WING_M))
     for gid, gx, gy, bearing, is_pos in gates:
         STATS["gates"] += 1
         if _crc(gid) % 100 >= OCCUPIED_PCT:
@@ -667,6 +751,7 @@ def _gate_craft(sc, world, small, obstacles):
         if term is None and bearing is None and lane is None and not (is_pos and _apron_nose(sc, gx, gy) is not None):
             remote = _terminal(obstacles, gx, gy, REMOTE_M)
         why = "no_terminal"
+        extra = world.narrow_near(gx, gy)
         for kind in kinds:
             length = SPECS[kind][0]
             if term is not None:
@@ -687,7 +772,7 @@ def _gate_craft(sc, world, small, obstacles):
             if not tries:
                 why = "no_terminal"
                 break
-            why, got = _first_clear(world, kind, tries)
+            why, got = _first_clear(world, kind, tries, extra)
             if why is None:
                 world.add(kind, *got)
                 out.append((kind,) + tuple(float(v) for v in got) + ("gate" if term is not None else "remote",))
@@ -768,6 +853,10 @@ def stands(feats, buildings=None):
     if sc is not None:
         obstacles, small = _buildings(sc, buildings)
         world = _World(sc, obstacles)
+        if sc.aprons:                                           # (a cell that maps aprons: the gear stays on the paving)
+            pads = [sc.xy(np.stack([lon, lat], 1)) for lat, lon in aeroways.pads([feats], runways=False)]
+            world.paving = [(r, (float(r[:, 0].min()), float(r[:, 1].min()), float(r[:, 0].max()), float(r[:, 1].max())))
+                            for r in pads if len(r) >= 3]
         placed = _gate_craft(sc, world, small, obstacles) + _ga_craft(sc, world)
         placed = [placed[j] for j in drop_overlaps(placed)]     # (the final pass: none overlaps another)
         out = [Craft(k, *sc.latlon(x, y), nx, ny, mode) for k, x, y, nx, ny, mode in placed]

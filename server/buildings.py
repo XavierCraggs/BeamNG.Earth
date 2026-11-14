@@ -676,7 +676,11 @@ BANDS = 4
 # whether the map gives them a height) take the terminal's look: glass curtain walls (OFFICE's tints) or light panels
 # (white or grey plaster with square windows), by the seed, never brick, siding or a house's rules
 AIRSIDE_GLASS_SHARE = 0.6
-AIRSIDE_PANEL_TINTS = (FACADE_TINTS[0], FACADE_TINTS[3], FACADE_TINTS[0])
+# silver and pale grey metal panels, on the curtain wall's own sheet: never FACADE's plaster window sheet, whose sash
+# windows read as a house's (Brisbane's jet bridge cabs and stair blocks, 2026-11-14)
+AIRSIDE_PANEL_TINTS = (f"{OFFICE}|0", f"{OFFICE}|6", f"{OFFICE}|0")
+AIRPORT_ROOFS = (ROOF_FLAT, ROOF_METAL)         # (a terminal's or a pier's roof: membrane or metal, never tiles)
+AIRPORT_ROOF_TINTS = {ROOF_FLAT: (0, 1, 3), ROOF_METAL: (0, 1, 4)}     # (ROOF_TINTS' pale and mid greys: no red or green)
 AIRSIDE_CLUTTER_MIN_M2 = 1500.0     # m2: the roof plant of a bigger airside roof; a smaller one is bare
 
 # Overture "bridge_structure" (OSM man_made=bridge parts with a height: the Queensboro Bridge's towers, 110 m) was a
@@ -1036,6 +1040,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # in vinyl siding, the Chrysler Building's 185 m wings on under 100 m² windowless steel masts)
     part = attrs.get("building_height") is not None
     airside = bool(attrs.get("_airside")) and not terminal      # (an airport's pier, satellite or walkway: the terminal look)
+    # (an airport's terminal, pier, satellite, walkway or tower: a flat roof of membrane or metal, never tiles or a pitch,
+    # and none of a house's features, whatever the map says of its roof; Brisbane's domestic concourse came out under
+    # a terracotta hipped roof from its mapped roof shape and colour, 2026-11-14)
+    civic = terminal or airside or bool(attrs.get("_tower"))
     church = cls in CHURCH_CLASSES or any(w in name for w in ("church", "chapel", "cathedral"))
     if "hangar" in name:
         cls = "hangar"
@@ -1046,9 +1054,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     narrow = hw < 4.2 and hl > 2.2 * hw                 # a row house: ~4-8 m wide, deep
     # in a dense core small buildings are row houses even where the footprints leave gaps (Fells Point)
     row = (cls in ROW_CLASSES or (not west_town and not part and ((narrow and (neighbours >= 1 or dense)) or (
-        dense and area < 260 and cls not in SHOP_CLASSES)))) and not airside
-    shed = ((cls in SHED_CLASSES and not garage) or (area < 40 and not row and not part)) and not attrs.get("_tower")         and not airside
-    shop = cls in SHOP_CLASSES
+        dense and area < 260 and cls not in SHOP_CLASSES)))) and not (airside or terminal)
+    shed = ((cls in SHED_CLASSES and not garage) or (area < 40 and not row and not part)) and not attrs.get("_tower")         and not (airside or terminal)
+    shop = cls in SHOP_CLASSES and not airside      # (an airside box has no shopfront: the terminal look)
     industrial = cls in INDUSTRIAL_CLASSES or (area > 2500 and cls in ("", "commercial"))
     # (on industrial land, industrial_rings: a refinery's or a port's control rooms and stores, not houses with porches
     # and chimneys; Pernis, Rotterdam, against its aerial photo, 2026-11-10)
@@ -1179,7 +1187,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         floor_h = 7.5
     # (a big shed is a barn; a row of garages, a carport or a canopy is not)
     barn = (cls in BARN_CLASSES or (shed and area >= 150 and cls not in ("garage", "garages", "carport", "roof", "shelter"))) \
-        and not airside
+        and not (airside or terminal)
     if barn:
         floor_h = 5.5 if area >= 150 else 3.5          # one tall storey; the gable above it
     if h is None and nf is None:
@@ -1209,7 +1217,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     measured_rise = float(measured_rise) if measured_rise is not None and np.isfinite(measured_rise) else None
     h_src = str(attrs.get("height_src") or "")
     holed = bool(attrs.get("_holes"))           # (a block round a yard: tile_buildings' inner rings)
-    if roof_given in ("gabled", "hipped", "flat", "pyramidal", "half-hipped", "mansard", "gambrel", "skillion"):
+    if civic:
+        roof = "flat"               # (whatever the map gives: a terminal's, a pier's or a tower's roof is flat)
+    elif roof_given in ("gabled", "hipped", "flat", "pyramidal", "half-hipped", "mansard", "gambrel", "skillion"):
         roof = roof_given
     elif roof_given in DOME_ROOFS:
         roof = roof_given
@@ -1374,7 +1384,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         plain = False
     wall = None
     house = (cls in HOUSE_CLASSES or (area < 260 and not shop and not industrial)) and not row and not shed \
-        and not part         and neighbours == 0 and area < 300 and not airside         # a long "residential" block is not a house (Fells Point)
+        and not part and neighbours == 0 and area < 300 and not (airside or terminal)  # a long "residential" block is not a house (Fells Point)
     if house and band is not BAND_BRICK and nf <= 3:
         # detached houses: siding in the East and South, stucco in the West; windows laid over the wall
         u = _hash01(seed, "wall")
@@ -1473,7 +1483,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         else:
             facade = custom_look(FACADE, fc)
     if terminal:
-        facade, band, plain = OFFICE, BAND_OFFICE, False
+        facade, band, plain, wall = OFFICE, BAND_OFFICE, False, None
     elif garage:
         facade, band, plain = FACADE_TINTS[3], BAND_PANEL, False
     elif airside:
@@ -1483,7 +1493,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             facade = f"{OFFICE}|{int(_hash01(seed, 'glass tint') * len(WALL_TINTS[OFFICE]))}"
             band = BAND_OFFICE if _hash01(seed, "airside band") < 0.5 else BAND_OFFICE2
         else:
-            facade, band = AIRSIDE_PANEL_TINTS[int(_hash01(seed, "airside tint") * len(AIRSIDE_PANEL_TINTS))], BAND_PANEL
+            facade = AIRSIDE_PANEL_TINTS[int(_hash01(seed, "airside tint") * len(AIRSIDE_PANEL_TINTS))]
+            band = BAND_OFFICE2
     windows = attrs.get("_tower") not in ("shaft", "cap")      # (a control tower's concrete: no rows of windows)
     if not (shed or barn or row or house or terminal or garage or church or airside) and nf <= 2 and roof == "flat" \
             and (area >= BIG_BOX_M2 or industrial) \
@@ -1492,15 +1503,20 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         wall = f"{kind}|{int(_hash01(seed, 'wc') * len(WALL_TINTS[kind]))}"
         facade, windows = wall, False
     rmat = str(attrs.get("roof_material") or "").lower()
+    airport_roof = terminal or airside
     # a dome with no roof material, or "slate" over stone walls (Overture's roof_material has no stone or marble: the
     # US Capitol's marble dome, OSM roof:material=marble, comes as slate; a flat "slate" roof there too, its drum's and
     # lantern's rings), takes its walls' light look, or a pale metal
     # (it came out in the region's dark slate, or a tall building's dark metal: the Capitol's white dome dark, the
     # 2026-11-14 in-game check; real domes are painted metal, stone, copper or lead, mapped where they are)
-    slate_on_stone = rmat in ("slate", "stone", "marble") and str(attrs.get("facade_material") or "").lower() \
-        in STONE_FACADES
+    slate_on_stone = rmat in ("slate", "stone", "marble") and str(attrs.get("facade_material") or "").lower()         in STONE_FACADES
     dome_walls = (roof in DOME_ROOFS and (not rmat or slate_on_stone)) or (roof == "flat" and slate_on_stone)
-    if dome_walls:
+    if airport_roof:
+        # (membrane or metal in a grey, by the seed: the mapped material and colour and the aerial's tint are ignored)
+        mat = AIRPORT_ROOFS[int(_hash01(seed, "airport roof") * len(AIRPORT_ROOFS))]
+        tints = AIRPORT_ROOF_TINTS[mat]
+        roof_mat = f"{mat}|{tints[int(_hash01(seed, 'roof') * len(tints))]}"
+    elif dome_walls:
         roof_mat = dome_look(facade, band)
     elif rmat in ("metal", "tin", "steel", "zinc", "corrugated_iron", "sheet"):
         roof_mat = f"{ROOF_METAL}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_METAL]))}"
@@ -1539,14 +1555,14 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     else:       # the region's pitched roofs (the US: slate or shingle by the seed, their first four tints)
         mat, tints = style.roofs[min(int(seed * len(style.roofs)), len(style.roofs) - 1)]
         roof_mat = f"{mat}|{tints[int(_hash01(seed, 'roof') * len(tints))]}"
-    rc = parse_color(attrs.get("roof_color"))
+    rc = None if airport_roof else parse_color(attrs.get("roof_color"))
     if rc is not None:
         base_rmat = roof_mat.split("|")[0]
         if base_rmat == ROOF_TILES:         # (terracotta already: the mapped colour over the texture's mean)
             roof_mat = custom_look(base_rmat, photo_tint(ROOF_TILES, rc))
         else:
             roof_mat = custom_look(base_rmat, rc)
-    elif attrs.get("_roof_photo") is not None and not rmat:
+    elif attrs.get("_roof_photo") is not None and not rmat and not airport_roof:
         # (the roof's colour in the aerial photo, RoofPhoto: a mapped colour or material wins)
         base_rmat = roof_mat.split("|")[0]
         if roof == "flat" and base_rmat == ROOF_FLAT and \

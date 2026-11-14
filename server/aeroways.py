@@ -278,7 +278,9 @@ def _fillets(ways, runways):
     return out
 
 
-def _feats_pads(feats, runways_too=True):
+def _feats_pads(feats, runways_too=True, only=None):
+    """The pads of one Features (see pads). only: "aprons" the apron rings alone, "ways" the taxiways, taxilanes and
+    their fillets alone (surface.photo_lots tones the ways inside an apron as the apron)."""
     sub = feats.attrs.get("subtype")
     cls = feats.attrs.get("class")
     if sub is None or cls is None:
@@ -294,6 +296,8 @@ def _feats_pads(feats, runways_too=True):
     out = []
     ways, runways = [], []                  # (lon, lat (n, 2), half width): the fillets'
     for i in np.flatnonzero(air & np.isin(cls, (APRON, RUNWAY, STOPWAY) + WAYS)):
+        if (only == "aprons" and cls[i] != APRON) or (only == "ways" and cls[i] not in WAYS + (RUNWAY, STOPWAY)):
+            continue
         tags = _tags(feats, i)
         kind = int(feats.kind[i])
         if cls[i] in (RUNWAY, STOPWAY):
@@ -305,7 +309,7 @@ def _feats_pads(feats, runways_too=True):
                 w = width_tag(tags.get("width")) or (RUNWAY_INTL_M if intl else RUNWAY_M)
                 lines = [np.asarray(ln, np.float64) for part in feats.parts(i) for ln in part if len(ln) >= 2]
                 runways += [(ln, w / 2.0) for ln in lines]
-                for ln in lines if runways_too else ():
+                for ln in lines if runways_too and only is None else ():
                     out += _buffer(ln[:, 1], ln[:, 0], w, butt=True)
             continue
         if _unpaved(feats, i, tags):
@@ -340,6 +344,29 @@ def _feats_pads(feats, runways_too=True):
         for r in _fillets(mw, [(to_m(ln), h) for ln, h in runways]):
             out.append((lat0 + r[:, 1] / M_PER_DEG, lon0 + r[:, 0] / kx))
     return out
+
+
+def _kept(feats_list, key, build):
+    out = []
+    for feats in feats_list:
+        if feats is None or len(feats) == 0:
+            continue
+        got = feats.__dict__.get(key)
+        if got is None:
+            got = feats.__dict__[key] = build(feats)
+        out += got
+    return out
+
+
+def aprons(feats_list):
+    """[(lat (k,), lon (k,))]: the aprons' outer rings of the Features in feats_list alone (pads without the ways)."""
+    return _kept(feats_list, _KEY + "_aprons", lambda f: _feats_pads(f, False, "aprons"))
+
+
+def ways(feats_list):
+    """[(lat (k,), lon (k,))]: the taxiway and taxilane outlines and their fillets alone (pads without the aprons and
+    the runways' own strips)."""
+    return _kept(feats_list, _KEY + "_taxi", lambda f: _feats_pads(f, False, "ways"))
 
 
 def pads(feats_list, runways=True):

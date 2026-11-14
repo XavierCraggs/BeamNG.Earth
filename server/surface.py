@@ -1241,15 +1241,28 @@ def corners_mask(frame, x0, y0, size, px, pads):
     return out
 
 
-def photo_pads(rgb, frame, x0, y0, size, pads):
+def photo_pads(rgb, frame, x0, y0, size, pads, off_green=False):
     """The photo rgb (H x W x 3, row 0 north, over [x0, x0 + size]² of frame) with the pads painted as the paved roads
     (PHOTO_ROAD_RGBA, their 2 x 2 sub-pixel coverage, in the photo's own pavement tone under them: earthfast's
     paint_cover_toned toning, PHOTO_ROAD_TONE; the user, 2026-11-11: "utiluze and revfine this method of texturing the
-    ground more"). Pure (paintlist.py: earthfast paint_photo's pads)."""
+    ground more"). off_green: not over the grass the photo shows (_off_green: an airport's pads, its own coverage and
+    earthfast.paint_cover_toned). Pure (paintlist.py: earthfast paint_photo's pads)."""
     if not pads:
         return rgb
-    import paintlist
-    return paintlist.paint(rgb, frame, x0, y0, size, (), (), pads=pads, steps={"pads"})
+    if not off_green:
+        import paintlist
+        return paintlist.paint(rgb, frame, x0, y0, size, (), (), pads=pads, steps={"pads"})
+    h, w = rgb.shape[:2]
+    cov = _pads_px(frame, x0, y0, size, w, h, pads)
+    if cov is None:
+        return rgb
+    cov = _off_green(rgb, cov)
+    fast.require(231, "pads in the photo's own tone (its 9-value tone row)")
+    radius = max(1, int(round(PHOTO_TONE_RADIUS_M * w / size)))
+    return fast._ef.paint_cover_toned(np.ascontiguousarray(rgb, np.uint8), np.ascontiguousarray(cov, np.float32),
+                                      np.array(PHOTO_ROAD_RGBA["paved"], np.float32),
+                                      np.array(PHOTO_ROAD_TONE["paved"], np.float32), radius,
+                                      PHOTO_TONE_SAMPLE_LUMA, PHOTO_TONE_SAMPLE_SAT, PHOTO_TONE_GREEN)
 
 
 def pads_mask(frame, x0, y0, size, px, pads):
@@ -1261,6 +1274,10 @@ def pads_mask(frame, x0, y0, size, px, pads):
 def lot_pads(feats_list):
     """Parking-lot outer rings as (lat, lon) pads for the photo painters (class parking, not grass or gravel), and the
     airports' aprons and taxiways (aeroways.pads: a taxiway read as dirt, GitHub #607)."""
+    return _parking_pads(feats_list) + aeroways.pads(feats_list)
+
+
+def _parking_pads(feats_list):
     pads = []
     for feats in feats_list:
         if feats is None or len(feats) == 0:
@@ -1274,13 +1291,80 @@ def lot_pads(feats_list):
                     continue
                 ring = np.asarray(part[0], np.float64)
                 pads.append((ring[:, 1], ring[:, 0]))
-    return pads + aeroways.pads(feats_list)
+    return pads
+
+
+# An airfield's paving in the photo (Brisbane's international apron, 2026-11-14: a taxiway across it a darker band with
+# ragged edges, a pale haze past the paving onto the grass). Each pixel of a pad takes the tone of the photo's own pavement
+# round it (PHOTO_TONE_RADIUS_M), so (a) the real asphalt of a taxiway inside a concrete apron kept its dark tone, a band
+# in the apron's one surface: the photo under the ways inside an apron is first replaced by the apron's own colour
+# (_even_aprons), and (b) an apron or taxiway outline that overshoots the paving painted the light tone of the paving
+# beside it over the grass: the grass the photo shows is left (_off_green).
+APRON_EVEN_MIN_PX = 40      # px: an apron needs this much of its own pavement outside its ways to give its colour
+GREEN_EDGE = (0.25, 0.75)   # the share of green pixels round one (3 x 3) below which a pad pixel is painted whole, above which not at all
+
+
+def _off_green(rgb, cov):
+    """cov (h, w float 0..1) with the pixels where the photo is grass (green over red and blue by PHOTO_TONE_GREEN: the
+    toner's own test of a green sample) taken out, softened over 3 x 3 pixels so the edge is not a pixel stair. Pure."""
+    rows, cols = np.flatnonzero(cov.any(axis=1)), np.flatnonzero(cov.any(axis=0))
+    if not len(rows) or not len(cols):
+        return cov
+    r0, r1, c0, c1 = max(rows[0] - 1, 0), rows[-1] + 2, max(cols[0] - 1, 0), cols[-1] + 2
+    win = rgb[r0:r1, c0:c1].astype(np.int16)
+    green = ((win[..., 1] > win[..., 0] + PHOTO_TONE_GREEN) & (win[..., 1] > win[..., 2] + PHOTO_TONE_GREEN)).astype(np.float32)
+    p = np.pad(green, 1, mode="edge")
+    near = sum(p[i:i + green.shape[0], j:j + green.shape[1]] for i in range(3) for j in range(3)) / 9.0
+    keep = np.clip((GREEN_EDGE[1] - near) / (GREEN_EDGE[1] - GREEN_EDGE[0]), 0.0, 1.0)
+    out = cov.copy()
+    out[r0:r1, c0:c1] *= keep
+    return out
+
+
+def _even_aprons(rgb, frame, x0, y0, size, feats_list):
+    """The photo with the pixels of each apron's taxiways and taxilanes (aeroways.ways) inside it replaced by the colour
+    of the rest of that apron's pavement (the median of its pixels outside the ways, the grass left out): painted over,
+    the apron is one surface, not its concrete round the asphalt of the lane the aerial shows across it. rgb itself is
+    not changed (None-safe: no apron or no lane in it: rgb)."""
+    aprons, lanes = aeroways.aprons(feats_list), aeroways.ways(feats_list)
+    if not aprons or not lanes:
+        return rgb
+    h, w = rgb.shape[:2]
+    way = _pads_px(frame, x0, y0, size, w, h, lanes)
+    if way is None:
+        return rgb
+    way = way > 0.0
+    out = None
+    for r0, c0, a in _windows_px(frame, x0, y0, size, w, h, aprons):
+        r1, c1 = r0 + a.shape[0], c0 + a.shape[1]
+        whole, lane = a >= 1.0, way[r0:r1, c0:c1]
+        band = whole & lane
+        if not band.any():
+            continue
+        win = rgb[r0:r1, c0:c1]
+        c = win.astype(np.int16)
+        grass = (c[..., 1] > c[..., 0] + PHOTO_TONE_GREEN) & (c[..., 1] > c[..., 2] + PHOTO_TONE_GREEN)
+        base = whole & ~lane & ~grass
+        if int(base.sum()) < APRON_EVEN_MIN_PX:
+            continue
+        if out is None:
+            out = rgb.copy()
+        out[r0:r1, c0:c1][band] = np.median(win[base], axis=0).astype(np.uint8)
+    return rgb if out is None else out
 
 
 def photo_lots(rgb, frame, x0, y0, size, feats_list):
-    """The photo with parking-lot polygons painted in the paved roads' colour (under the carriageways). Pure."""
+    """The photo with parking-lot polygons painted in the paved roads' colour (under the carriageways), then an
+    airport's aprons and taxiways (aeroways.pads: the taxiways inside an apron in the apron's own tone, _even_aprons,
+    and not over the grass, _off_green). Pure."""
+    if not feats_list:
+        return rgb
     import paintlist
-    return paintlist.paint(rgb, frame, x0, y0, size, (), feats_list, steps={"lots"}) if feats_list else rgb
+    rgb = paintlist.paint(rgb, frame, x0, y0, size, (), feats_list, steps={"lots"})
+    air = aeroways.pads(feats_list)
+    if not air:
+        return rgb
+    return photo_pads(_even_aprons(rgb, frame, x0, y0, size, feats_list), frame, x0, y0, size, air, off_green=True)
 
 
 def photo_fields(rgb, frame, x0, y0, size, feats_list, roads=None, urban_fn=None, widths=None):

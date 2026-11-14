@@ -18,6 +18,7 @@ import numpy as np
 import dmath
 import dnp
 
+import airsidekeep
 import citylamps
 import designsigns
 import poleprofiles
@@ -856,6 +857,9 @@ def _box_distance2(a, b, low, high):
     return best
 
 
+_AIRSIDE_GROUPS = airsidekeep.pole_groups()
+
+
 class RoadClearance:
     """Reusable segment index for complete, yawed furniture colliders against carriageways at every level.
 
@@ -915,6 +919,7 @@ class RoadClearance:
                                         float(roadwidth.BUCKET))
         self._boxes = {}
         self._index = None
+        self.airside = None     # airsidekeep.Keep: the airport pavement's keep-out for poles and towers (roads.build_tile)
 
     def candidates(self, low, high):
         """The segments in the grid cells round low..high (tests: the index finds a long segment's middle)."""
@@ -936,6 +941,8 @@ class RoadClearance:
         """Whether every scaled collider box clears the traffic envelope and a deck's structural underside: each road
         segment clipped to the object's vertical collision interval first (a second hairpin branch or a rising road
         beside an overhead arm), then the box's distance to it in the object's frame (earthfast.Clearance)."""
+        if self.airside and row[0] in _AIRSIDE_GROUPS and self.airside.blocks(row[1], row[2]):
+            return False        # (a pole or tower on or by an airport's apron, taxiway or runway)
         shape = COLLISION_BOXES.get(row[0])
         if shape is None:
             return True
@@ -1140,6 +1147,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     de_ctl: Germany's junction signs (junction_props). mapped_lamps: the rows of the mapped street lamps on and near the
     tile (worldprops.tile_props' lamps): the tile's own drawn as mapped (where the local posts stand, the default ones
     become those), and a road with MAPPED_ALONG_MIN of them along it guesses no lamps (lit=no)."""
+    w0 = len(wires) if wires is not None else 0
     pole_at = poleprofiles.selector(pole_profile, pole_frame)
     kit_at = poleprofiles.kit_selector(pole_profile, pole_frame)
     spacing_of = lamp_spacing(region, dense=not town)
@@ -1378,6 +1386,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     # (the tile's own, at their mapped points: not moved off the clearance like a guessed one)
     rows += [list(r) for r in mapped_lamps if _owns(box, r[1], r[2])]
     rows = citylamps.localize(rows, poleprofiles.lamp_country_selector(pole_profile, pole_frame))
+    airsidekeep.cut_wires(getattr(clearance, "airside", None), wires, w0)       # (no span across an airport's pavement)
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 
