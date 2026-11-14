@@ -1522,6 +1522,18 @@ def _box3(a):
     return sum(p[i:i + a.shape[0], j:j + a.shape[1]] for i in range(3) for j in range(3)) / 9.0
 
 
+def _infield_target(rgb):
+    """The colour the infield tends to: the median of the tile's vegetation (every 8th pixel), INFIELD_GRASS where the
+    tile has too little of it to say."""
+    s = rgb[::8, ::8].astype(np.int16).reshape(-1, 3)
+    sR, sG, sB = s[:, 0], s[:, 1], s[:, 2]
+    sl = 0.299 * sR + 0.587 * sG + 0.114 * sB
+    sv = (((sG >= sR + INFIELD_GREEN) & (sG >= sB + INFIELD_GREEN))
+          | ((sR >= sB + INFIELD_DRY[0]) & (sG >= sB + INFIELD_DRY[1]) & (np.abs(sR - sG) <= INFIELD_DRY[2]))) \
+        & (sl >= INFIELD_LUMA[0]) & (sl <= INFIELD_LUMA[1])
+    return np.median(s[sv], axis=0).astype(np.float32) if sv.sum() >= 64 else np.array(INFIELD_GRASS, np.float32)
+
+
 def _infield_grass(rgb, frame, x0, y0, size, feats_list, before=None):
     """The photo with the unpaved vegetation inside an airport's boundary pulled toward INFIELD_GRASS (see above). before:
     the photo before its paving was painted (photo_pads, the apron joints): no pixel that differs from it is touched (a
@@ -1538,7 +1550,9 @@ def _infield_grass(rgb, frame, x0, y0, size, feats_list, before=None):
     if not len(rows) or not len(cols):
         return rgb
     c0, c1 = int(cols[0]), int(cols[-1]) + 1
-    green = np.array(INFIELD_GRASS, np.float32)
+    # (the tile's own vegetation, its median, not one green: a fixed lawn green stood out against Los Angeles' dry
+    # soil; INFIELD_GRASS only where the tile has too little of it to say)
+    green = _infield_target(rgb)
     out = None
     for b0 in range(int(rows[0]), int(rows[-1]) + 1, INFIELD_BAND_ROWS):
         b1 = min(b0 + INFIELD_BAND_ROWS, int(rows[-1]) + 1)

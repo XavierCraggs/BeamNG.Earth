@@ -1213,7 +1213,7 @@ class ApronConcreteTest(unittest.TestCase):
         rgb[(e < -20) & (e > -40) & (n < -20)] = (150, 90, 60)               # bare soil
         painted = sf.photo_pads(rgb, self.FRAME, -64.0, -64.0, size, aeroways.pads([f]))        # (the apron's paving over the green)
         out = sf._infield_grass(painted, self.FRAME, -64.0, -64.0, size, [f], before=rgb)
-        mown = np.array(sf.INFIELD_GRASS, float)
+        mown = sf._infield_target(painted).astype(float)
         for name, sel in (("green", (np.abs(e) < 15) & (n > 25) & (n < 45) & (np.abs(e) > 5)), ("dry", (e > 25) & (e < 35) & (n > 25) & (n < 40))):
             was = rgb[sel].astype(float)
             want = was + (mown - was) * sf.INFIELD_SHARE
@@ -1240,7 +1240,9 @@ class ApronConcreteTest(unittest.TestCase):
         size, texel = 512.0, 1.0
         px = int(size / texel)
         f = self.feats([(mapgeom.LINE, [(-50.0, 0.0), (50.0, 0.0)], "taxiway")])
-        rgb = np.full((px, px, 3), self.GREEN, np.uint8)
+        rgb = np.full((px, px, 3), self.DRY, np.uint8)                       # (the tile's own vegetation: dry, its median)
+        for rr, cc in ((60, 0), (200, 0), (0, 240)):
+            rgb[int(size / 2 - rr) - 2:int(size / 2 - rr) + 3, int(size / 2 + cc) - 2:int(size / 2 + cc) + 3] = self.GREEN
         out = sf.photo_lots(rgb, self.FRAME, -size / 2, -size / 2, size, [f])
         r = lambda n: int(size / 2 - n)
         c = lambda e: int(size / 2 + e)
