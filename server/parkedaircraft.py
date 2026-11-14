@@ -51,7 +51,12 @@ other one), then the aprons' rows; tile_rows drops an aircraft of one cell that 
 gates got none (debug).
 
 kept_stands(keys, infra_fn, buildings_fn) -> [Craft]: the stands of those cells after the cross-cell pass: what tile_rows
-places, for the painted lead-in lines of taxiwaymarks (a Craft's mode "gate" / "remote" / "ga").
+places (a Craft's mode "gate" / "remote" / "ga"; its `ref`, the gate's `ref` tag, "" without one).
+lead_stands(keys, infra_fn, buildings_fn) -> [Craft]: every valid stand, with or without an aircraft (the gates the occupancy
+hash leaves empty keep their stand: empty_stands), for the painted lead-ins and stand numbers of taxiwaymarks and the stand
+signs of airfieldsigns; each cell's stands are judged from the cells round its own, so every tile reads the same list.
+An aircraft at a gate (mode "gate") also has navigation lights (_nav_rows: red, green, white glow rows in airfieldlights'
+groups, in tile_rows beside its row).
 
 Liveries: each group has LIVERIES models (the mod's bne_ac_<kind>_<livery>: plain white, or a coloured tail fin, some with a
 cheatline or a coloured belly; tools/build_aircraft.py), and a Craft's `livery` is the one it wears: an airport (the aerodrome
@@ -75,6 +80,7 @@ import zlib
 import numpy as np
 
 import aeroways
+import airfieldlights as afl
 import airportroles as ar
 import dmath
 import dnp
@@ -86,6 +92,10 @@ GROUPS = {"light": "ac_light", "turboprop": "ac_turboprop", "narrow": "ac_narrow
 SPECS = {"light": (8.3, 11.0, 2.7, 1.3, 1.5, 0.3), "turboprop": (27.2, 27.1, 7.6, 2.8, 2.6, 1.0),
          "narrow": (37.6, 35.8, 11.8, 3.95, 4.5, 1.8), "wide": (63.7, 60.1, 17.5, 6.0, 7.5, 3.0)}
 BACK_M = {"light": 2.0, "turboprop": 4.0, "narrow": 5.0, "wide": 6.5}      # a door's setback from the nose
+# Navigation lights of an aircraft at a gate: kind -> (the wing tip's centre along the nose from the aircraft's centre (the
+# model's: tools/build_aircraft.py's wing, swept back), its height over the ground, the tail cone's height)
+NAV = {"light": (0.7, 1.6, 1.4), "turboprop": (1.2, 3.0, 3.6), "narrow": (-3.0, 4.5, 4.8), "wide": (-12.1, 6.5, 6.0)}
+NAV_TAIL_IN_M = 0.4             # the white light this far ahead of the tail's tip
 TAIL_SPAN_K, TAIL_CHORD_K, TAIL_AT_K = 0.34, 0.55, 0.40                   # the tailplane: of the span, chord, and its
                                                                            # centre behind the middle in lengths
 GATE_CLASSES = ("airport_gate", "parking_position")
@@ -1343,58 +1353,55 @@ def kept_stands(keys, infra_fn, buildings_fn):
     return [items[j] for j in _dedupe(items, lat, lon)]
 
 
-def lead_stands(keys, infra_fn, buildings_fn):
-    """[Craft] of the stands of the cells `keys` that get a painted lead-in (taxiwaymarks): every valid stand, empty or
-    not: the aircraft kept_stands places and the empty ones (empty_stands: a gate the occupancy hash leaves empty), but not a
-    gate that clips a building. Only the stands of `keys` themselves are listed, but each is judged with the stands of the
-    neighbour cells near its own (_near_cells), so that every tile that reads the stand reads the same list (the
-    aircraft's cross-cell pass; an empty stand that overlaps a kept aircraft or an empty stand kept before it is passed
-    over, the longer kinds first), whatever other cells the tile reads. Sorted (position, kind)."""
-    cells = {}                                                  # key -> its infrastructure (a cell with stands)
-    asked = set()
-
-    def want(k):
-        if k not in asked:
-            asked.add(k)
-            feats = infra_fn(k)
-            if has_stands(feats):
-                cells[k] = feats
-
-    for k in keys:
-        want(k)
-    own = list(cells)
-    for k in own:
-        for nk in _near_cells(k, cells[k]):
-            want(nk)
-    items, mine, spare = [], [], []                             # (the aircraft, then the empty stands: owned by a key's cell?)
-    for k, feats in cells.items():
-        blds = _flat([buildings_fn(k)] + [buildings_fn(nk) for nk in _near_cells(k, feats)])
-        got = stands(feats, blds)
-        items.extend(got)
-        mine.extend([k in own] * len(got))
-        more = empty_stands(feats, blds)
-        spare.extend(more)
-    if not items and not spare:
+def _lead_cell(feats, near, buildings_fn, key):
+    """The stands of one cell (its Features `feats`, `key`) that get a lead-in, judged only from the cells round them: the
+    cell's own and the neighbour cells' (`near`: [(key, Features)] of those near its gates and aprons, _near_cells) aircraft
+    and empty stands, whatever else the caller reads. The aircraft are the cross-cell pass of kept_stands (drop_overlaps); an
+    empty stand that overlaps an aircraft kept, or an empty one kept before it (the longer kinds first, then by position),
+    is passed over. Only the cell's own stands are returned."""
+    air, spare = [], []                                         # (Craft, is the cell's own)
+    for i, (ck, cf) in enumerate([(key, feats)] + near):
+        blds = _flat([buildings_fn(ck)] + [buildings_fn(nk) for nk in _near_cells(ck, cf)])
+        air += [(c, i == 0) for c in stands(cf, blds)]
+        spare += [(c, i == 0) for c in empty_stands(cf, blds)]
+    items = [c for c, _own in air + spare]
+    if not items:
         return []
-    lat = np.array([c.lat for c in items + spare], np.float64)
-    lon = np.array([c.lon for c in items + spare], np.float64)
-    plane = _items_plane(items + spare, lat, lon)
-    kept = _dedupe(items, lat[:len(items)], lon[:len(items)]) if items else []
+    lat = np.array([c.lat for c in items], np.float64)
+    lon = np.array([c.lon for c in items], np.float64)
+    plane = _items_plane(items, lat, lon)
+    na = len(air)
+    kept = drop_overlaps(plane[:na]) if na else []
     placed = [plane[j] for j in kept]
-    out = [items[j] for j in kept if mine[j]]
-    owner = {}                                                  # (the empty stands' cells)
-    j = len(items)
-    for k, feats in cells.items():
-        for _c in feats.__dict__[_KEY][2]:
-            owner[j] = k in own
-            j += 1
-    for j in sorted(range(len(items), len(plane)), key=lambda j: (-SPECS[plane[j][0]][0], round(float(lat[j]), 7),
-                                                                   round(float(lon[j]), 7), plane[j][0])):
+    out = [air[j][0] for j in kept if air[j][1]]
+    for j in sorted(range(na, len(items)), key=lambda j: (-SPECS[plane[j][0]][0], round(float(lat[j]), 7),
+                                                           round(float(lon[j]), 7), plane[j][0])):
         if any(_overlap(plane[j], b) for b in placed):
             continue
         placed.append(plane[j])
-        if owner[j]:
-            out.append((items + spare)[j])
+        if spare[j - na][1]:
+            out.append(items[j])
+    return out
+
+
+def lead_stands(keys, infra_fn, buildings_fn):
+    """[Craft] of the stands of the cells `keys` that get a painted lead-in (taxiwaymarks) and a stand sign (airfieldsigns):
+    every valid stand, empty or not: the aircraft kept_stands places (stands()) and the stands of the gates the occupancy hash
+    leaves empty (empty_stands(): where an aircraft would stand, clear of the buildings and the paving, a gate that clips a
+    building has none). Each cell's stands are judged from the cells round that cell's gates and aprons (_lead_cell), never
+    from `keys`: every tile that reads a stand gets the same list, whichever other cells it reads. Sorted (position,
+    kind). infra_fn(key) -> the cell's infrastructure Features (or None), buildings_fn(key) as kept_stands'."""
+    out, seen = [], set()
+    for k in keys:
+        feats = infra_fn(k)
+        if not has_stands(feats):
+            continue
+        near = [(nk, f) for nk in _near_cells(k, feats) for f in [infra_fn(nk)] if has_stands(f)]
+        for c in _lead_cell(feats, near, buildings_fn, k):
+            at = (c.kind, round(c.lat, 7), round(c.lon, 7))
+            if at not in seen:                                  # (a stand twice over: keys listed twice)
+                seen.add(at)
+                out.append(c)
     return sorted(out, key=lambda c: (round(c.lat, 7), round(c.lon, 7), c.kind))
 
 
@@ -1426,4 +1433,23 @@ def tile_rows(frame, box, infra_fn, buildings_fn, elev, keys=None):
         kind = items[j].kind
         rows.append([GROUPS[kind], round(float(x), 2), round(float(y), 2), round(float(zz), 2),
                      round(_yaw(float(xe - x), float(yn - y)), 1), 1.0, SPECS[kind][2], rank_for(items[j].livery)])
+        if items[j].mode == "gate":
+            rows += _nav_rows(kind, float(x), float(y), float(zz), float(xe - x), float(yn - y))
     return rows
+
+
+def _nav_rows(kind, x, y, z, dx, dy):
+    """Glow rows (airfieldlights' groups: they light at night) of the navigation lights of a gate's aircraft centred at (x, y)
+    on the ground z, the nose toward (dx, dy): red at the left wing tip, green at the right, white at the tail cone. No red
+    beacon (the anti-collision light is on only with the engines running: a parked aircraft's are off); remote stands and
+    general-aviation rows have none."""
+    r = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / r, dy / r
+    length, span = SPECS[kind][0], SPECS[kind][1]
+    tip_u, tip_h, tail_h = NAV[kind]
+    out = []
+    for colour, u, v, h in (("red", tip_u, span / 2.0, tip_h), ("green", tip_u, -span / 2.0, tip_h),
+                            ("white", -length / 2.0 + NAV_TAIL_IN_M, 0.0, tail_h)):
+        out.append([afl.GROUPS[colour], round(x + u * ux - v * uy, 2), round(y + u * uy + v * ux, 2), round(z + h, 2),
+                    0.0, 1.0, afl.GROUP_H, 0.0])
+    return out

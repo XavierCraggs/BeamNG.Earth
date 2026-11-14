@@ -100,6 +100,29 @@ class JunctionSigns(unittest.TestCase):
             self.assertGreater(way_dist(p, (0, 0), (0, 200)), 7.5 + 3.0)
 
 
+class StandSigns(unittest.TestCase):
+    """A stand's ref gives a black-on-yellow sign ahead of the stop bar, to the nose's left, facing the aircraft."""
+
+    def setUp(self):
+        self.feats = ttm.feats(ttm.taxiway((-120, 0), (100, 0), cls="taxilane"))
+        self.craft = ttm.craft("narrow", 0.0, 60.0, 0.0, 1.0)               # nose north, 60 + L/2 north of the origin
+
+    def test_a_ref_gives_a_sign_beside_the_nose_facing_the_aircraft(self):
+        got = [s for s in afs.signs([self.feats], stands=[self.craft._replace(ref="A12")]) if s.kind == "stand"]
+        self.assertEqual([s.text for s in got], ["A12"])
+        p = metres(got[0])
+        nose = 60.0 + ttm.pa.SPECS["narrow"][0] / 2.0
+        self.assertAlmostEqual(p[0], -afs.STAND_LEFT_M, 2)                  # (north-facing nose: its left is west)
+        self.assertAlmostEqual(p[1], nose + afs.STAND_AHEAD_M, 2)
+        self.assertAlmostEqual(got[0].face, 180.0, 1)                       # (looking south, at the aircraft)
+        self.assertEqual(afs.STYLES["stand"][:2], (afs.YELLOW, afs.BLACK))
+
+    def test_no_ref_no_sign(self):
+        self.assertEqual(afs.signs([self.feats], stands=[self.craft]), [])
+        self.assertEqual(afs.signs([self.feats], stands=[self.craft._replace(ref="TOOLONGREF")]), [])
+        self.assertEqual(afs.signs([self.feats], stands=[self.craft._replace(ref="7", mode="ga")]), [])
+
+
 class Designators(unittest.TestCase):
     def test_designators(self):
         self.assertEqual(afs.designators("01R/19L"), ["01R", "19L"])

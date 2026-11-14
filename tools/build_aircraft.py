@@ -18,7 +18,7 @@ m; trees.lua's catalogue carries the tail height). The right wing is +X. Built f
 
     fuselage   a lofted elliptical tube: a rounded nose (a blunt cowling on the light single), a straight cabin, a tail cone
                rising a little (upsweep); its belly and the wings' undersides the light grey material, the rest white
-    windows    dark flat patches laid on the skin: a windscreen band over the nose, a row of cabin windows a side (a dash
+    windows    dark flat patches laid on the skin: a windscreen of four or six panels raked 35 degrees on the upper nose, a row of cabin windows a side (a dash
                a window at LOD0, one strip at LOD1)
     wing       swept, tapered, with dihedral: a loft of six-point aerofoil sections; a high wing's struts on the light single
     tail       a swept tapered fin to the tail height and a tailplane (on the fin's top on the T-tail)
@@ -82,34 +82,36 @@ LIVERIES = (
 )
 CHEAT_M = 0.009                 # the cheatline's width as a fraction of the aircraft's length (at least CHEAT_MIN_M)
 CHEAT_MIN_M = 0.10
+RAKE_DEG = 35.0                 # the windscreen's rake back from the vertical
 FOIL = [(0.0, 0.0), (0.2, 0.55), (0.55, 0.5), (1.0, 0.0), (0.55, -0.4), (0.2, -0.45)]   # (chord fraction, thickness fraction)
 
 # The numbers per kind. Fuselage: rx / rz the cabin's half width / half height, zc its centreline's height over the ground,
 # nose_ext the spinner beyond the skin's nose, nose_len / tail_len the nose and tail cone as fractions of the skin's length,
 # nose_tip / tail_end the end radii as fractions of the cabin's, upsweep the tail's rise, nose_drop the nose's sag.
-# win = (first, last d from the skin's nose m, pitch, dash length, centre angle, half angle deg); cock = (d0, d1 m, deg0, deg1).
+# win = (first, last d from the skin's nose m, pitch, dash length, centre angle, half angle deg); cock = (the windscreen's lower and upper
+# edge: heights over the centreline in units of rz where the nose's crown line has them, panels, half width as a fraction of rx).
 # wing = (root LE d, root chord, tip chord, LE sweep deg, dihedral deg, root t/c, tip t/c, root x, root centre z over the
 # fuselage's centreline in units of rz). tail = (fin root chord, tip chord, LE sweep deg, root TE metres from the tail tip,
 # stab span, stab root chord, tip chord, sweep deg, dihedral deg, TE metres from the tail tip).
 AC = {
     "light": dict(nose_ext=0.30, rx=0.60, rz=0.68, zc=1.36, nose_len=0.30, nose_tip=0.50, tail_len=0.50, tail_end=0.10,
                   upsweep=0.35, nose_drop=0.0,
-                  win=(2.45, 3.95, 0.75, 0.55, 38.0, 22.0), cock=(2.25, 2.85, 35.0, 145.0),
+                  win=(2.45, 3.95, 0.75, 0.55, 38.0, 22.0), cock=(0.62, 0.88, 4, 0.62),
                   wing=(2.55, 1.66, 1.13, 0.0, 1.5, 0.12, 0.09, 0.40, 1.0),
                   tail=(1.50, 0.90, 28.0, 0.25, 3.40, 1.20, 0.85, 8.0, 0.0, 0.20)),
     "turboprop": dict(nose_ext=0.0, rx=1.40, rz=1.40, zc=2.30, nose_len=0.09, nose_tip=0.06, tail_len=0.30, tail_end=0.10,
                       upsweep=0.80, nose_drop=0.15,
-                      win=(3.6, 18.4, 0.66, 0.40, 10.0, 7.0), cock=(1.25, 2.30, 28.0, 152.0),
+                      win=(3.6, 18.4, 0.66, 0.40, 10.0, 7.0), cock=(0.55, 0.82, 4, 0.62),
                       wing=(11.0, 2.90, 1.35, 3.0, 0.0, 0.14, 0.10, 0.70, 0.9),
                       tail=(4.20, 1.80, 28.0, 1.20, 7.30, 1.90, 1.00, 0.0, 0.0, 1.20)),
     "narrow": dict(nose_ext=0.0, rx=1.97, rz=1.97, zc=3.80, nose_len=0.09, nose_tip=0.03, tail_len=0.24, tail_end=0.10,
                    upsweep=0.90, nose_drop=0.25,
-                   win=(5.5, 28.0, 0.75, 0.42, 12.0, 5.0), cock=(1.5, 2.95, 28.0, 152.0),
+                   win=(5.5, 28.0, 0.75, 0.42, 12.0, 5.0), cock=(0.55, 0.82, 6, 0.62),
                    wing=(12.4, 6.30, 1.60, 27.0, 5.0, 0.13, 0.10, 1.00, -0.45),
                    tail=(6.20, 2.40, 35.0, 2.60, 12.45, 3.00, 1.20, 30.0, 6.0, 2.60)),
     "wide": dict(nose_ext=0.0, rx=3.10, rz=3.10, zc=5.10, nose_len=0.085, nose_tip=0.03, tail_len=0.22, tail_end=0.10,
                  upsweep=1.50, nose_drop=0.40,
-                 win=(8.0, 48.0, 0.95, 0.50, 11.0, 4.2), cock=(2.8, 5.00, 28.0, 152.0),
+                 win=(8.0, 48.0, 0.95, 0.50, 11.0, 4.2), cock=(0.55, 0.82, 6, 0.62),
                  wing=(22.0, 10.80, 2.40, 36.0, 6.0, 0.13, 0.10, 1.50, -0.35),
                  tail=(9.50, 3.80, 40.0, 4.00, 21.50, 6.30, 2.30, 35.0, 7.0, 4.00)),
 }
@@ -273,16 +275,94 @@ def build(kind, lod, livery="white"):
         t = math.radians(deg)
         return np.array([side * a * f * math.cos(t), y, zc + b * f * math.sin(t)])
 
-    # --- windows: the windscreen over the nose, a row of cabin windows a side
-    c0, c1, a0, a1 = p["cock"]                           # the windscreen band: the skin's rings in c0..c1, the angles a0..a1
-    rows = [i for i, d in enumerate(ds) if c0 <= d <= c1]
-    if len(rows) < 2:                                   # (a coarse level: the two rings round the band's middle)
-        i0 = max(i for i, d in enumerate(ds) if d <= (c0 + c1) / 2.0)
-        rows = [i0, i0 + 1]
-    cols = [j for j in range(kf) if a0 <= math.degrees(ang[j]) <= a1]
-    lift = lambda r: (lambda c: c + (r - c) * 1.012)(np.array([0.0, r[1], prof(r[1])[2]]))
-    P = [[lift(rings[i][j]) for j in cols] for i in rows]   # the skin's own vertices lifted 1.2 %: the band follows its facets
-    m.grid(D, P, [np.array([0.0, rings[i][0][1], prof(rings[i][0][1])[2]]) for i in rows])
+    # --- windows: the raked windscreen on the upper nose, a row of cabin windows a side
+    # A strip of dark panels (separate quads, a sliver of skin between them) on the skin between two planes raked RAKE_DEG back
+    # from the vertical (in the side view every edge is a straight line leaning aft at RAKE_DEG): the lower edge just over the
+    # cabin window line, the upper a good part of the way up to the crown (the "cock" of AC). Each edge is the plane's curve over the skin, its
+    # width (the lower, on the narrower nose, the less) split evenly across the panels.
+    bot, top, n_pan, half_k = p["cock"]
+    nrm = np.array([0.0, math.cos(math.radians(RAKE_DEG)), math.sin(math.radians(RAKE_DEG))])
+    ws_d = [u * nl for u in (0.0, 0.05, 0.12, 0.22, 0.34, 0.5, 0.68, 0.84, 1.0)]      # (the rings the panels lie on, at either level:
+    ws_k = 24                                                                          # the coarse nose's would not hold them)
+    ws_rings = [np.array([[prof(yn - d)[0] * math.cos(t), yn - d, prof(yn - d)[2] + prof(yn - d)[1] * math.sin(t)]
+                          for t in np.linspace(0.0, 2.0 * math.pi, ws_k, endpoint=False)]) for d in ws_d]
+    ys_r = [r[0][1] for r in ws_rings]                        # the rings' axial positions, nose first (descending)
+    ang_d = 360.0 / ws_k
+
+    def lifted(y, deg):
+        """The skin's point at the axial position y and the angle deg round it (on the facets: ring vertices interpolated), lifted a little."""
+        i = min(max(sum(1 for v in ys_r if v > y) - 1, 0), len(ws_rings) - 2)
+        q = (ys_r[i] - y) / (ys_r[i] - ys_r[i + 1])
+        j, fr = divmod(deg / ang_d, 1.0)
+        j0, j1 = int(j) % ws_k, (int(j) + 1) % ws_k
+        row = lambda r: r[j0] + (r[j1] - r[j0]) * fr
+        pt = row(ws_rings[i]) * (1.0 - q) + row(ws_rings[i + 1]) * q
+        c = np.array([0.0, y, prof(y)[2]])
+        return c + (pt - c) * (1.035 if hi else 1.12)
+
+    grid = np.linspace(yn, yn - nl * 1.4, 240)
+
+    def cross(deg, s_at, near):
+        """The axial position where the skin at the angle deg meets the plane nrm . P = s_at, the crossing nearest to near (None: none)."""
+        g = np.array([nrm @ lifted(y, deg) - s_at for y in grid])
+        k = [i for i in range(len(grid) - 1) if g[i] * g[i + 1] <= 0.0 < abs(g[i]) + abs(g[i + 1])]
+        if not k:
+            return None
+        i = min(k, key=lambda i: abs(grid[i] - near))
+        lo, hi = grid[i], grid[i + 1]
+        for _ in range(30):
+            mid = (lo + hi) / 2.0
+            if (nrm @ lifted(mid, deg) - s_at) * g[i] > 0.0:
+                lo = mid
+            else:
+                hi = mid
+        return (lo + hi) / 2.0
+
+    def crown(z_rel):
+        """The axial position where the nose's crown line is z_rel * rz over the centreline."""
+        for y in grid:
+            if prof(y)[1] + prof(y)[2] - zc0 >= z_rel * rz:
+                return y
+        return grid[-1]
+
+    def edge(s_at, near):
+        """The plane's curve over the skin from the crown outwards: [(x, y, deg)], x ascending."""
+        out, y = [], near
+        for deg in np.arange(90.0, 30.0, -1.0):
+            y = cross(deg, s_at, y)
+            if y is None:
+                break
+            x = float(lifted(y, deg)[0])
+            if out and x < out[-1][0]:
+                break
+            out.append((x, y, deg))
+        return out
+
+    def across(curve, w, f):
+        """The skin's point on the edge `curve` at the lateral fraction f (-1..1) of the half width w."""
+        xt = abs(f) * w
+        k = next((i for i, c in enumerate(curve) if c[0] >= xt), len(curve) - 1)
+        k = max(k, 1)
+        (x0, y0, d0), (x1, y1, d1) = curve[k - 1], curve[k]
+        t = min(max((xt - x0) / max(x1 - x0, 1e-9), 0.0), 1.0)
+        return lifted(y0 + (y1 - y0) * t, (d0 + (d1 - d0) * t) if f >= 0.0 else 180.0 - (d0 + (d1 - d0) * t))
+
+    y_lo, y_hi = crown(bot), crown(top)
+    pan = n_pan if hi else 2                               # (a coarse level: two wide panels, one a side of the crown)
+    rows_n = 3                                             # (rows of the planes between the panels' edges: the nose is round)
+    s_lo, s_hi = nrm @ lifted(y_lo, 90.0), nrm @ lifted(y_hi, 90.0)
+    curves = []
+    for r in range(rows_n):
+        t = r / (rows_n - 1)
+        cv = edge(s_lo + (s_hi - s_lo) * t, y_lo + (y_hi - y_lo) * t)
+        curves.append((cv, min(half_k * rx, 0.92 * cv[-1][0])) if len(cv) > 1 else None)
+    if all(curves):
+        gap = 0.04 if hi else 0.0                          # (the skin showing between the panels, of a panel's width)
+        for k in range(pan):
+            f0, f1 = -1.0 + 2.0 * k / pan, -1.0 + 2.0 * (k + 1) / pan
+            f0, f1 = f0 + gap * (2.0 / pan), f1 - gap * (2.0 / pan)
+            P = [[across(cv, w, f0), across(cv, w, f1)] for cv, w in curves]
+            m.grid(D, P, [np.array([0.0, q[0][1], prof(q[0][1])[2]]) for q in P])
     w0, w1, pitch, dash, dc, dh = p["win"]
     for side in (1.0, -1.0):
         starts = np.arange(w0, w1 - dash + 1e-9, pitch) if hi else [w0]

@@ -2,10 +2,10 @@
 black location signs and the black-on-yellow direction signs of a taxiway network, as the boards of the sign tiles
 (signstream.build_tile: the same mesh and pictures as the bus and railway stations' name boards, busstationsign).
 
-signs(feats_list, db=None) -> [Sign]: the signs of the infrastructure Features (subtype "airport") of the map cells
-around a block; Sign = (kind, text, lat, lon, face, w, h), face the compass bearing the board looks toward (at the
+signs(feats_list, db=None, stands=None) -> [Sign]: the signs of the infrastructure Features (subtype "airport") of the map cells
+around a block (and of the stands: parkedaircraft's Craft list, parkedaircraft.lead_stands); Sign = (kind, text, lat, lon, face, w, h), face the compass bearing the board looks toward (at the
 pilot who approaches it) and w, h its size in metres. Memoized on the Features' scene (taxiwaymarks.scene, bounded),
-so every tile of a block shares them; [] for Features with no airport way. Three kinds:
+so every tile of a block shares them; [] for Features with no airport way. Four kinds:
   * "hold": a mandatory instruction sign, white on red, the runway's designators ("01R-19L") on BOTH sides of a taxiway
     at each runway holding position (taxiwaymarks' sites: 60 m from the runway's centreline, or at a mapped
     holding_position). The designators are the runway line's `ref` tag (the ends in the order the pilot at the position
@@ -18,6 +18,10 @@ so every tile of a block shares them; [] for Features with no airport way. Three
     each approach, before the junction. Only where the ways have a `ref` of the taxiway kind (A, B3, C3T: ICAO's
     letters and digits; "South Taxilane" is no designator): a junction of ways without one has no sign, and a way that
     leaves by the taxiway's own ref (the same taxiway going on) is no turn.
+  * "stand": black on yellow and smaller (CAP_STAND_M), the gate's `ref` ("21", "A12") at each stand that has one (a gate or
+    remote stand, with or without an aircraft): on a STAND_POST_M post (its top), STAND_AHEAD_M beyond the nose (past the
+    stop bar) and STAND_LEFT_M to the nose's left, facing the aircraft; a stand's signs stand on its apron (no ground test),
+    two boards never overlap.
 A board stands OFFSET_M beside the pavement's edge, on the pilot's side of the sign's place (frangible: well back of the
 strip), farther in steps while an apron, another way's or a runway's pavement is there (OFFSET_STEPS_M), and is dropped
 where it finds none; two boards never overlap. The hold signs come first.
@@ -32,6 +36,7 @@ and the posts' feet are underground.
 """
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -46,6 +51,7 @@ import dnp
 import fast
 import geotiles
 import imagery
+import parkedaircraft as pa
 import polygon
 import roads
 import taxiwaymarks
@@ -53,14 +59,21 @@ import taxiwaymarks
 KERNEL = 204                    # earthfast VERSION with dirsign_town_face / dirsign_mesh
 ON = os.environ.get("BNE_AIRFIELD_SIGNS", "on") != "off"
 FACE_VERSION = 1
+log = logging.getLogger(__name__)
 PX_PER_M = 200.0
 CAP_M = 0.38                    # the legend's height: a panel ~1.0 m tall (ICAO: 0.3 - 0.4 m legends, 0.6 - 0.8 m faces)
 MIN_W_M, MAX_W_M = 1.0, 10.0
 INSET_M, LINE_W_M = 0.03, 0.02
 RED, WHITE, YELLOW, BLACK = (200, 16, 46), (255, 255, 255), (255, 205, 0), (0, 0, 0)
 # kind -> (background, legend, edge): ICAO's colours (a location sign has the yellow border of a free-standing one)
-STYLES = {"hold": (RED, WHITE, WHITE), "location": (BLACK, YELLOW, YELLOW), "direction": (YELLOW, BLACK, BLACK)}
+STYLES = {"hold": (RED, WHITE, WHITE), "location": (BLACK, YELLOW, YELLOW), "direction": (YELLOW, BLACK, BLACK),
+          "stand": (YELLOW, BLACK, BLACK)}
 KINDS = tuple(STYLES)
+CAP_STAND_M = 0.26              # a stand sign's legend (a panel ~0.7 m tall)
+STAND_POST_M = 2.5              # m: the top of its post over the ground
+STAND_AHEAD_M = 4.0             # m beyond the nose (the stop bar), along the axis
+STAND_LEFT_M = 3.0              # m to the nose's left
+STAND_REF_MAX = 5               # a longer ref is not signed
 BOTTOM_M = 0.35                 # the panel's bottom over the ground (Annex 14: at most 0.7 m ... 0.4 m by size)
 MOUNT_M = 1.2                   # dirsign_mesh's least bottom over its anchor
 OFFSET_M = 10.0                 # the board's near edge this far beside the pavement's edge
@@ -91,7 +104,7 @@ def _draw(kind, text):
         fast.require(KERNEL, "airfield signs")
         dirsigns._set_fonts()
         bg, ink, edge = STYLES[kind]
-        flat = [*bg, *ink, *edge, *BLACK, CAP_M, 0.55, MIN_W_M, MAX_W_M, INSET_M, LINE_W_M, 0.07, 0.0, 0.0]
+        flat = [*bg, *ink, *edge, *BLACK, CAP_STAND_M if kind == "stand" else CAP_M, 0.55, MIN_W_M, MAX_W_M, INSET_M, LINE_W_M, 0.07, 0.0, 0.0]
         h = hashlib.sha1(json.dumps([FACE_VERSION, flat, text, PX_PER_M], ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
         data, w_m, h_m = fast._ef.dirsign_town_face(text, "", False, flat, PX_PER_M)
         if len(_FACES) >= MAX_FACES_CACHE:
@@ -372,7 +385,25 @@ def _row(sc, junction):
 
 
 # ------------------------------------------------------------------------------------------------- the signs
-def _build(sc, aprons, db):
+def _stand_places(sc, stands):
+    """[(text, place (2,), face direction (2,), to the board's left (2,))] of the stand signs (module docstring) of the stands
+    (parkedaircraft Craft) that have a short ref, sorted by position."""
+    st = sorted((c for c in stands if c.mode in taxiwaymarks.LEAD_MODES and c.ref.strip() and len(c.ref.strip()) <= STAND_REF_MAX),
+                key=lambda c: (round(c.lat, 7), round(c.lon, 7), c.kind))
+    if not st:
+        return []
+    e, n, _ = sc.frame.geodetic_to_enu(np.array([c.lat for c in st]), np.array([c.lon for c in st]), np.zeros(len(st)))
+    out = []
+    for c, ce, cn in zip(st, np.asarray(e, np.float64), np.asarray(n, np.float64)):
+        u = np.array([c.ne, c.nn])
+        u = u / max(float(dnp.hypot(*u)), 1e-9)
+        left = np.array([-u[1], u[0]])
+        at = np.array([ce, cn]) + u * (pa.SPECS[c.kind][0] / 2.0 + STAND_AHEAD_M) + left * STAND_LEFT_M
+        out.append((c.ref.strip().upper(), at, -u, left))
+    return out
+
+
+def _build(sc, aprons, db, stands=()):
     ground = _Ground(sc, aprons)
     placed = []                                 # (x, y, w) of the boards so far
     found = []                                  # (kind, text, x, y, face direction (2,), w, h)
@@ -380,9 +411,9 @@ def _build(sc, aprons, db):
     def free(c, w):
         return all(float(dnp.hypot(*(c - p))) >= 0.5 * min(w, pw) + 0.2 for p, pw in placed)
 
-    def put(kind, text, c, face, lat_dir, w, h):
+    def put(kind, text, c, face, lat_dir, w, h, apron=False):
         pts = c[None] + lat_dir[None] * np.array([-w / 2.0, 0.0, w / 2.0])[:, None]
-        if not (free(c, w) and ground.clear(pts)):
+        if not (free(c, w) and (apron or ground.clear(pts))):          # (a stand's sign stands on its apron)
             return False
         placed.append((c, w))
         found.append((kind, text, float(c[0]), float(c[1]), face, w, h))
@@ -415,23 +446,28 @@ def _build(sc, aprons, db):
                     reach += w + ROW_GAP_M
                 if n:
                     break
+    for text, at, face, left in _stand_places(sc, stands):
+        _, w, h, _ = _draw("stand", text)
+        put("stand", text, at, face, left, w, h, apron=True)
     return found
 
 
-def signs(feats_list, db=None):
-    """The signs of the Features in feats_list (module docstring): [Sign], memoized on their scene, [] for Features with no
-    airport way in them."""
+def signs(feats_list, db=None, stands=None):
+    """The signs of the Features in feats_list and of the stands (module docstring): [Sign], memoized on their scene, [] for
+    Features with no airport way in them."""
     sc = taxiwaymarks.scene(feats_list)
     if sc is None:
         return []
+    stands = [c for c in (stands or ()) if c.ref]
+    skey = taxiwaymarks.stand_key(stands)
     got = sc.memo.get(_MEMO)
-    if got is not None and got[0] is db:
-        return got[1]
+    if got is not None and got[0] is db and got[1] == skey:
+        return got[2]
     out = []
-    for kind, text, x, y, face, w, h in _build(sc, _aprons(feats_list, sc), db):
+    for kind, text, x, y, face, w, h in _build(sc, _aprons(feats_list, sc), db, stands):
         la, lo, _ = sc.frame.enu_to_geodetic(x, y, 0.0)
         out.append(Sign(kind, text, float(la), float(lo), _bearing(face), w, h))
-    sc.memo[_MEMO] = (db, out)
+    sc.memo[_MEMO] = (db, skey, out)
     return out
 
 
@@ -441,7 +477,15 @@ def sign_tile(md, frame, tx, ty, elev, out_dir, vfs_dir, db=None):
         return None, {}
     box = roads.tile_bbox(tx, ty)
     keys = roads.cells_of_tile(frame, tx, ty, taxiwaymarks.REACH_M)
-    found = signs([md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure") for k in keys], db)
+    infra = lambda k: md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+    feats = [infra(k) for k in keys]
+    stands = []
+    if any(pa.has_stands(f) for f in feats):
+        try:
+            stands = pa.lead_stands(keys, infra, pa.building_layers_fn(md))
+        except Exception as ex:                 # (the taxiway signs are worth more than the stand signs)
+            log.warning("stand signs: %s: %s", type(ex).__name__, ex)
+    found = signs(feats, db, stands)
     if not found:
         return None, {}
     la = np.array([x.lat for x in found])
@@ -462,9 +506,14 @@ def sign_tile(md, frame, tx, ty, elev, out_dir, vfs_dir, db=None):
         if name not in faces:
             faces[name] = tex
             materials.append(name)
-        zg = z[k] - (MOUNT_M - BOTTOM_M)
+        if sg.kind == "stand":                  # (on a post STAND_POST_M tall: the foot a little underground)
+            mount = max(STAND_POST_M - h, MOUNT_M) + 0.1
+            zg = z[k] - 0.1
+        else:
+            mount = MOUNT_M
+            zg = z[k] - (MOUNT_M - BOTTOM_M)
         fx, fy = dmath.sin(math.radians(sg.face)), dmath.cos(math.radians(sg.face))
-        rows.append([sg.kind, sg.text, float(e[i]), float(n[i]), zg, zg, -fx, -fy, w, h, materials.index(name), MOUNT_M])
+        rows.append([sg.kind, sg.text, float(e[i]), float(n[i]), zg, zg, -fx, -fy, w, h, materials.index(name), mount])
     if not rows:
         return None, {}
     x0, y0 = box[0], box[1]

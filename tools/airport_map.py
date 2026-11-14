@@ -7,8 +7,9 @@ Loads the map cells round (lat, lon) as the server does (mapdata.MapData: the ca
 buildings and parts (airportroles.classify) and draws, ~1600 px: the runways, taxiways and aprons in greys, the buildings
 filled by role (legend), the gate points (a ring where the gate has a jet bridge, a cross where it has none), the jet
 bridges' outer ends with an arrow out of the terminal, airside parking hatched, the CURRENT parked aircraft as outlines
-(parkedaircraft.kept_stands, read only), the apron masts (airsideprops) and the stands' lead-in lines (taxiwaymarks).
-Prints the count per role and, per gate in the picture: has a bridge, has an aircraft.
+(parkedaircraft.kept_stands, read only), the empty stands (parkedaircraft.lead_stands: dashed), the apron masts
+(airsideprops) and the stands' lead-in lines and stand details (taxiwaymarks). Prints the count per role and, per gate in
+the picture: has a bridge, has an aircraft, has a stand, and the stands whose nose no lead-in reaches (ringed in red).
 
 --km is the side of the square picture (default 2); data is loaded 300 m beyond it. Needs matplotlib (pip install matplotlib).
 """
@@ -121,12 +122,13 @@ def main():
     # the parked aircraft, masts and lead-ins as the game places them now (read only)
     infra_fn = lambda k: per[str(k)].get("infrastructure") if str(k) in per else \
         md.cell(k, layers=("infrastructure",)).layers.get("infrastructure")
-    stands = []
+    stands, every = [], []
     try:
         stands = pa.kept_stands(keys, infra_fn, pa.building_layers_fn(md))
+        every = pa.lead_stands(keys, infra_fn, pa.building_layers_fn(md))
     except Exception as ex:                          # noqa: BLE001 (the picture without them)
         print("aircraft:", type(ex).__name__, ex)
-    masts, leads = [], []
+    masts, leads, unreached = [], [], []
     try:
         for k in keys:
             f = infra_fn(k)
@@ -137,9 +139,9 @@ def main():
                         e, n, _ = frame.geodetic_to_enu(np.array([p.lat]), np.array([p.lon]), 0.0)
                         masts.append((float(e[0]), float(n[0])))
         feats = [f for f in infra if pa.has_stands(f)]
-        if stands and feats:
+        if every and feats:
             base = set(taxiwaymarks.strokes(feats))
-            leads = [s for s in taxiwaymarks.strokes(feats, stands) if s not in base]
+            leads = [s for s in taxiwaymarks.strokes(feats, every) if s not in base]
     except Exception as ex:                          # noqa: BLE001
         print("masts / lead-ins:", type(ex).__name__, ex)
 
@@ -168,33 +170,49 @@ def main():
         ax.add_patch(Polygon(p["ring"], closed=True, facecolor="none", edgecolor="#7b2d9c", hatch="////", linewidth=0.8,
                              zorder=6))
 
+    ends = []                                        # (the lead-ins' ends in metres: a stand's nose is reached by one)
     for s in leads:
-        (la0, lo0, la1, lo1, *_rest) = s
+        (la0, lo0, la1, lo1, _w, kind, _col) = s
         e, n, _ = frame.geodetic_to_enu(np.array([la0, la1]), np.array([lo0, lo1]), 0.0)
-        ax.plot(e, n, color="#ffffff", lw=0.9, zorder=7)
-    for c in stands:
-        rects, _xy, _nv = aircraft_outline(c, frame)
+        ax.plot(e, n, color="#ffffff" if kind == taxiwaymarks.CENTRE_KIND else "#ffe066", lw=0.9, zorder=7)
+        if kind == taxiwaymarks.CENTRE_KIND:
+            ends += [(float(e[0]), float(n[0])), (float(e[1]), float(n[1]))]
+    kept = {(c.kind, round(c.lat, 7), round(c.lon, 7)) for c in stands}
+    for c in every:
+        rects, (cx, cy), (nx, ny) = aircraft_outline(c, frame)
+        has = (c.kind, round(c.lat, 7), round(c.lon, 7)) in kept
         for r in rects:
-            ax.add_patch(Polygon(r, closed=True, facecolor="none", edgecolor="#111111", linewidth=0.9, zorder=8))
+            ax.add_patch(Polygon(r, closed=True, facecolor="none", edgecolor="#111111" if has else "#555555",
+                                 linestyle="-" if has else (0, (3, 2)), linewidth=0.9, zorder=8))
+        if c.mode in taxiwaymarks.LEAD_MODES:
+            half = pa.SPECS[c.kind][0] / 2.0
+            nose = (cx + nx * half, cy + ny * half)
+            if not any(math.hypot(nose[0] - x, nose[1] - y) < 0.6 for x, y in ends):
+                ax.scatter([nose[0]], [nose[1]], s=60, marker="o", facecolor="none", edgecolor="#e60000", linewidths=1.4,
+                           zorder=12)
+                unreached.append((c.kind, round(nose[0]), round(nose[1])))
     if masts:
         ax.scatter([m[0] for m in masts], [m[1] for m in masts], marker="*", s=40, c="#ff00ff", edgecolor="k",
                    linewidths=0.3, zorder=9)
 
     # the gates and their jet bridges
     ac = [(c, aircraft_outline(c, frame)) for c in stands]
+    st_all = [(c, aircraft_outline(c, frame)) for c in every if c.mode in taxiwaymarks.LEAD_MODES]
     rows = []
     for gid, g in sorted(res.gates.items()):
         x, y = g["xy"]
         if not (box[0] <= x <= box[2] and box[1] <= y <= box[3]):
             continue
-        has_ac = False
         px, py, reach = (x, y, 15.0) if g["bridge"] is None else (*g["end"], 8.0)     # (a bridged gate: the aircraft beside its end)
-        for c, (_r, (cx, cy), (nx, ny)) in ac:
-            if math.hypot(px - cx, py - cy) <= pa._radius(c.kind) + reach and bool(
-                    pa._in_rects(c.kind, cx, cy, nx, ny, np.array([[px, py]]), reach)[0]):
-                has_ac = True
-                break
-        rows.append((gid, g["bridge"] is not None, has_ac))
+
+        def covers(lst):
+            for c, (_r, (cx, cy), (nx, ny)) in lst:
+                if math.hypot(px - cx, py - cy) <= pa._radius(c.kind) + reach and bool(
+                        pa._in_rects(c.kind, cx, cy, nx, ny, np.array([[px, py]]), reach)[0]):
+                    return True
+            return False
+        has_ac, has_st = covers(ac), covers(st_all)
+        rows.append((gid, g["bridge"] is not None, has_ac, has_st))
         if g["bridge"] is not None:
             ax.scatter([x], [y], s=34, facecolor="none", edgecolor="#006400", linewidths=1.5, zorder=10)
             ex, ey = g["end"]
@@ -213,21 +231,26 @@ def main():
                 Line2D([], [], marker="x", mec="k", ls="", label="gate, no bridge"),
                 Line2D([], [], marker=">", color="#8b0000", ls="", label="bridge outer end, arrow out"),
                 Patch(facecolor="none", edgecolor="#111111", label=f"parked aircraft now ({len(stands)})"),
+                Patch(facecolor="none", edgecolor="#555555", linestyle="--", label=f"empty stand ({len(every) - len(stands)})"),
+                Line2D([], [], marker="o", mfc="none", mec="#e60000", ls="", label=f"no lead-in at the nose ({len(unreached)})"),
                 Line2D([], [], marker="*", mfc="#ff00ff", mec="k", ls="", label=f"apron mast ({len(masts)})"),
                 Line2D([], [], color="#ffffff", lw=1.2, label=f"stand lead-in ({len(leads)})")]
     ax.legend(handles=handles, loc="upper left", fontsize=9, framealpha=0.9)
     nb = sum(1 for r in rows if r[1])
     na = sum(1 for r in rows if r[2])
+    ns = sum(1 for r in rows if r[3])
     fig.suptitle(f"{a.name or 'airport'}  ({a.lat:.4f}, {a.lon:.4f})  {a.km:g} km square, north up   gates {len(rows)}: "
-                 f"{nb} with a bridge, {na} with an aircraft", fontsize=13, y=0.985)
+                 f"{nb} with a bridge, {na} with an aircraft, {ns} with a stand", fontsize=13, y=0.985)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     fig.savefig(out, dpi=100)
     print("roles:", ", ".join(f"{r} {n_by[r]}" for r in ar.ROLES))
-    print(f"airside parking: {len(res.airside_parking)}; aircraft now: {len(stands)}; masts: {len(masts)}; lead-ins: {len(leads)}")
+    print(f"airside parking: {len(res.airside_parking)}; aircraft now: {len(stands)}; stands: {len(every)}; masts: {len(masts)}; "
+          f"lead-in strokes: {len(leads)}; stands whose nose no lead-in reaches: {len(unreached)} {unreached}")
     print(f"gates in the picture: {len(rows)}, with a jet bridge {nb}, with an aircraft {na}, "
-          f"with both {sum(1 for r in rows if r[1] and r[2])}, with neither {sum(1 for r in rows if not r[1] and not r[2])}")
-    for gid, hb, hc in rows:
-        print(f"  gate {gid[:8]}: bridge {'yes' if hb else 'no '} aircraft {'yes' if hc else 'no'}"
+          f"with a stand {ns}, with both {sum(1 for r in rows if r[1] and r[2])}, "
+          f"with neither {sum(1 for r in rows if not r[1] and not r[2])}")
+    for gid, hb, hc, hs in rows:
+        print(f"  gate {gid[:8]}: bridge {'yes' if hb else 'no '} aircraft {'yes' if hc else 'no '} stand {'yes' if hs else 'no'}"
               + (f"  [{res.gates[gid]['bridge'][:8]}, {res.gates[gid]['dist']:.0f} m]" if hb else ""))
     print("saved", out)
 

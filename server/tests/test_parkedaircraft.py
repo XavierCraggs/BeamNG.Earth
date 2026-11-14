@@ -503,7 +503,8 @@ class Buildings(unittest.TestCase):
         f, _ = gates_row(4, 80.0, occupied=True)
         got = pa.kept_stands([0], lambda k: f, lambda k: [buildings(TERMINAL), None])
         self.assertEqual(len(got), 4)
-        self.assertEqual(len(pa.tile_rows(FRAME, BOX, lambda k: f, lambda k: buildings(TERMINAL), ground, keys=[0])), 4)
+        rows = pa.tile_rows(FRAME, BOX, lambda k: f, lambda k: buildings(TERMINAL), ground, keys=[0])
+        self.assertEqual(len([r for r in rows if r[0] in pa.GROUPS.values()]), 4)
 
 
 class Types(unittest.TestCase):
@@ -580,8 +581,35 @@ class Apron(unittest.TestCase):
 
 
 class Rows(unittest.TestCase):
-    def rows(self, f, bld, box=BOX):
-        return pa.tile_rows(FRAME, box, lambda k: f, lambda k: bld, ground, keys=[0])
+    def rows(self, f, bld, box=BOX, lights=False):
+        """The aircraft's rows of the tile (lights: the navigation lights' instead)."""
+        got = pa.tile_rows(FRAME, box, lambda k: f, lambda k: bld, ground, keys=[0])
+        return [r for r in got if (r[0] in pa.GROUPS.values()) != lights]
+
+    def test_a_gate_aircraft_has_three_navigation_lights(self):
+        f = feats(aerodrome(), gate(0.0), occupied=True)
+        bld = buildings(TERMINAL)
+        craft = pa.stands(f, bld)
+        self.assertEqual(len(craft), 1)
+        rows, lights = self.rows(f, bld), self.rows(f, bld, lights=True)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(sorted(r[0] for r in lights), ["afl_green", "afl_red", "afl_white"])
+        kind, (x, y) = craft[0].kind, en(craft[0])
+        span, length = pa.SPECS[kind][1], pa.SPECS[kind][0]
+        by = {r[0]: r for r in lights}
+        # (the nose toward the terminal, -y: its left is +x: red there at the tip, green at the other, white at the tail)
+        self.assertAlmostEqual(by["afl_red"][1] - rows[0][1], span / 2.0, delta=0.3)
+        self.assertAlmostEqual(by["afl_green"][1] - rows[0][1], -span / 2.0, delta=0.3)
+        self.assertAlmostEqual(by["afl_white"][2] - rows[0][2], length / 2.0 - pa.NAV_TAIL_IN_M, delta=0.3)
+        self.assertAlmostEqual(by["afl_red"][3], 5.0 + pa.NAV[kind][1], 1)         # (the tip's height over the ground)
+        for r in lights:
+            self.assertEqual((r[4], r[5], r[6]), (0.0, 1.0, 1.0))
+        self.assertEqual(self.rows(f, bld, (-400.0, 200.0, 400.0, 300.0), lights=True), [])      # (owned with its aircraft)
+
+    def test_no_navigation_lights_at_remote_or_ga_stands(self):
+        ga = feats(aerodrome("regional_airport"), (poly([(-150, 100), (150, 100), (150, 200), (-150, 200)]), "apron", {}))
+        got = pa.tile_rows(FRAME, BOX, lambda k: ga, lambda k: None, ground, keys=[0])
+        self.assertTrue(got and all(r[0] == "ac_light" for r in got))
 
     def test_none_without_airport_features(self):
         other = mapgeom.build("infrastructure", np.array(["a", "b"]), [point(0, 0), line((0, 0), (10, 0))])
@@ -649,7 +677,8 @@ class Liveries(unittest.TestCase):
         self.assertLessEqual(len(used), pa.AIRLINES_MAX)
         self.assertGreaterEqual(len(used), 2)
         self.assertLessEqual(used, set(range(pa.LIVERIES)))
-        rows = pa.tile_rows(FRAME, (-400.0, -300.0, 700.0, 300.0), lambda k: f, lambda k: bld, ground, keys=[0])
+        rows = [r for r in pa.tile_rows(FRAME, (-400.0, -300.0, 700.0, 300.0), lambda k: f, lambda k: bld, ground, keys=[0])
+                if r[0] in pa.GROUPS.values()]
         self.assertEqual(sorted({self.pick(r[7]) for r in rows}), sorted(used))   # (the rows carry the stands' liveries)
 
     def test_deterministic_and_the_same_per_stand_whoever_asks(self):

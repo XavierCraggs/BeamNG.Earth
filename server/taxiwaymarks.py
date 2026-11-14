@@ -16,17 +16,32 @@ aeroways reads it (airport subtype, class, unpaved surfaces skipped, kind-2 line
 Features of every cell it touches: those are read once (by id) and the strokes of a list of Features are memoized on its
 first (bounded), so every tile of a block shares them. Pure: no ground, no frame.
 
-Stand lead-ins (strokes / tile_chunks take `stands`, parkedaircraft's Craft list of the cells, parkedaircraft.kept_stands):
-for each gate or remote stand (not a general-aviation row) a yellow line (CENTRE_KIND, CENTRE_W_M: the same paint) from the
+Stand lead-ins (strokes / tile_chunks take `stands`, parkedaircraft's Craft list of the cells, parkedaircraft.lead_stands:
+every valid stand, with or without an aircraft): for each gate or remote stand (not a general-aviation row) a yellow line (CENTRE_KIND, CENTRE_W_M: the same paint) from the
 taxiway or taxilane that the aircraft's axis (extended tail-ward) meets nearest: along that line, then a quadratic Bezier
 arc (tangent length of a radius of half the wingspan: LEAD_RADIUS_K; tighter where the lane or the straight run is short)
 into a straight run along the axis to the nose, and a stop bar STOP_BAR_M across the axis at the nose. A lane that ends
 short of the axis is carried on straight (up to LEAD_EXT_M) to it; a lane's end the nose points along (the stand's own
-mapped lead-in) is carried on to the nose. A stand with no lane gets nothing; nor does one whose line would be over
-LEAD_LINE_MAX_M long or cross a taxiway's or runway's pad that is not the lane it leaves (the next lane is tried).
+mapped lead-in) is carried on to the nose. A line over LEAD_LINE_MAX_M long or across the pad of a taxiway or runway that is not the lane it leaves is passed over
+for the next lane; where none is left, the first lane whose line crosses taxiway pads only (never a runway's: an apron is
+criss-crossed with mapped taxiways, a dense one lost most of its stands' lines) is used, and a stand still without a line
+(no lane near, or only across a runway) gets a straight stub along its axis from LEAD_STUB_M behind the tail to the nose:
+every stand has a line reaching its nose.
 A stand that overlaps another of the list is passed over, and no line is painted twice (every tile reads the same list
 of stands, and paints the parts of the lines inside its own box: see tile_chunks). The mapped lines are cut only at
-runways (not at an apron's edge).
+runways (not at an apron's edge). Stand details: two wing-tip clearance lines parallel to the
+axis (kind STAND_KIND; WING_LINE_OFF_M outside the wing tips, WING_LINE_LEN_M long, ending level with the stop bar), and, where the gate's
+`ref` tag is a short run of letters and digits the font has (A-Z, 0-9), the stand's number past the stop bar (NUM_AFTER_M beyond it, NUM_H_M tall, a 5 x 7 point stroke font with rounded corners:
+_GLYPHS, NUM_W_M wide lines, centred on the axis, as the pilot reads it on the approach, the same yellow paint).
+
+Lead-ins as a tree (_spines): the stands that stand in a row (noses near each other, axes within 72 degrees) share a spine, a
+taxilane along the frontage through the points SPINE_BACK_M behind each tail (a ring for a satellite), its ends joined to the
+nearest mapped way by straight pieces and painted as a centreline; where a mapped way already runs within SPINE_LANE_M of
+those points it is the spine and nothing is painted. Each stand's lead-in leaves the spine with a short curve onto its axis and
+runs straight to the nose (every branch turning the same way); one that is longer than the aircraft plus LEAD_OVER_M is passed
+over (the stub, below), and of two lead-ins that cross the longer is dropped. A stand that is in no row, or whose branch is none,
+gets the nearest-lane line as before. The rows are made of the stand list alone, so every tile that reads the same stands
+paints the same.
 
 scene(feats_list) -> Scene: the same read (the ways with their `ref`, the runways with theirs, the runway holding
 positions) in one local metre frame, for the airfield signs (airfieldsigns: a runway's signs stand at those positions).
@@ -54,6 +69,7 @@ log = logging.getLogger(__name__)
 
 CENTRE_W_M = 0.15           # m: the centreline's width (ICAO Annex 14: 0.15 m on a taxiway, 0.3 m on a runway's)
 CENTRE_KIND = "taxi_centreline"
+STAND_KIND = "stand_mark"   # the stand details' strokes (wing-tip clearance lines, stand numbers): the same paint
 COLOR = "yellow"
 RUNWAY_GAP_M = 1.0          # the centreline stops this far outside a runway's edge
 HOLD_DIST_M = 60.0          # the holding position's distance from the runway centreline (ICAO code 3 / 4: 75 m to 90 m)
@@ -65,7 +81,8 @@ HOLD_SNAP_M = 4.0           # a holding_position point this far off a way's edge
 HOLD_MAX_M = 150.0          # ... and one further than this from the runway's centreline holds something else (an ILS)
 HOLD_KIND = {True: "hold_solid", False: "hold_dashed"}
 MIN_RUN_M = 0.5             # a centreline fragment shorter than this (a sliver beside a cut) is dropped
-REACH_M = 150.0             # the margin round a tile whose cells the hook reads (a runway's and a way's join)
+REACH_M = 280.0             # the margin round a tile whose cells the hook reads (a runway's and a way's join; a stand's lead-in,
+                            # up to LEAD_LINE_MAX_M long, ends in the tile: its stand and lane are in the cells read)
 CACHE_MAX = 8               # strokes kept per first Features (one per list of cells asked)
 HOLD_POINT = "holding_position"
 LEAD_MODES = ("gate", "remote")     # the stands (parkedaircraft's Craft.mode) that get a lead-in
@@ -83,12 +100,101 @@ LEAD_D_MIN_M = 2.0                  # the curve's tangent length at least this
 LEAD_MIN_SIN = 0.17                 # a lane within 10 degrees of the axis (sine) is not crossed by it
 ALONG_COS = 0.94                    # a lane end the nose points along (20 degrees) ...
 ALONG_LAT_M = 2.0                   # ... within this of the axis, is the stand's own lead-in
+LEAD_OVER_M = 40.0                  # a lead-in at most the aircraft's length and this long (a longer one is passed over)
+SPINE_BACK_M = 10.0                 # a row's spine: through the points this far behind each stand's tail,
+SPINE_LINK_M = 25.0                 # ... of the stands (noses within half the spans and this of each other, axes within 72 degrees)
+SPINE_LINK_COS = 0.3                # that stand in a row,
+SPINE_RING_MIN = 4                  # ... a ring round a satellite (at least this many stands, their mean heading under
+SPINE_RING_MEAN = 0.5               # this long: they face every way),
+SPINE_LANE_M = 25.0                 # a mapped lane within this of every one of those points is the spine,
+SPINE_JOIN_MAX_M = 150.0            # an end joined to the nearest mapped way by a straight piece at most this long,
+SPINE_ROUND_M = 6.0                 # its corners rounded this much (the painted line only)
+LEAD_STUB_M = 25.0                  # a stand with no lane: a straight run from this far behind its tail to the nose
 STOP_BAR_M = 3.0                    # the stop bar's length across the axis
+WING_LINE_OFF_M = 3.0               # the wing-tip clearance lines: this far outside the wing tips,
+WING_LINE_LEN_M = 20.0              # ... this long, ending at the stop bar's level
+NUM_H_M = 2.5                       # the stand number's characters: this tall, NUM_W_K of that wide, NUM_GAP_K apart, the
+NUM_W_K, NUM_GAP_K = 4.0 / 6.0, 0.25    # strokes NUM_W_M wide, from NUM_AFTER_M past the stop bar (a 5 x 7 point font: 4 x 6 cells)
+NUM_W_M = 0.25
+NUM_AFTER_M = 1.0
+NUM_MAX = 4                         # a ref longer than this is not painted
+NUM_ROUND = 0.9                     # the font's corners rounded: a cell's tenths cut off each side of a corner (at most a half stroke)
 PIECE_MIN_M = 0.05                  # a part of a line inside a tile shorter than this (a corner's sliver) is not painted
+# The stand numbers' font: strokes on a 5 x 7 point grid (x 0..4 right, y 0..6 up, as the pilot reads it), straight runs
+# with the corners rounded (_round); a stroke that ends where it began is closed. 0 and O, 1 and I differ in the crossbars only.
+_FONT = {
+    "0": (((0, 1), (0, 5), (1, 6), (3, 6), (4, 5), (4, 1), (3, 0), (1, 0), (0, 1)),),
+    "1": (((1, 5), (2, 6), (2, 0)), ((1, 0), (3, 0))),
+    "2": (((0, 5), (1, 6), (3, 6), (4, 5), (4, 4), (0, 0), (4, 0)),),
+    "3": (((0, 5), (1, 6), (3, 6), (4, 5), (4, 4), (3, 3), (1.5, 3)), ((3, 3), (4, 2), (4, 1), (3, 0), (1, 0), (0, 1))),
+    "4": (((3, 0), (3, 6), (0, 2), (4, 2)),),
+    "5": (((4, 6), (0, 6), (0, 3), (3, 3), (4, 2), (4, 1), (3, 0), (1, 0), (0, 1)),),
+    "6": (((4, 5), (3, 6), (1, 6), (0, 5), (0, 1), (1, 0), (3, 0), (4, 1), (4, 2), (3, 3), (0, 3)),),
+    "7": (((0, 6), (4, 6), (1.5, 0)),),
+    "8": (((1, 3), (0, 4), (0, 5), (1, 6), (3, 6), (4, 5), (4, 4), (3, 3), (1, 3)),
+          ((1, 3), (0, 2), (0, 1), (1, 0), (3, 0), (4, 1), (4, 2), (3, 3), (1, 3))),
+    "9": (((0, 1), (1, 0), (3, 0), (4, 1), (4, 5), (3, 6), (1, 6), (0, 5), (0, 4), (1, 3), (4, 3)),),
+    "A": (((0, 0), (2, 6), (4, 0)), ((0.7, 2), (3.3, 2))),
+    "B": (((0, 0), (0, 6), (3, 6), (4, 5), (4, 4), (3, 3), (0, 3)), ((3, 3), (4, 2), (4, 1), (3, 0), (0, 0))),
+    "C": (((4, 5), (3, 6), (1, 6), (0, 5), (0, 1), (1, 0), (3, 0), (4, 1)),),
+    "D": (((0, 0), (0, 6), (2, 6), (4, 4), (4, 2), (2, 0), (0, 0)),),
+    "E": (((4, 6), (0, 6), (0, 0), (4, 0)), ((0, 3), (3, 3))),
+    "F": (((4, 6), (0, 6), (0, 0)), ((0, 3), (3, 3))),
+    "G": (((4, 5), (3, 6), (1, 6), (0, 5), (0, 1), (1, 0), (3, 0), (4, 1), (4, 3), (2, 3)),),
+    "H": (((0, 0), (0, 6)), ((4, 0), (4, 6)), ((0, 3), (4, 3))),
+    "I": (((1, 6), (3, 6)), ((2, 6), (2, 0)), ((1, 0), (3, 0))),
+    "J": (((4, 6), (4, 1), (3, 0), (1, 0), (0, 1)),),
+    "K": (((0, 0), (0, 6)), ((4, 6), (0, 3), (4, 0))),
+    "L": (((0, 6), (0, 0), (4, 0)),),
+    "M": (((0, 0), (0, 6), (2, 3), (4, 6), (4, 0)),),
+    "N": (((0, 0), (0, 6), (4, 0), (4, 6)),),
+    "O": (((0, 1), (0, 5), (1, 6), (3, 6), (4, 5), (4, 1), (3, 0), (1, 0), (0, 1)),),
+    "P": (((0, 0), (0, 6), (3, 6), (4, 5), (4, 4), (3, 3), (0, 3)),),
+    "Q": (((0, 1), (0, 5), (1, 6), (3, 6), (4, 5), (4, 1), (3, 0), (1, 0), (0, 1)), ((2.5, 1.5), (4, 0))),
+    "R": (((0, 0), (0, 6), (3, 6), (4, 5), (4, 4), (3, 3), (0, 3)), ((2, 3), (4, 0))),
+    "S": (((4, 5), (3, 6), (1, 6), (0, 5), (0, 4), (1, 3), (3, 3), (4, 2), (4, 1), (3, 0), (1, 0), (0, 1)),),
+    "T": (((0, 6), (4, 6)), ((2, 6), (2, 0))),
+    "U": (((0, 6), (0, 1), (1, 0), (3, 0), (4, 1), (4, 6)),),
+    "V": (((0, 6), (2, 0), (4, 6)),),
+    "W": (((0, 6), (1, 0), (2, 3), (3, 0), (4, 6)),),
+    "X": (((0, 6), (4, 0)), ((4, 6), (0, 0))),
+    "Y": (((0, 6), (2, 3), (4, 6)), ((2, 3), (2, 0))),
+    "Z": (((0, 6), (4, 6), (0, 0), (4, 0)),),
+}
 _RAW = "_taxiway_raw"
 _MEMO = "_taxiway_marks"
 _SCENE = "_taxiway_scene"
 _EPS = 1e-9
+
+
+def _round(pts, cut, closed=False, steps=4):
+    """The polyline pts (k, 2) with each corner rounded: a quadratic curve (steps chords) from `cut` before the corner to `cut`
+    after it (less where a side is short: at most half of it, so that neighbouring corners do not meet). A closed polyline
+    (closed, or its first point repeated at its end) is rounded at its first point too; its result ends where it began."""
+    P = np.asarray(pts, np.float64)
+    closed = bool(closed) or (len(P) > 2 and bool(np.all(P[0] == P[-1])))
+    if closed and np.all(P[0] == P[-1]):
+        P = P[:-1]
+    n = len(P)
+    if n < 3 and closed or n < 2:
+        return P.copy()
+    out = [] if closed else [P[0]]
+    for i in (range(n) if closed else range(1, n - 1)):
+        p0, p1, p2 = P[i - 1], P[i], P[(i + 1) % n]
+        d0, d2 = float(dnp.hypot(*(p0 - p1))), float(dnp.hypot(*(p2 - p1)))
+        c = min(cut, d0 / 2.0, d2 / 2.0)
+        if c < 1e-9 or d0 < 1e-9 or d2 < 1e-9:
+            out.append(p1)
+            continue
+        a, b = p1 + (p0 - p1) * (c / d0), p1 + (p2 - p1) * (c / d2)
+        for k in range(steps + 1):
+            q = k / steps
+            out.append((1.0 - q) * (1.0 - q) * a + 2.0 * (1.0 - q) * q * p1 + q * q * b)
+    out.append(out[0] if closed else P[-1])
+    return np.array(out)
+
+
+_GLYPHS = {ch: tuple(_round(np.array(poly, np.float64), NUM_ROUND, steps=3) for poly in polys) for ch, polys in _FONT.items()}
 
 
 def _raw(feats):
@@ -447,6 +553,33 @@ def _pads(sc):
     return got
 
 
+def _runway_pads(pads):
+    """The runways' part of _pads' (a, b, half width, way index): the segments of way index -1."""
+    m = pads[3] == -1
+    return tuple(x[m] for x in pads)
+
+
+def _stand_line(lanes, spine, nose, u, r, pads, length):
+    """The lead-in of a stand (the polyline (k, 2), or None where a lane already reaches the nose), at most length + LEAD_OVER_M
+    long (`length`: the aircraft's): the stand's own mapped lead-in lane carried on to the nose; else a branch off its row's
+    spine (`spine`: (lanes, forward) of _spines, or None); else _lead_line's: the first that crosses no other pad; else one that
+    crosses no runway's (pads' taxiway part only); else the stub of LEAD_STUB_M behind the tail to the nose."""
+    cap = length + LEAD_OVER_M
+    line, found = _lead_line(_empty_lanes(lanes[5]), nose, u, r, pads, cap)
+    if found:
+        return line
+    if spine is not None:
+        line, found = _lead_line(spine[0], nose, u, r, pads, cap, spine[1])
+        if found:
+            return line
+    line, found = _lead_line(lanes, nose, u, r, pads, cap)
+    if not found:
+        line, found = _lead_line(lanes, nose, u, r, _runway_pads(pads), cap)
+    if not found:
+        line = np.array([nose - u * (length + LEAD_STUB_M), nose])
+    return line
+
+
 def _crosses(pads, pts, own):
     """Does the polyline pts (k, 2) enter (by more than PAD_EDGE_M) the pad of a taxiway or runway other than the way `own`?"""
     a, b, half, way = pads
@@ -472,11 +605,12 @@ def _length(pts):
     return float(dnp.hypot(*d.T).sum())
 
 
-def _lead_line(lanes, n, u, r, pads=None):
+def _lead_line(lanes, n, u, r, pads=None, cap=LEAD_LINE_MAX_M, forward=False):
     """(polyline (k, 2), True) of the lead-in of a stand whose nose is at n, the nose direction u (unit), the curve's
     radius r: from the lane the axis (tail-ward from n) meets nearest to n, along it, round the arc into the straight run
-    to n; (None, True) where a lane already reaches n; (None, False) without a lane. A line longer than LEAD_LINE_MAX_M, or
-    across the pad of a taxiway or runway that is not the lane it leaves (pads: _pads), is passed over for the next lane."""
+    to n; (None, True) where a lane already reaches n; (None, False) without a lane. A line longer than `cap`, or
+    across the pad of a taxiway or runway that is not the lane it leaves (pads: _pads), is passed over for the next lane.
+    forward: every lane is left along its own direction (a spine's: all the branches turn the same way)."""
     a, t, ln, first, last, ends, owner = lanes
     cands = []
     for p, e, wi in ends:                               # (a lane's end the nose points along: its own lead-in)
@@ -489,7 +623,7 @@ def _lead_line(lanes, n, u, r, pads=None):
         if along < 1.0:
             return None, True
         pts = np.array([p, n])
-        if _length(pts) <= LEAD_LINE_MAX_M and not (pads is not None and _crosses(pads, pts, wi)):
+        if _length(pts) <= cap and not (pads is not None and _crosses(pads, pts, wi)):
             return pts, True
     if not len(a):
         return None, False
@@ -506,7 +640,7 @@ def _lead_line(lanes, n, u, r, pads=None):
     s = (t_[:, 0] * w[:, 1] - t_[:, 1] * w[:, 0]) / det
     cos = t_[:, 0] * u[0] + t_[:, 1] * u[1]
     # (the way's sense that turns into the stand: the one that bends less; across it, the one with more way behind the meeting)
-    fwd = np.where(np.abs(cos) < 0.02, tau >= l_ - tau, cos > 0.0)
+    fwd = np.where(np.abs(cos) < 0.02, tau >= l_ - tau, cos > 0.0) if not forward else np.ones(len(near), bool)
     tp = np.where(fwd, tau, l_ - tau)                               # the meeting along that sense from its start
     ext = np.where(fwd, last[near], first[near]) * LEAD_EXT_M       # (carried on past the way's end)
     ca, sa = np.abs(cos), np.abs(det)
@@ -534,20 +668,193 @@ def _lead_line(lanes, n, u, r, pads=None):
             pts.append((1.0 - q) * (1.0 - q) * p0 + 2.0 * (1.0 - q) * q * x + q * q * p2)
         pts += [p2, n]
         pts = np.array(pts)
-        if _length(pts) <= LEAD_LINE_MAX_M and not (pads is not None and _crosses(pads, pts, int(owner[near[k]]))):
+        if _length(pts) <= cap and not (pads is not None and _crosses(pads, pts, int(owner[near[k]]))):
             return pts, True
     return None, False
 
 
+def _empty_lanes(ends=()):
+    """_lanes' form with no segments and the given ends: what _lead_line reads for a stand's own mapped lead-in only."""
+    z = np.zeros((0, 2))
+    return z, z, np.zeros(0), np.zeros(0, bool), np.zeros(0, bool), list(ends), np.zeros(0, np.int64)
+
+
+def _poly_lanes(pts, closed=False, own=-2):
+    """_lanes' form of the polyline pts (k, 2): its segments in order (a lead-in leaves along their direction), none carried on."""
+    P = np.asarray(pts, np.float64)
+    Q = np.vstack([P, P[:1]]) if closed else P
+    a, b = Q[:-1], Q[1:]
+    ln = dnp.hypot(*(b - a).T)
+    keep = ln > 1e-6
+    a, b, ln = a[keep], b[keep], ln[keep]
+    n = len(a)
+    return a, (b - a) / ln[:, None], ln, np.zeros(n, bool), np.zeros(n, bool), [], np.full(n, own, np.int64)
+
+
+def _join(lanes, pads, p):
+    """(q (2,), way index) the nearest point q on a mapped way to p (within SPINE_JOIN_MAX_M) that a straight piece p-q reaches
+    without entering another way's or a runway's pad; q is p itself where p is on a way already. None where there is none."""
+    a, t, ln, _f, _l, _e, owner = lanes
+    if not len(a):
+        return None
+    q = a + t * np.clip(dnp.vecdot(p - a, t), 0.0, ln)[:, None]
+    d = dnp.hypot(*(q - p).T)
+    for k in np.argsort(d, kind="stable")[:LEAD_TRIES]:
+        if d[k] > SPINE_JOIN_MAX_M:
+            break
+        if d[k] < 0.5:
+            return np.array(p, np.float64), int(owner[k])
+        if not _crosses(pads, np.array([p, q[k]]), int(owner[k])):
+            return q[k], int(owner[k])
+    return None
+
+
+def _spines(items, lanes, pads):
+    """({item index: (lanes, forward)}, [polyline (k, 2) to paint]) of the rows of stands in items [(nose (2,), unit direction
+    (2,), length, span)], the tree the lead-ins branch off. Stands link (noses within half their spans plus SPINE_LINK_M, axes
+    within 72 degrees) into rows; a row of two or more has one spine, through the points SPINE_BACK_M behind each tail, in
+    order along the building (across the mean heading; by angle round the centroid for a satellite, a ring), its ends
+    joined to the nearest mapped ways by straight pieces and rounded (SPINE_ROUND_M), painted as a centreline. Where a mapped
+    way runs within SPINE_LANE_M of every one of those points it is the spine instead (nothing is painted). A row of one has none."""
+    n = len(items)
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i in range(n):
+        for j in range(i + 1, n):
+            (ni, ui, _li, si), (nj, uj, _lj, sj) = items[i], items[j]
+            if (float(dnp.hypot(*(ni - nj))) <= (si + sj) / 2.0 + SPINE_LINK_M
+                    and float(ui[0] * uj[0] + ui[1] * uj[1]) >= SPINE_LINK_COS):
+                ri, rj = find(i), find(j)
+                parent[max(ri, rj)] = min(ri, rj)
+    rows = {}
+    for i in range(n):
+        rows.setdefault(find(i), []).append(i)
+    got, paint = {}, []
+    a, t, ln, first, last, _ends, owner = lanes
+    for members in sorted(rows.values(), key=lambda m: m[0]):
+        if len(members) < 2:
+            continue
+        tails = np.array([items[i][0] - items[i][1] * (items[i][2] + SPINE_BACK_M) for i in members])
+        mu = np.array([items[i][1] for i in members]).mean(axis=0)
+        mean = float(dnp.hypot(*mu))
+        if len(a):                                      # (a mapped way along the tail points: it is the spine)
+            v = tails[:, None, :] - a[None]
+            q = a[None] + t[None] * np.clip(dnp.vecdot(v, t[None]), 0.0, ln[None])[..., None]
+            d = dnp.hypot(q[..., 0] - tails[:, None, 0], q[..., 1] - tails[:, None, 1])
+            best = d.argmin(axis=1)
+            if bool((d[np.arange(len(members)), best] <= SPINE_LANE_M).all()):
+                m = np.isin(owner, owner[best])
+                sp = (a[m], t[m], ln[m], first[m], last[m], [], owner[m]), False
+                got.update({i: sp for i in members})
+                continue
+        if len(members) >= SPINE_RING_MIN and mean < SPINE_RING_MEAN:
+            c = tails.mean(axis=0)
+            ang = [dmath.atan2(float(y - c[1]), float(x - c[0])) for x, y in tails]
+            order = sorted(range(len(members)), key=lambda k: (round(ang[k], 6), members[k]))
+            ring = tails[order]
+            join = [(float(dnp.hypot(*(j[0] - p))), p, j[0]) for p in ring for j in [_join(lanes, pads, p)] if j is not None]
+            if join:
+                _d, p, q = min(join, key=lambda x: (round(x[0], 3), round(float(x[1][0]), 3), round(float(x[1][1]), 3)))
+                paint.append(np.array([p, q]))
+            paint.append(_round(ring, SPINE_ROUND_M, closed=True))
+            sp = _poly_lanes(ring, closed=True), True
+        else:
+            along = np.array([-mu[1], mu[0]]) / max(mean, _EPS)
+            proj = dnp.vecdot(tails, along[None])
+            order = sorted(range(len(members)), key=lambda k: (round(float(proj[k]), 3), members[k]))
+            pts = tails[order]
+            span0 = items[members[order[0]]][3]
+            ja, jb = _join(lanes, pads, pts[0]), _join(lanes, pads, pts[-1])
+            da = float(dnp.hypot(*(ja[0] - pts[0]))) if ja else np.inf
+            db = float(dnp.hypot(*(jb[0] - pts[-1]))) if jb else np.inf
+            if db < da:                                 # (the end that is joined, or joined the nearer, is the start)
+                pts, ja, jb, span0 = pts[::-1], jb, ja, items[members[order[-1]]][3]
+            chain = list(pts)
+            if ja is not None and min(da, db) >= 0.5:
+                chain.insert(0, ja[0])
+            else:                                       # (no lane to the start: the spine is carried on before it)
+                e = pts[0] - pts[1]
+                chain.insert(0, pts[0] + e / max(float(dnp.hypot(*e)), _EPS) * (span0 / 2.0))
+            sp = _poly_lanes(np.array(chain)), True
+            if jb is not None and float(dnp.hypot(*(jb[0] - pts[-1]))) >= 0.5:
+                chain.append(jb[0])
+            paint.append(_round(np.array(chain), SPINE_ROUND_M))
+        got.update({i: sp for i in members})
+    return got, paint
+
+
+def _crossing(a, b, tol=0.02):
+    """Does the polyline a (k, 2) cross the polyline b (m, 2): a segment of one strictly across a segment of the other (the
+    ends clear of the other's line by more than tol m: a touch, a shared end or a run along it is no crossing)?"""
+    p, q, r, w = a[:-1][:, None], a[1:][:, None], b[:-1][None], b[1:][None]
+    d1, d2 = q - p, w - r
+    n1 = np.maximum(dnp.hypot(d1[..., 0], d1[..., 1]), _EPS)
+    n2 = np.maximum(dnp.hypot(d2[..., 0], d2[..., 1]), _EPS)
+    cr = lambda u, v: u[..., 0] * v[..., 1] - u[..., 1] * v[..., 0]
+    o1, o2 = cr(d1, r - p) / n1, cr(d1, w - p) / n1
+    o3, o4 = cr(d2, p - r) / n2, cr(d2, q - r) / n2
+    split = lambda x, y: ((x > tol) & (y < -tol)) | ((x < -tol) & (y > tol))
+    return bool((split(o1, o2) & split(o3, o4)).any())
+
+
+def _uncrossed(lines):
+    """The indices of lines (polylines or None) kept: of two that cross, the longer is dropped."""
+    idx = [i for i, ln in enumerate(lines) if ln is not None]
+    size = {i: round(_length(lines[i]), 3) for i in idx}
+    lo = {i: lines[i].min(axis=0) for i in idx}
+    hi = {i: lines[i].max(axis=0) for i in idx}
+    dropped = set()
+    for x, i in enumerate(idx):
+        for k in idx[x + 1:]:
+            if i in dropped or k in dropped:
+                continue
+            if (lo[i] > hi[k]).any() or (lo[k] > hi[i]).any() or not _crossing(lines[i], lines[k]):
+                continue
+            dropped.add(i if size[i] > size[k] else k)
+    return {i for i in idx if i not in dropped}
+
+
+def stand_key(stands):
+    """A hashable key of the stands' (parkedaircraft Craft) places, kinds and refs: what the memos of the lead-ins and the stand
+    signs are kept by."""
+    return tuple((c.kind, c.mode, c.ref, round(c.lat, 7), round(c.lon, 7), round(c.ne, 4), round(c.nn, 4)) for c in stands)
+
+
+def _number(ref, nose, u):
+    """[polyline (k, 2)] of the stand number `ref` past the stop bar of a stand whose nose is at `nose`, its direction u (unit),
+    in the plane: the characters' strokes (_GLYPHS: the font's cells NUM_H_M / 6 on a side), centred on the axis, upright as the
+    pilot reads them on the approach (up along u, left to right across it). [] when the ref is empty, longer than NUM_MAX or
+    has a character the font lacks."""
+    text = str(ref or "").upper().replace(" ", "")
+    if not text or len(text) > NUM_MAX or any(ch not in _GLYPHS for ch in text):
+        return []
+    right = np.array([u[1], -u[0]])
+    cell = NUM_H_M / 6.0
+    cw, gap = NUM_H_M * NUM_W_K, NUM_H_M * NUM_GAP_K
+    x0 = -(len(text) * cw + (len(text) - 1) * gap) / 2.0
+    base = nose + u * NUM_AFTER_M
+    out = []
+    for ch in text:
+        for g in _GLYPHS[ch]:
+            out.append(base + right * (x0 + g[:, 0:1] * cell) + u * (g[:, 1:2] * cell))
+        x0 += cw + gap
+    return out
+
+
 def _lead_lines(sc, stands):
-    """(lines, boxes) (_build's form) of the lead-ins and stop bars of the stands (parkedaircraft Craft), memoized on the
-    scene. A stand that overlaps a longer one (or one of the same kind) in the list is passed over (the list is
-    parkedaircraft.kept_stands': none do, but a stand twice over, from two lists of cells, paints one line): the lines are
-    painted once whatever the tile, and only for a stand that is kept."""
+    """(lines, boxes) (_build's form) of the lead-ins, stop bars and stand details (module docstring) of the stands
+    (parkedaircraft Craft), memoized on the scene. A stand that overlaps a longer one (or one of the same kind) in the list is
+    passed over (the list is parkedaircraft.lead_stands's: none do, but a stand twice over, from two lists of cells, paints one
+    line): the lines are painted once whatever the tile, and only for a stand that is kept."""
     st = [c for c in stands if c.mode in LEAD_MODES]
     if not st:
         return [], np.zeros((0, 4))
-    key = ("lead", tuple((c.kind, round(c.lat, 7), round(c.lon, 7), round(c.ne, 4), round(c.nn, 4)) for c in st))
+    key = ("lead", stand_key(st))
     got = sc.memo.get(key)
     if got is not None:
         return got
@@ -555,27 +862,42 @@ def _lead_lines(sc, stands):
     e, nn, _ = sc.frame.geodetic_to_enu(np.array([c.lat for c in st]), np.array([c.lon for c in st]), np.zeros(len(st)))
     e, nn = np.asarray(e, np.float64), np.asarray(nn, np.float64)
     plane = [(c.kind, float(x), float(y), float(c.ne), float(c.nn)) for c, x, y in zip(st, e, nn)]
-    out, seen = [], set()                               # (xy (k, 2)), the lines' rounded ends
+    out, seen = [], set()                               # (xy (k, 2), width, kind), the lines' rounded ends
+
+    def add(xy, kind=CENTRE_KIND, width=CENTRE_W_M):
+        k = tuple(round(float(q) * 2.0) for q in (xy[0, 0], xy[0, 1], xy[-1, 0], xy[-1, 1]))
+        if k not in seen:
+            seen.add(k)
+            out.append((xy, width, kind))
+
+    stands_ = []                                        # (Craft, unit direction, length, span, nose) of the stands kept
     for j in pa.drop_overlaps(plane):
         c, ce, cn = st[j], float(e[j]), float(nn[j])
         u = np.array([c.ne, c.nn])
         u = u / max(float(dnp.hypot(*u)), _EPS)
         length, span = pa.SPECS[c.kind][0], pa.SPECS[c.kind][1]
-        nose = np.array([ce, cn]) + u * (length / 2.0)
-        line, found = _lead_line(lanes, nose, u, LEAD_RADIUS_K * span, pads)
-        if not found:
-            continue
-        v = np.array([-u[1], u[0]]) * (STOP_BAR_M / 2.0)
+        stands_.append((c, u, length, span, np.array([ce, cn]) + u * (length / 2.0)))
+    spines, paint = _spines([(x[4], x[1], x[2], x[3]) for x in stands_], lanes, pads)
+    for xy in paint:
+        add(xy)
+    found = [_stand_line(lanes, spines.get(i), nose, u, LEAD_RADIUS_K * span, pads, length)
+             for i, (c, u, length, span, nose) in enumerate(stands_)]
+    keep = _uncrossed(found)                            # (of two lead-ins that cross, the longer is dropped)
+    for i, (c, u, length, span, nose) in enumerate(stands_):
+        line = found[i] if i in keep else None
+        left = np.array([-u[1], u[0]])
+        v = left * (STOP_BAR_M / 2.0)
         for xy in ((line,) if line is not None else ()) + (np.array([nose - v, nose + v]),):
-            k = tuple(round(float(q) * 2.0) for q in (xy[0, 0], xy[0, 1], xy[-1, 0], xy[-1, 1]))
-            if k not in seen:
-                seen.add(k)
-                out.append(xy)
+            add(xy)
+        for sgn in (-1.0, 1.0):                         # (the wing-tip clearance lines, ending level with the stop bar)
+            side = left * sgn * (span / 2.0 + WING_LINE_OFF_M)
+            add(np.array([nose + side - u * WING_LINE_LEN_M, nose + side]), STAND_KIND)
+        out += [(xy, NUM_W_M, STAND_KIND) for xy in _number(c.ref, nose, u)]
     lines, boxes = [], []
-    for xy in out:
+    for xy, width, kind in out:
         la, lo, _ = sc.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
         la, lo = np.asarray(la), np.asarray(lo)
-        lines.append((la, lo, CENTRE_W_M, CENTRE_KIND, COLOR))
+        lines.append((la, lo, width, kind, COLOR))
         boxes.append((la.min(), la.max(), lo.min(), lo.max()))
     got = sc.memo[key] = (lines, np.array(boxes, np.float64).reshape(-1, 4))
     return got
@@ -707,14 +1029,14 @@ def _pieces(ex, ey, box):
 
 def tile_chunks_md(md, keys, frame, tx, ty, elev, tile_bbox):
     """tile_chunks of the infrastructure Features of the map-data cells `keys` (mapdata.MapData md; the tile's cells
-    with REACH_M round it, roads.cells_of_tile), with the lead-ins of the stands in them (parkedaircraft.kept_stands:
+    with REACH_M round it, roads.cells_of_tile), with the lead-ins of the stands in them (parkedaircraft.lead_stands:
     the cells' buildings and building parts decide where an aircraft stands)."""
     infra = lambda k: md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
     feats = [infra(k) for k in keys]
     stands = []
     if any(pa.has_stands(f) for f in feats):
         try:
-            stands = pa.kept_stands(keys, infra, pa.building_layers_fn(md))
+            stands = pa.lead_stands(keys, infra, pa.building_layers_fn(md))
         except Exception as ex:                 # (the centrelines are worth more than the lead-ins)
             log.warning("stand lead-ins: %s: %s", type(ex).__name__, ex)
     return tile_chunks(feats, frame, tx, ty, elev, tile_bbox, stands)
