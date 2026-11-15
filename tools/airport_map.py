@@ -103,6 +103,49 @@ def aircraft_outline(c, frame):
     return rects, (x, y), (nx, ny)
 
 
+def defects(frame, leads, base, noses, corner_deg=25.0):
+    """([(x, y)], [(x, y, degrees)]) in metres: the dead ends and the sharp corners of the painted yellow lead-ins and spines
+    (taxiwaymarks.CENTRE_KIND strokes of `leads`). A dead end is the end of a line that is no stand's nose (noses [(x, y)]), is on
+    no other lead line (a branch's start is on its spine) and on no mapped line (`base` strokes); a sharp corner a joint of two
+    strokes (no more) that turns by more than corner_deg (two lines leaving one point the same way are a Y, not a corner)."""
+    def xy(st):
+        e, n, _ = frame.geodetic_to_enu(np.array([st[0], st[2]]), np.array([st[1], st[3]]), 0.0)
+        return np.array([[e[0], n[0]], [e[1], n[1]]])
+    segs = [xy(st) for st in leads if st[5] == taxiwaymarks.CENTRE_KIND]
+    mapped = [xy(st) for st in base if st[5] == taxiwaymarks.CENTRE_KIND]
+    key = lambda p: (round(float(p[0]) / 0.05), round(float(p[1]) / 0.05))
+    at = {}
+    for i, g in enumerate(segs):
+        for k in (0, 1):
+            at.setdefault(key(g[k]), []).append((i, k))
+
+    def near(p, lines, skip=-1, tol=0.1):
+        for j, g in enumerate(lines):
+            if j == skip:
+                continue
+            d = g[1] - g[0]
+            t = min(max(float((p - g[0]) @ d) / max(float(d @ d), 1e-12), 0.0), 1.0)
+            if float(np.hypot(*(g[0] + d * t - p))) <= tol:
+                return True
+        return False
+    dead, sharp = [], []
+    for kk, members in at.items():
+        i, k = members[0]
+        p = segs[i][k]
+        if len(members) == 1:
+            if any(math.hypot(p[0] - x, p[1] - y) < 0.6 for x, y in noses) or near(p, segs, i) or near(p, mapped):
+                continue
+            dead.append((float(p[0]), float(p[1])))
+        elif len(members) == 2:
+            (i, ki), (j, kj) = members
+            a = segs[i][1 - ki] - segs[i][ki]
+            b = segs[j][1 - kj] - segs[j][kj]
+            ang = math.degrees(math.acos(max(-1.0, min(1.0, float(a @ b) / max(float(np.hypot(*a) * np.hypot(*b)), 1e-12)))))
+            if corner_deg <= ang <= 180.0 - corner_deg:     # (the angle between the two pieces: 180 is straight on, under 25 a Y that leaves tangentially)
+                sharp.append((float(p[0]), float(p[1]), 180.0 - ang))
+    return dead, sharp
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("lat", type=float)
@@ -128,7 +171,7 @@ def main():
         every = pa.lead_stands(keys, infra_fn, pa.building_layers_fn(md))
     except Exception as ex:                          # noqa: BLE001 (the picture without them)
         print("aircraft:", type(ex).__name__, ex)
-    masts, leads, unreached = [], [], []
+    masts, leads, unreached, base = [], [], [], set()
     try:
         for k in keys:
             f = infra_fn(k)
@@ -174,6 +217,8 @@ def main():
     for s in leads:
         (la0, lo0, la1, lo1, _w, kind, _col) = s
         e, n, _ = frame.geodetic_to_enu(np.array([la0, la1]), np.array([lo0, lo1]), 0.0)
+        if kind == taxiwaymarks.UNDER_KIND:                     # (the black borders: not drawn)
+            continue
         ax.plot(e, n, color="#ffffff" if kind == taxiwaymarks.CENTRE_KIND else "#ffe066", lw=0.9, zorder=7)
         if kind == taxiwaymarks.CENTRE_KIND:
             ends += [(float(e[0]), float(n[0])), (float(e[1]), float(n[1]))]
@@ -191,6 +236,18 @@ def main():
                 ax.scatter([nose[0]], [nose[1]], s=60, marker="o", facecolor="none", edgecolor="#e60000", linewidths=1.4,
                            zorder=12)
                 unreached.append((c.kind, round(nose[0]), round(nose[1])))
+    noses = []
+    for c in every:
+        if c.mode in taxiwaymarks.LEAD_MODES:
+            _r, (cx, cy), (nx, ny) = aircraft_outline(c, frame)
+            noses.append((cx + nx * pa.SPECS[c.kind][0] / 2.0, cy + ny * pa.SPECS[c.kind][0] / 2.0))
+    dead, sharp = defects(frame, leads, base, noses)
+    if dead:
+        ax.scatter([d[0] for d in dead], [d[1] for d in dead], s=90, marker="v", facecolor="none", edgecolor="#d000d0",
+                   linewidths=1.6, zorder=13)
+    if sharp:
+        ax.scatter([d[0] for d in sharp], [d[1] for d in sharp], s=90, marker="s", facecolor="none", edgecolor="#ff7f00",
+                   linewidths=1.6, zorder=13)
     if masts:
         ax.scatter([m[0] for m in masts], [m[1] for m in masts], marker="*", s=40, c="#ff00ff", edgecolor="k",
                    linewidths=0.3, zorder=9)
@@ -234,7 +291,9 @@ def main():
                 Patch(facecolor="none", edgecolor="#555555", linestyle="--", label=f"empty stand ({len(every) - len(stands)})"),
                 Line2D([], [], marker="o", mfc="none", mec="#e60000", ls="", label=f"no lead-in at the nose ({len(unreached)})"),
                 Line2D([], [], marker="*", mfc="#ff00ff", mec="k", ls="", label=f"apron mast ({len(masts)})"),
-                Line2D([], [], color="#ffffff", lw=1.2, label=f"stand lead-in ({len(leads)})")]
+                Line2D([], [], color="#ffffff", lw=1.2, label=f"stand lead-in ({len(leads)})"),
+                Line2D([], [], marker="v", mfc="none", mec="#d000d0", ls="", label=f"line end on nothing, no lane in reach ({len(dead)})"),
+                Line2D([], [], marker="s", mfc="none", mec="#ff7f00", ls="", label=f"corner over 25 deg ({len(sharp)})")]
     ax.legend(handles=handles, loc="upper left", fontsize=9, framealpha=0.9)
     nb = sum(1 for r in rows if r[1])
     na = sum(1 for r in rows if r[2])
@@ -246,6 +305,8 @@ def main():
     print("roles:", ", ".join(f"{r} {n_by[r]}" for r in ar.ROLES))
     print(f"airside parking: {len(res.airside_parking)}; aircraft now: {len(stands)}; stands: {len(every)}; masts: {len(masts)}; "
           f"lead-in strokes: {len(leads)}; stands whose nose no lead-in reaches: {len(unreached)} {unreached}")
+    print(f"dead ends: {len(dead)} {[(round(x), round(y)) for x, y in dead]}; corners over 25 deg: {len(sharp)} "
+          f"{[(round(x), round(y), round(d)) for x, y, d in sharp]}")
     print(f"gates in the picture: {len(rows)}, with a jet bridge {nb}, with an aircraft {na}, "
           f"with a stand {ns}, with both {sum(1 for r in rows if r[1] and r[2])}, "
           f"with neither {sum(1 for r in rows if not r[1] and not r[2])}")

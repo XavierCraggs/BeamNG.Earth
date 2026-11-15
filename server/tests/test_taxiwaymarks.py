@@ -562,8 +562,11 @@ class LeadIns(unittest.TestCase):
         under = [s for s in raw if s[5] == tm.UNDER_KIND]
         self.assertTrue(under)                                                      # the lead-in has a border under it too: black,
         for s in under:
-            self.assertEqual((round(s[4], 3), s[6]), (round(tm.LEAD_W_M + 2 * tm.BORDER_M, 3), "black"))   # 0.15 m wider each side
-        self.assertEqual(len(under), len([s for s in raw if s[5] == tm.CENTRE_KIND and s[4] == tm.LEAD_W_M]))
+            wing = s[4] < tm.LEAD_W_M + 2 * tm.BORDER_M - 1e-6                      # (the wing-tip lines have theirs, as thin)
+            self.assertEqual((round(s[4], 3), s[6]),
+                             (round((tm.CENTRE_W_M if wing else tm.LEAD_W_M) + 2 * tm.BORDER_M, 3), "black"))   # 0.15 m wider each side
+        self.assertEqual(len([s for s in under if s[4] > 0.5]), len([s for s in raw if s[5] == tm.CENTRE_KIND and s[4] == tm.LEAD_W_M]))
+        self.assertEqual(len([s for s in under if s[4] < 0.5]), len([s for s in raw if s[5] == tm.STAND_KIND]))
 
     def test_the_equipment_restraint_legs_are_red_and_stay_inside_the_wingspan(self):
         f = feats(self.LANE)
@@ -921,6 +924,301 @@ class TaxiEdges(unittest.TestCase):
         self.assertEqual([a for a in rw if abs(a[0] - 150) < 20 and abs(a[2] - 150) < 20 and abs(a[1]) < 9 and abs(a[3]) < 9], [])
         cross = self.edges(lane, taxiway((150, -200), (150, 200), tags={"width": "15"}))
         self.assertEqual([a for a in cross if 143 < a[0] < 157 and 143 < a[2] < 157 and abs(a[1]) < 6 and abs(a[3]) < 6], [])
+
+
+class GlyphOverBox(unittest.TestCase):
+    """The black lettering of the yellow boxes (the stand number, the type labels) is drawn over its box: its own material, listed
+    after the yellow's, in a layer above the paint (in game the boxes were plain yellow: 0.6 mm over them, in the black border's
+    material, drawn before the yellow)."""
+
+    def setUp(self):
+        patcher = mock.patch.object(tm, "_edge_lines", lambda sc, feats_list: [])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_layers_and_materials_put_the_glyphs_over_the_boxes(self):
+        import roadmesh
+        self.assertEqual(tm.LAYER_OF["glyph"], "glyph")
+        lift = roadmesh.LIFT
+        self.assertGreaterEqual(lift["glyph"] - lift["mark"], 0.001)             # (at least a millimetre over the paint)
+        self.assertGreater(lift["mark"], lift["gutter"])
+        self.assertGreater(lift["gutter"], lift["edge"])                          # (the borders under all)
+        look = airportgrade.MARK_LOOK
+        self.assertNotEqual(look["text"]["m"], look["yellow"]["m"])
+        self.assertNotEqual(look["text"]["m"], look["black"]["m"])                # (not the borders' material, which draws first)
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels", "beamng_earth",
+                            "art", "runway", "main.materials.json")
+        with open(path, encoding="utf-8") as fh:
+            self.assertIn(look["text"]["m"], json.load(fh))                       # (and the mod has it)
+
+    def test_polygons_glyphs_lie_inside_a_yellow_box(self):
+        f = feats(taxiway((-120, 0), (100, 0), cls="taxilane"))
+        c = craft("narrow", 0.0, 60.0, 0.0, 1.0)._replace(ref="B13")
+        got = filled(f, [c])
+        glyphs = [p for p, colour, layer in got if layer == "glyph"]
+        self.assertTrue(glyphs)
+        self.assertEqual({colour for _p, colour, layer in got if layer == "glyph"}, {"text"})
+        boxes = [p for p, colour, layer in got if colour == "yellow" and layer == "paint"]
+        for g in glyphs:
+            self.assertTrue(any(g[:, 0].min() >= b[:, 0].min() - 1e-6 and g[:, 0].max() <= b[:, 0].max() + 1e-6
+                                and g[:, 1].min() >= b[:, 1].min() - 1e-6 and g[:, 1].max() <= b[:, 1].max() + 1e-6 for b in boxes))
+
+    def test_a_tiles_chunks_list_the_lettering_after_the_yellow_and_higher(self):
+        import roadmesh
+        f = feats(taxiway((-120, 0), (300, 0), cls="taxilane"))
+        c = craft("narrow", 100.0, 60.0, 0.0, 1.0)._replace(ref="B13")
+        side = 256.0
+        bbox = lambda tx, ty: (tx * side, ty * side, (tx + 1) * side, (ty + 1) * side)
+        chunks = tm.tile_chunks([f], FRAME, 0, 0, lambda la, lo: np.full(len(la), 7.0), bbox, [c])
+        text, yellow = airportgrade.MARK_LOOK["text"]["m"], airportgrade.MARK_LOOK["yellow"]["m"]
+        order = []
+        for ch in chunks:
+            if ch["m"] not in order:
+                order.append(ch["m"])
+        self.assertIn(text, order)
+        self.assertIn(yellow, order)
+        self.assertGreater(order.index(text), order.index(yellow))                 # (the mesh draws the materials in this order)
+        glyph = [ch for ch in chunks if ch["m"] == text]
+        box = [ch for ch in chunks if ch["m"] == yellow and ch.get("poly")]
+        self.assertTrue(glyph and box)
+        self.assertEqual({roadmesh.layer_of(ch) for ch in glyph}, {"glyph"})
+        self.assertEqual({roadmesh.layer_of(ch) for ch in box}, {"mark"})
+        self.assertGreater(roadmesh.LIFT["glyph"], roadmesh.LIFT["mark"])
+        # (the chunks of the polygons come in the layers' order: the border under, then the paint, then the lettering)
+        layers = [ch["layer"] for ch in chunks if ch.get("poly")]
+        self.assertEqual(layers, sorted(layers, key=lambda x: ["edge", "gutter", "mark", "glyph"].index(x)))
+
+
+def circumradii(P, min_side=0.2):
+    """The radius of the circle through each three consecutive points of the polyline P (k, 2) (inf for a straight run)."""
+    out = []
+    for a, b, c in zip(P[:-2], P[1:-1], P[2:]):
+        ab, bc, ca = np.hypot(*(b - a)), np.hypot(*(c - b)), np.hypot(*(a - c))
+        cr = abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
+        if min(ab, bc) < min_side or cr < 1e-9:
+            out.append(np.inf)
+        else:
+            out.append(ab * bc * ca / (2.0 * cr))
+    return out
+
+
+def turns(P):
+    """The turn (degrees) at each interior point of the polyline P."""
+    out = []
+    for a, b, c in zip(P[:-2], P[1:-1], P[2:]):
+        d1, d2 = b - a, c - b
+        if np.hypot(*d1) < 1e-9 or np.hypot(*d2) < 1e-9:
+            continue
+        out.append(float(np.degrees(np.arccos(np.clip(d1 @ d2 / np.hypot(*d1) / np.hypot(*d2), -1, 1)))))
+    return out
+
+
+class Routing(unittest.TestCase):
+    """The painted yellow lead-ins, spines and connectors: no branch that leads nowhere, every curve a circular arc of at least 15 m
+    (8 m for a light aircraft), the tightest smooth arc, never a dropped line, where none fits; no kink over 25 degrees."""
+
+    def lines(self, lane, stands):
+        """([polyline (k, 2) m of every painted lead-in, spine and connector], [nose (2,)], mapped lane segments)."""
+        f = feats(*lane) if isinstance(lane, (list, tuple)) else feats(lane)
+        sc = tm.scene([f])
+
+        def to_frame(P):                                                            # (the scene's own frame: ours)
+            la, lo, _ = sc.frame.enu_to_geodetic(P[:, 0], P[:, 1], np.zeros(len(P)))
+            e, n, _ = FRAME.geodetic_to_enu(la, lo, np.zeros(len(P)))
+            return np.stack([e, n], 1)
+        out = []
+        for la, lo, w, kind, _col in tm._lead_lines(sc, stands, None)[0]:
+            if kind == tm.CENTRE_KIND and abs(w - tm.LEAD_W_M) < 1e-9:
+                e, n, _ = FRAME.geodetic_to_enu(la, lo, np.zeros(len(la)))
+                out.append(np.stack([e, n], 1))
+        e0, n0, _ = FRAME.geodetic_to_enu(np.array([c.lat for c in stands]), np.array([c.lon for c in stands]), np.zeros(len(stands)))
+        noses = [np.array([x, y]) + np.array([c.ne, c.nn]) / np.hypot(c.ne, c.nn) * pa.SPECS[c.kind][0] / 2.0
+                 for c, x, y in zip(stands, e0, n0)]
+        lanes = tm._lanes(sc)
+        return out, noses, [(a, b) for a, b in zip(to_frame(lanes[0]), to_frame(lanes[0] + lanes[1] * lanes[2][:, None]))]
+
+    @staticmethod
+    def on(p, segs, tol=0.06):
+        for a, b in segs:
+            d = b - a
+            t = min(max(float((p - a) @ d) / max(float(d @ d), 1e-12), 0.0), 1.0)
+            if np.hypot(*(a + d * t - p)) <= tol:
+                return True
+        return False
+
+    def dead_ends(self, lines, noses, lane_segs):
+        """The ends of the painted polylines that are no stand's nose, on no other painted line and on no mapped lane."""
+        segs = [(P[i], P[i + 1]) for P in lines for i in range(len(P) - 1)]
+        out = []
+        for k, P in enumerate(lines):
+            own = [(Q[i], Q[i + 1]) for j, Q in enumerate(lines) if j != k for i in range(len(Q) - 1)]
+            for p in (() if np.hypot(*(P[0] - P[-1])) < 0.01 else (P[0], P[-1])):      # (a ring closes on itself: no ends)
+                if any(np.hypot(*(p - n)) < 0.6 for n in noses) or self.on(p, own) or self.on(p, lane_segs):
+                    continue
+                out.append(p)
+        del segs
+        return out
+
+    ROW = tuple(float(x) for x in (-88, -44, 0, 44, 88))
+
+    def row(self, kinds=("narrow",) * 5, xs=ROW, y=5.0):
+        return [craft(k, x, y + pa.SPECS[k][0] / 2.0, 0.0, -1.0) for k, x in zip(kinds, xs)]
+
+    def scenarios(self):
+        """[(lane tuple, stands)]: rows with a lane far, near and mapped along them; rows of mixed kinds; a satellite ring; light stands."""
+        lane = lambda y: taxiway((-250, y), (250, y), cls="taxilane")
+        out = [((lane(100.0),), self.row()), ((lane(130.0),), self.row()), ((lane(70.0),), self.row(xs=(-22.0, 22.0, 66.0, 110.0, 154.0))),
+               ((lane(100.0),), self.row(("narrow", "wide", "narrow", "turboprop", "narrow"))),
+               ((lane(52.0),), self.row()), ((lane(100.0),), self.row(xs=(-22.0, 22.0))),
+               ((lane(100.0),), self.row(("light",) * 4, xs=(-40.0, -20.0, 0.0, 20.0)))]
+        ring = []
+        for k in range(6):
+            a = np.radians(60.0 * k)
+            ring.append(craft("narrow", float(np.cos(a) * 75.0), float(np.sin(a) * 75.0), float(-np.cos(a)), float(-np.sin(a))))
+        out.append(((taxiway((-250, -250), (-200, -250), cls="taxilane"),), ring))
+        out.append(((taxiway((-120, 0), (100, 0), cls="taxilane"),), [craft("narrow", 0.0, 40.0, 0.0, 1.0)]))
+        out.append(((taxiway((-120, 0), (100, 0), cls="taxilane"),), [craft("turboprop", 30.0, 40.0, 0.0, 1.0)]))
+        out.append(((taxiway((-120, 0), (100, 0), cls="taxilane"),), [craft("light", 30.0, 25.0, 0.0, 1.0)]))
+        return out
+
+    def test_no_branch_leads_nowhere(self):
+        for lane, stands in self.scenarios():
+            lines, noses, lane_segs = self.lines(lane, stands)
+            self.assertEqual([p.round(1).tolist() for p in self.dead_ends(lines, noses, lane_segs)], [], (lane, len(stands)))
+
+    def test_a_spine_ends_at_its_first_and_last_lead_in(self):
+        lane = (taxiway((-250, 130.0), (250, 130.0), cls="taxilane"),)           # (over 60 m off: the spine stands alone)
+        stands = self.row()
+        lines, noses, lane_segs = self.lines(lane, stands)
+        spine_y = 5.0 + pa.SPECS["narrow"][0] + tm.SPINE_BACK_M
+        spine = [P for P in lines if abs(P[0][1] - spine_y) < 0.05 and abs(P[-1][1] - spine_y) < 0.05 and abs(P[0][0] - P[-1][0]) > 50.0]
+        self.assertEqual(len(spine), 1)
+        starts = [P[0] for P in lines if abs(P[0][1] - spine_y) < 0.6 and abs(P[-1][0] - P[0][0]) < 20.0 and P[-1][1] < spine_y - 20.0]
+        self.assertEqual(len(starts), len(stands))
+        self.assertAlmostEqual(min(spine[0][0][0], spine[0][-1][0]), min(s[0] for s in starts), delta=0.1)     # (no branch past the first ...)
+        self.assertAlmostEqual(max(spine[0][0][0], spine[0][-1][0]), max(s[0] for s in starts), delta=0.1)     # (... or the last)
+
+    def test_every_stand_has_its_lead_in_to_the_nose(self):
+        for lane, stands in self.scenarios():
+            lines, noses, _segs = self.lines(lane, stands)
+            for n in noses:
+                self.assertTrue(any(np.hypot(*(P[-1] - n)) < 0.05 or np.hypot(*(P[0] - n)) < 0.05 for P in lines), (lane, n))
+
+    def test_curves_are_arcs_of_at_least_the_minimum_radius_and_no_corner_over_25_degrees(self):
+        for lane, stands in self.scenarios():
+            lines, _noses, _segs = self.lines(lane, stands)
+            light = all(c.kind == "light" for c in stands)
+            floor = (tm.MIN_RADIUS_LIGHT_M if light else tm.MIN_RADIUS_M) * 0.97
+            for P in lines:
+                for r in circumradii(P):
+                    self.assertGreaterEqual(r, floor, (lane, P[0].round(1), P[-1].round(1)))
+                for t in turns(P):
+                    self.assertLess(t, 25.0, (lane, P[0].round(1)))
+
+    def test_the_connector_leaves_the_lane_and_meets_the_spine_tangentially_in_arcs(self):
+        lane = taxiway((-250, 100.0), (250, 100.0), cls="taxilane")
+        lines, _noses, _segs = self.lines((lane,), self.row())
+        conn = [P for P in lines if abs(P[0][1] - 100.0) < 0.05 or abs(P[-1][1] - 100.0) < 0.05]
+        self.assertEqual(len(conn), 1)
+        P = conn[0] if abs(conn[0][0][1] - 100.0) < 0.05 else conn[0][::-1]
+        d = P[1] - P[0]
+        self.assertGreater(abs(d[0]) / np.hypot(*d), 0.97)                          # along the lane (it runs east - west)
+        self.assertLessEqual(max(turns(P)), 6.0)                                    # (arcs in small chords)
+        self.assertGreater(min(circumradii(P)), tm.MIN_RADIUS_M * 0.97)
+
+    def test_the_tightest_arc_not_a_dropped_line_where_the_lane_has_no_room(self):
+        lane = taxiway((-8, 0), (8, 0), cls="taxilane")                             # 8 m each side of the axis: a 15 m arc has no room
+        sc = tm.scene([feats(lane)])
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0]), np.array([40.0 + pa.SPECS["narrow"][0] / 2.0]), np.zeros(1))
+        e, n, _ = sc.frame.geodetic_to_enu(la, lo, np.zeros(1))
+        nose = np.array([float(e[0]), float(n[0])])                                 # (the scene's own frame)
+        axis = np.array([0.0, 1.0])
+        lanes, pads = tm._lanes(sc), tm._pads(sc)
+        got = tm._stand_line(lanes, None, nose, axis, tm.MIN_RADIUS_M, pads, pa.SPECS["narrow"][0])
+        self.assertGreater(len(got), 4)
+        self.assertAlmostEqual(float(got[-1][0]), nose[0], 3)
+        self.assertAlmostEqual(float(got[-1][1]), nose[1], 3)                       # (it reaches the nose, not a stub from nowhere)
+        self.assertLess(abs(float(got[0][1]) - lanes[0][0][1]), 0.01)               # (from the lane)
+        self.assertLess(max(turns(got)), 25.0)
+        self.assertGreaterEqual(min(circumradii(got)), tm.TIGHT_RADIUS_M * 0.97)
+        tight, found = tm._lead_line(lanes, nose, axis, tm.MIN_RADIUS_M, pads, 80.0, False, tm.TIGHT_RADIUS_M)
+        self.assertTrue(found)
+        self.assertAlmostEqual(min(circumradii(tight)), 8.0, delta=0.3)             # (the arc as big as the lane's 8 m allows)
+        none, found = tm._lead_line(lanes, nose, axis, tm.MIN_RADIUS_M, pads, 80.0, False, tm.MIN_RADIUS_M)
+        self.assertFalse(found)                                                      # (a 15 m single arc does not fit ...)
+        slid, found = tm._lead_line(lanes, nose, axis, tm.MIN_RADIUS_M, pads, 80.0, False, tm.MIN_RADIUS_M, True)
+        self.assertTrue(found)                                                       # (... an arc, a straight and an arc, from a slid join point, does)
+        self.assertGreaterEqual(min(circumradii(slid)), tm.MIN_RADIUS_M * 0.97)
+
+    def test_dubins_path_is_arcs_and_a_straight_between_two_poses(self):
+        got = tm._dubins(np.array([0.0, 0.0]), np.array([1.0, 0.0]), np.array([50.0, 30.0]), np.array([1.0, 0.0]), 15.0)
+        self.assertIsNotNone(got)
+        P = tm._dubins_pts(got)
+        self.assertAlmostEqual(float(P[0][0]), 0.0, 6)
+        self.assertAlmostEqual(float(P[-1][0]), 50.0, 6)
+        self.assertAlmostEqual(float(P[-1][1]), 30.0, 6)
+        self.assertAlmostEqual(tm._length(P), got[0], delta=0.1)
+        self.assertGreaterEqual(min(circumradii(P)), 14.5)
+        self.assertLess(max(turns(P)), 6.0)
+        self.assertIsNone(tm._dubins(np.array([0.0, 0.0]), np.array([1.0, 0.0]), np.array([-2.0, 0.5]), np.array([1.0, 0.0]), 15.0))   # (a loop: none)
+
+
+class WingTipConflicts(unittest.TestCase):
+    """Where stands are close the wing-tip lines would overlap or cross: clipped, or dropped."""
+    N = pa.SPECS["narrow"]
+
+    def stands(self, *xy):
+        return [craft("narrow", x, y, 0.0, 1.0) for x, y in xy]
+
+    def wings(self, stands):
+        f = feats(taxiway((-250, -60), (250, -60), cls="taxilane"))
+        got = [metres(s) for s in tm.strokes([f], stands) if s[5] == tm.STAND_KIND]
+        return [(np.array(g[:2]), np.array(g[2:])) for g in got]
+
+    @staticmethod
+    def seg_dist(a, b, c, d):
+        return tm._seg_dist(a, b, c, d)
+
+    def test_apart_four_lines_and_close_the_shared_line_once(self):
+        self.assertEqual(len(self.wings(self.stands((0.0, 40.0), (80.0, 40.0)))), 4)
+        close = self.wings(self.stands((0.0, 40.0), (44.0, 40.0)))              # (their lines 2.2 m apart)
+        self.assertEqual(len(close), 3)
+        for i, (a, b) in enumerate(close):
+            for c, d in close[i + 1:]:
+                self.assertGreaterEqual(self.seg_dist(a, b, c, d), tm.WING_CLEAR_M - 1e-6)
+
+    def test_a_line_is_clipped_where_it_would_run_under_an_adjacent_aircraft(self):
+        s = self.stands((0.0, 40.0), (36.0, 80.0))                              # (the second's nose end 2.4 m beyond the first's line's end)
+        nose0 = 40.0 + self.N[0] / 2.0
+        got = self.wings(s)
+        side = [(a, b) for a, b in got if abs(a[0] - (self.N[1] / 2.0 + tm.WING_LINE_OFF_M)) < 0.01]
+        self.assertEqual(len(side), 1)
+        top = max(side[0][0][1], side[0][1][1])
+        env_low = 80.0 - self.N[0] / 2.0                                         # (the second's tail)
+        self.assertAlmostEqual(top, env_low - tm.WING_CLEAR_M, delta=0.3)
+        self.assertLess(top, nose0 - 0.3)                                        # (shorter than the 20 m line)
+        for a, b in got:                                                         # (no line within 3 m of the other's aircraft)
+            for k, (cx, cy) in enumerate(((0.0, 40.0), (36.0, 80.0))):
+                for p in (a + (b - a) * q for q in np.linspace(0.0, 1.0, 40)):
+                    dx = max(abs(p[0] - cx) - self.N[1] / 2.0, 0.0)
+                    dy = max(abs(p[1] - cy) - self.N[0] / 2.0, 0.0)
+                    own = abs(abs(p[0] - cx) - (self.N[1] / 2.0 + tm.WING_LINE_OFF_M)) < 0.01
+                    if not own:
+                        self.assertGreaterEqual(float(np.hypot(dx, dy)), tm.WING_CLEAR_M - 0.01)
+
+    def test_a_line_under_its_neighbours_aircraft_is_none(self):
+        got = self.wings(self.stands((0.0, 40.0), (36.0, 60.0)))                # (their envelopes overlap in length: the line is all under it)
+        self.assertEqual([g for g in got if abs(g[0][0] - (self.N[1] / 2.0 + tm.WING_LINE_OFF_M)) < 0.01], [])
+
+    def test_a_line_within_3_m_of_another_stands_lead_in_is_dropped(self):
+        stands = [(craft("narrow", 0.0, 40.0, 0.0, 1.0), np.array([0.0, 1.0]), self.N[0], self.N[1], np.array([0.0, 40.0 + self.N[0] / 2.0])),
+                  (craft("narrow", 80.0, 40.0, 0.0, 1.0), np.array([0.0, 1.0]), self.N[0], self.N[1], np.array([80.0, 40.0 + self.N[0] / 2.0]))]
+        x = self.N[1] / 2.0 + tm.WING_LINE_OFF_M
+        near = np.array([[x + 2.0, 30.0], [x + 2.0, 60.0]])                      # (2 m from the first's line)
+        far = np.array([[x + 4.0, 30.0], [x + 4.0, 60.0]])
+        for lead, count in ((None, 2), (near, 1), (far, 2), (np.array([[x - 5.0, 40.0], [x + 5.0, 40.0]]), 1)):    # (the last crosses it)
+            got = tm._wing_lines(stands, [None, lead])
+            self.assertEqual(len(got[0]), count, lead)
 
 
 def poly_rows(*pts):

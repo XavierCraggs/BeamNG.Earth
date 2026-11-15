@@ -117,6 +117,23 @@ class StandSigns(unittest.TestCase):
         self.assertAlmostEqual(got[0].face, 180.0, 1)                       # (looking south, at the aircraft)
         self.assertEqual(afs.STYLES["stand"][:2], (afs.YELLOW, afs.BLACK))
 
+    def test_a_stand_board_is_double_sided_and_the_others_single(self):
+        sg = [s for s in afs.signs([self.feats], stands=[self.craft._replace(ref="A12")]) if s.kind == "stand"][0]
+        rows = afs._board_rows(sg, 10.0, 20.0, 5.0, 0.7, 0.4, 3, 2.1)
+        self.assertEqual(len(rows), 2)                                      # (a board each way, back to back)
+        d = [np.array(r[6:8]) for r in rows]
+        self.assertLess(float(d[0] @ d[1]), -0.999)                         # (turned round: the text on both faces)
+        out = [np.array(r[2:4]) - np.array([10.0, 20.0]) for r in rows]
+        face = np.array([np.sin(np.radians(sg.face)), np.cos(np.radians(sg.face))])
+        for dv, o in zip(d, out):                                           # (each board's face looks away from the other: -dv is its normal)
+            self.assertAlmostEqual(float(o @ -dv), afs.BOARD_GAP_M, 6)
+        self.assertGreater(float(np.hypot(*(out[0] - out[1]))), 0.0)
+        for kind in ("hold", "location", "direction"):
+            one = afs._board_rows(afs.Sign(kind, "X", 0.0, 0.0, 90.0, 1.0, 1.0), 1.0, 2.0, 0.0, 1.0, 1.0, 1, 1.0)
+            self.assertEqual(len(one), 1)
+            self.assertEqual(one[0][2:4], [1.0, 2.0])
+        self.assertTrue(any(float(-dv @ face) > 0.999 for dv in d))         # (one of them faces the approaching aircraft)
+
     def test_no_ref_no_sign(self):
         self.assertEqual(afs.signs([self.feats], stands=[self.craft]), [])
         self.assertEqual(afs.signs([self.feats], stands=[self.craft._replace(ref="TOOLONGREF")]), [])

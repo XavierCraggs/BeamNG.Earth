@@ -69,6 +69,7 @@ RED, WHITE, YELLOW, BLACK = (200, 16, 46), (255, 255, 255), (255, 205, 0), (0, 0
 STYLES = {"hold": (RED, WHITE, WHITE), "location": (BLACK, YELLOW, YELLOW), "direction": (YELLOW, BLACK, BLACK),
           "stand": (YELLOW, BLACK, BLACK)}
 KINDS = tuple(STYLES)
+BOARD_GAP_M = 0.015            # a stand sign's two boards (one each way) this far either side of its place
 CAP_STAND_M = 0.26              # a stand sign's legend (a panel ~0.7 m tall)
 STAND_POST_M = 2.5              # m: the top of its post over the ground
 STAND_AHEAD_M = 4.0             # m beyond the nose (the stop bar), along the axis
@@ -471,6 +472,18 @@ def signs(feats_list, db=None, stands=None):
     return out
 
 
+def _board_rows(sg, x, y, zg, w, h, material, mount):
+    """The kernel's rows [kind, text, x, y, z ground, z road, direction, w, h, material, mount] (dirsign_mesh; the first two are
+    ours) of the Sign sg: one board facing sg.face, and for a stand sign a second back to back with it, turned round (in game its
+    text showed on the back only: each board BOARD_GAP_M behind its own face), so the text reads from both sides."""
+    fx, fy = dmath.sin(math.radians(sg.face)), dmath.cos(math.radians(sg.face))
+    out = []
+    for sgn in ((1.0, -1.0) if sg.kind == "stand" else (0.0,)):
+        out.append([sg.kind, sg.text, x + fx * sgn * BOARD_GAP_M, y + fy * sgn * BOARD_GAP_M, zg, zg,
+                    -fx * (sgn or 1.0), -fy * (sgn or 1.0), w, h, material, mount])
+    return out
+
+
 def sign_tile(md, frame, tx, ty, elev, out_dir, vfs_dir, db=None):
     """The signs whose place is in road tile (tx, ty) as (mesh, faces) (module docstring), or (None, {})."""
     if not ON:
@@ -512,8 +525,7 @@ def sign_tile(md, frame, tx, ty, elev, out_dir, vfs_dir, db=None):
         else:
             mount = MOUNT_M
             zg = z[k] - (MOUNT_M - BOTTOM_M)
-        fx, fy = dmath.sin(math.radians(sg.face)), dmath.cos(math.radians(sg.face))
-        rows.append([sg.kind, sg.text, float(e[i]), float(n[i]), zg, zg, -fx, -fy, w, h, materials.index(name), mount])
+        rows += _board_rows(sg, float(e[i]), float(n[i]), zg, w, h, materials.index(name), mount)
     if not rows:
         return None, {}
     x0, y0 = box[0], box[1]
