@@ -16,6 +16,7 @@ import threading
 import numpy as np
 import dnp
 
+import airportsmooth
 import dem as demmod
 import geodesy
 import geotiles
@@ -42,6 +43,7 @@ class AirportGrader:
     def __init__(self, db, dem):
         self.db, self.dem = db, dem
         self._plans = {}                # frozenset of runway ids -> [Plan]
+        self._surfaces = {}             # frozenset of runway ids -> airportsmooth.Surface
         self._group_locks = {}          # frozenset of runway ids -> the lock its planning holds
         self._mark_cache = {}           # runway id -> its markings in lat/lon (_marks)
         self._pad_cache = {}            # runway id -> its rectangle in lat/lon (runway_pads)
@@ -83,8 +85,11 @@ class AirportGrader:
     def _plan(self, key, group):
         rw0 = min(group, key=lambda r: r.id)
         zoom = demmod.zoom_for(rw0.center[0], PLAN_ZOOM_M)
-        p = runwaygeom.plan_group(group, lambda la, lo: self.dem.sample(la, lo, zoom))
+        raw = lambda la, lo: self.dem.sample(la, lo, zoom)
+        surf = airportsmooth.Surface(group, raw)
+        p = runwaygeom.plan_group(group, lambda la, lo: surf.apply(la, lo, raw(la, lo)))   # (fitted on the smoothed)
         with self._lock:
+            self._surfaces[key] = surf
             self._plans[key] = p
             self.stats["plans"] += 1
         log.info("airports: planned %s (%d runway(s))", ", ".join(sorted({r.airport_ident for r in group})), len(group))
@@ -101,6 +106,10 @@ class AirportGrader:
             return z
         plans = [p for g in groups for p in self.plans_for(g)]
         self.stats["graded_calls"] += 1
+        for g in groups:            # (the ground round each airport smoothed first: airportsmooth)
+            surf = self._surfaces.get(frozenset(r.id for r in g))
+            if surf is not None:
+                z = surf.apply(lat, lon, z)
         return runwaygeom.apply(plans, lat, lon, z)[0]
 
     def tile_chunks(self, frame, tx, ty, elev, tile_bbox):

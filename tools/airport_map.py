@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """A top-down picture of an airport's buildings by role, to judge server/airportroles.py's rules without the game.
 
-    python tools/airport_map.py <lat> <lon> [--km 2] [--out path.png] [--name X]
+    python tools/airport_map.py <lat> <lon> [--km 2] [--out path.png] [--name X] [--lines]
 
 Loads the map cells round (lat, lon) as the server does (mapdata.MapData: the cache, else the network), classifies the
 buildings and parts (airportroles.classify) and draws, ~1600 px: the runways, taxiways and aprons in greys, the buildings
@@ -10,6 +10,13 @@ bridges' outer ends with an arrow out of the terminal, airside parking hatched, 
 (parkedaircraft.kept_stands, read only), the empty stands (parkedaircraft.lead_stands: dashed), the apron masts
 (airsideprops) and the stands' lead-in lines and stand details (taxiwaymarks). Prints the count per role and, per gate in
 the picture: has a bridge, has an aircraft, has a stand, and the stands whose nose no lead-in reaches (ringed in red).
+
+The painted yellow network is audited (taxiwaymarks.audit): gaps (an end within 8 m of a line but not on it), opens (an end in the
+open touching nothing), kinks (a turn of over 20 degrees within 3 m, or a join that is neither tangent nor straight through) and
+S-bends tighter than the minimum radius are marked and counted (those inside the picture), and the stands whose lead-in has a
+final straight shorter than taxiwaymarks.lead_straight are listed. --lines draws only that network: the pads in light grey, the
+mapped centrelines, spines, connectors and lead-ins each in a colour, the stops as dots with the start of each stand's final
+straight (a cross), and the audit markers (give --out a name ending _lines.png).
 
 --km is the side of the square picture (default 2); data is loaded 300 m beyond it. Needs matplotlib (pip install matplotlib).
 """
@@ -103,47 +110,77 @@ def aircraft_outline(c, frame):
     return rects, (x, y), (nx, ny)
 
 
-def defects(frame, leads, base, noses, corner_deg=25.0):
-    """([(x, y)], [(x, y, degrees)]) in metres: the dead ends and the sharp corners of the painted yellow lead-ins and spines
-    (taxiwaymarks.CENTRE_KIND strokes of `leads`). A dead end is the end of a line that is no stand's nose (noses [(x, y)]), is on
-    no other lead line (a branch's start is on its spine) and on no mapped line (`base` strokes); a sharp corner a joint of two
-    strokes (no more) that turns by more than corner_deg (two lines leaving one point the same way are a Y, not a corner)."""
-    def xy(st):
-        e, n, _ = frame.geodetic_to_enu(np.array([st[0], st[2]]), np.array([st[1], st[3]]), 0.0)
-        return np.array([[e[0], n[0]], [e[1], n[1]]])
-    segs = [xy(st) for st in leads if st[5] == taxiwaymarks.CENTRE_KIND]
-    mapped = [xy(st) for st in base if st[5] == taxiwaymarks.CENTRE_KIND]
-    key = lambda p: (round(float(p[0]) / 0.05), round(float(p[1]) / 0.05))
-    at = {}
-    for i, g in enumerate(segs):
-        for k in (0, 1):
-            at.setdefault(key(g[k]), []).append((i, k))
+def to_view(nw, frame, xy):
+    """The points xy (k, 2) of the network's plane in the picture's frame."""
+    xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    la, lo, _ = nw.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+    e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+    return np.stack([np.asarray(e), np.asarray(n)], 1)
 
-    def near(p, lines, skip=-1, tol=0.1):
-        for j, g in enumerate(lines):
-            if j == skip:
-                continue
-            d = g[1] - g[0]
-            t = min(max(float((p - g[0]) @ d) / max(float(d @ d), 1e-12), 0.0), 1.0)
-            if float(np.hypot(*(g[0] + d * t - p))) <= tol:
-                return True
-        return False
-    dead, sharp = [], []
-    for kk, members in at.items():
-        i, k = members[0]
-        p = segs[i][k]
-        if len(members) == 1:
-            if any(math.hypot(p[0] - x, p[1] - y) < 0.6 for x, y in noses) or near(p, segs, i) or near(p, mapped):
-                continue
-            dead.append((float(p[0]), float(p[1])))
-        elif len(members) == 2:
-            (i, ki), (j, kj) = members
-            a = segs[i][1 - ki] - segs[i][ki]
-            b = segs[j][1 - kj] - segs[j][kj]
-            ang = math.degrees(math.acos(max(-1.0, min(1.0, float(a @ b) / max(float(np.hypot(*a) * np.hypot(*b)), 1e-12)))))
-            if corner_deg <= ang <= 180.0 - corner_deg:     # (the angle between the two pieces: 180 is straight on, under 25 a Y that leaves tangentially)
-                sharp.append((float(p[0]), float(p[1]), 180.0 - ang))
-    return dead, sharp
+
+ROLE_COLOURS = {"mapped": "#1f5fbf", "spine": "#1a9a3a", "connector": "#f08a00", "lead": "#d62728"}
+MARKERS = (("gaps", "v", "#d000d0"), ("opens", "^", "#d000d0"), ("kinks", "s", "#ff7f00"), ("sbends", "D", "#00a0c0"))
+
+
+def audit_view(nw, frame, box):
+    """({"gaps": [(x, y, ...)], "opens", "kinks", "sbends"} of nw.audit() in the picture's metres: only those inside box, {the same
+    for the whole loaded area: counts only})."""
+    got = nw.audit()
+    shown, whole = {}, {}
+    for key, marks in (("gaps", got.gaps), ("opens", got.opens), ("kinks", got.kinks), ("sbends", got.sbends)):
+        pts = to_view(nw, frame, np.array([[m[0], m[1]] for m in marks])) if marks else np.zeros((0, 2))
+        rows = [(float(p[0]), float(p[1])) + tuple(m[2:]) for p, m in zip(pts, marks)]
+        whole[key] = len(rows)
+        shown[key] = [m for m in rows if box[0] <= m[0] <= box[2] and box[1] <= m[1] <= box[3]]
+    return shown, whole
+
+
+def draw_audit(ax, shown, z=13):
+    for key, marker, colour in MARKERS:
+        if shown[key]:
+            ax.scatter([m[0] for m in shown[key]], [m[1] for m in shown[key]], s=110, marker=marker, facecolor="none",
+                       edgecolor=colour, linewidths=1.8, zorder=z)
+
+
+def audit_handles(shown):
+    return [Line2D([], [], marker="v", mfc="none", mec="#d000d0", ls="", label=f"gap, under 8 m from a line ({len(shown['gaps'])})"),
+            Line2D([], [], marker="^", mfc="none", mec="#d000d0", ls="", label=f"open end ({len(shown['opens'])})"),
+            Line2D([], [], marker="s", mfc="none", mec="#ff7f00", ls="", label=f"kink ({len(shown['kinks'])})"),
+            Line2D([], [], marker="D", mfc="none", mec="#00a0c0", ls="", label=f"S-bend under the radius ({len(shown['sbends'])})")]
+
+
+def lines_picture(a, out, frame, infra, nw, shown, box, name):
+    """The --lines picture: the pads, the network's lines by role (~2 px), the stops, the starts of the final straights, the audit."""
+    fig = plt.figure(figsize=(16, 16), dpi=100)
+    ax = fig.add_axes([0.02, 0.02, 0.96, 0.94])
+    ax.set_facecolor("#ffffff")
+    ax.set_xlim(box[0], box[2])
+    ax.set_ylim(box[1], box[3])
+    ax.set_aspect("equal")
+    ax.tick_params(labelsize=8)
+    ax.grid(True, color="#eeeeee", lw=0.5)
+    for rings, colour in ((pad_xy(frame, aeroways.pads(infra, runways=True)), "#d0d0d0"),
+                          (pad_xy(frame, aeroways.ways(infra)), "#dcdcdc"), (pad_xy(frame, aeroways.aprons(infra)), "#ebebeb")):
+        ax.add_collection(PatchCollection([Polygon(r, closed=True) for r in rings], facecolor=colour, edgecolor="none", zorder=1))
+    for xy, role, _rm in nw.lines:
+        v = to_view(nw, frame, xy)
+        ax.plot(v[:, 0], v[:, 1], color=ROLE_COLOURS[role], lw=1.45, zorder=3 + (role == "lead"), solid_capstyle="butt")
+    shorts = to_view(nw, frame, np.array([s[0] for s in nw.short])) if nw.short else np.zeros((0, 2))
+    if nw.stops:
+        stops = to_view(nw, frame, np.array([s[0] for s in nw.stops]))
+        starts = to_view(nw, frame, np.array([s[0] - s[1] * taxiwaymarks.lead_straight(pa.SPECS[s[2]][0]) for s in nw.stops]))
+        ax.scatter(stops[:, 0], stops[:, 1], s=26, c="#000000", zorder=9)
+        ax.scatter(starts[:, 0], starts[:, 1], s=40, marker="x", c="#008b8b", linewidths=1.2, zorder=9)
+    if len(shorts):
+        ax.scatter(shorts[:, 0], shorts[:, 1], s=150, marker="o", facecolor="none", edgecolor="#e60000", linewidths=1.6, zorder=12)
+    draw_audit(ax, shown)
+    handles = [Line2D([], [], color=c, lw=2, label=r) for r, c in ROLE_COLOURS.items()]
+    handles += [Line2D([], [], marker="o", color="k", ls="", label=f"stop bar ({len(nw.stops)})"),
+                Line2D([], [], marker="x", color="#008b8b", ls="", label="start of the final straight"),
+                Line2D([], [], marker="o", mfc="none", mec="#e60000", ls="", label=f"final straight too short ({len(shorts)})")]
+    ax.legend(handles=handles + audit_handles(shown), loc="upper left", fontsize=9, framealpha=0.9)
+    fig.suptitle(f"{name}  ({a.lat:.4f}, {a.lon:.4f})  {a.km:g} km square: the painted network and its audit", fontsize=13, y=0.985)
+    fig.savefig(out, dpi=100)
 
 
 def main():
@@ -153,14 +190,16 @@ def main():
     ap.add_argument("--km", type=float, default=2.0, help="side of the picture (default 2)")
     ap.add_argument("--out", default=None, help="PNG path (default airport_map_<lat>_<lon>.png)")
     ap.add_argument("--name", default="", help="a name for the title")
+    ap.add_argument("--lines", action="store_true", help="draw only the painted yellow network and its audit")
     a = ap.parse_args()
     out = a.out or f"airport_map_{a.lat:.4f}_{a.lon:.4f}.png"
     frame, keys, layers, per, md = load(a.lat, a.lon, a.km)
     infra = layers["infrastructure"]
-    res = ar.classify(layers["buildings"], layers["building_parts"], infra, frame, 0.0, 0.0, landuse=layers["land_use"])
     half = a.km * 500.0
     box = (-half, -half, half, half)
-    print(f"{a.name or 'airport'} at {a.lat}, {a.lon}: {len(keys)} cells, {len(res)} airport footprints, {len(res.gates)} gates")
+    res = None if a.lines else ar.classify(layers["buildings"], layers["building_parts"], infra, frame, 0.0, 0.0, landuse=layers["land_use"])
+    print(f"{a.name or 'airport'} at {a.lat}, {a.lon}: {len(keys)} cells" + ("" if res is None else
+          f", {len(res)} airport footprints, {len(res.gates)} gates"))
 
     # the parked aircraft, masts and lead-ins as the game places them now (read only)
     infra_fn = lambda k: per[str(k)].get("infrastructure") if str(k) in per else \
@@ -171,9 +210,9 @@ def main():
         every = pa.lead_stands(keys, infra_fn, pa.building_layers_fn(md))
     except Exception as ex:                          # noqa: BLE001 (the picture without them)
         print("aircraft:", type(ex).__name__, ex)
-    masts, leads, unreached, base = [], [], [], set()
+    masts, leads, unreached, base, nw = [], [], [], set(), None
     try:
-        for k in keys:
+        for k in () if a.lines else keys:
             f = infra_fn(k)
             if f is not None and pa.has_stands(f):
                 blds = pa._flat([pa.building_layers_fn(md)(k)])
@@ -184,9 +223,26 @@ def main():
         feats = [f for f in infra if pa.has_stands(f)]
         if every and feats:
             base = set(taxiwaymarks.strokes(feats))
-            leads = [s for s in taxiwaymarks.strokes(feats, every) if s not in base]
+            site = taxiwaymarks.site_of(infra, layers["buildings"], layers["building_parts"])
+            leads = [s for s in taxiwaymarks.strokes(feats, every, site) if s not in base]
+            nw = taxiwaymarks.network(feats, every, site)
     except Exception as ex:                          # noqa: BLE001
         print("masts / lead-ins:", type(ex).__name__, ex)
+
+    shown, whole = audit_view(nw, frame, box) if nw is not None else ({k: [] for k, _m, _c in MARKERS}, {k: 0 for k, _m, _c in MARKERS})
+    print(f"audit (inside the picture; the whole loaded area): gaps {len(shown['gaps'])} ({whole['gaps']}), opens {len(shown['opens'])} "
+          f"({whole['opens']}), kinks {len(shown['kinks'])} ({whole['kinks']}), S-bends {len(shown['sbends'])} ({whole['sbends']}); "
+          f"final straight too short: {0 if nw is None else len(nw.short)}")
+    for key, _m, _c in MARKERS:
+        if shown[key]:
+            print(f"  {key}: " + ", ".join("(" + ", ".join(f"{v:.0f}" if i < 2 else f"{v:.1f}" for i, v in enumerate(m)) + ")" for m in shown[key][:40]))
+    if a.lines:
+        if nw is None:
+            sys.exit("no airport network here")
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        lines_picture(a, out, frame, infra, nw, shown, box, a.name or "airport")
+        print("saved", out)
+        return
 
     fig = plt.figure(figsize=(16, 16), dpi=100)
     ax = fig.add_axes([0.02, 0.02, 0.96, 0.94])
@@ -219,7 +275,8 @@ def main():
         e, n, _ = frame.geodetic_to_enu(np.array([la0, la1]), np.array([lo0, lo1]), 0.0)
         if kind == taxiwaymarks.UNDER_KIND:                     # (the black borders: not drawn)
             continue
-        ax.plot(e, n, color="#ffffff" if kind == taxiwaymarks.CENTRE_KIND else "#ffe066", lw=0.9, zorder=7)
+        ax.plot(e, n, color="#ffffff" if kind == taxiwaymarks.CENTRE_KIND else "#2b6cb0" if kind == taxiwaymarks.ROAD_KIND
+                else "#ffe066", lw=0.9, zorder=7)
         if kind == taxiwaymarks.CENTRE_KIND:
             ends += [(float(e[0]), float(n[0])), (float(e[1]), float(n[1]))]
     kept = {(c.kind, round(c.lat, 7), round(c.lon, 7)) for c in stands}
@@ -236,18 +293,7 @@ def main():
                 ax.scatter([nose[0]], [nose[1]], s=60, marker="o", facecolor="none", edgecolor="#e60000", linewidths=1.4,
                            zorder=12)
                 unreached.append((c.kind, round(nose[0]), round(nose[1])))
-    noses = []
-    for c in every:
-        if c.mode in taxiwaymarks.LEAD_MODES:
-            _r, (cx, cy), (nx, ny) = aircraft_outline(c, frame)
-            noses.append((cx + nx * pa.SPECS[c.kind][0] / 2.0, cy + ny * pa.SPECS[c.kind][0] / 2.0))
-    dead, sharp = defects(frame, leads, base, noses)
-    if dead:
-        ax.scatter([d[0] for d in dead], [d[1] for d in dead], s=90, marker="v", facecolor="none", edgecolor="#d000d0",
-                   linewidths=1.6, zorder=13)
-    if sharp:
-        ax.scatter([d[0] for d in sharp], [d[1] for d in sharp], s=90, marker="s", facecolor="none", edgecolor="#ff7f00",
-                   linewidths=1.6, zorder=13)
+    draw_audit(ax, shown)
     if masts:
         ax.scatter([m[0] for m in masts], [m[1] for m in masts], marker="*", s=40, c="#ff00ff", edgecolor="k",
                    linewidths=0.3, zorder=9)
@@ -292,8 +338,7 @@ def main():
                 Line2D([], [], marker="o", mfc="none", mec="#e60000", ls="", label=f"no lead-in at the nose ({len(unreached)})"),
                 Line2D([], [], marker="*", mfc="#ff00ff", mec="k", ls="", label=f"apron mast ({len(masts)})"),
                 Line2D([], [], color="#ffffff", lw=1.2, label=f"stand lead-in ({len(leads)})"),
-                Line2D([], [], marker="v", mfc="none", mec="#d000d0", ls="", label=f"line end on nothing, no lane in reach ({len(dead)})"),
-                Line2D([], [], marker="s", mfc="none", mec="#ff7f00", ls="", label=f"corner over 25 deg ({len(sharp)})")]
+                *audit_handles(shown)]
     ax.legend(handles=handles, loc="upper left", fontsize=9, framealpha=0.9)
     nb = sum(1 for r in rows if r[1])
     na = sum(1 for r in rows if r[2])
@@ -305,8 +350,6 @@ def main():
     print("roles:", ", ".join(f"{r} {n_by[r]}" for r in ar.ROLES))
     print(f"airside parking: {len(res.airside_parking)}; aircraft now: {len(stands)}; stands: {len(every)}; masts: {len(masts)}; "
           f"lead-in strokes: {len(leads)}; stands whose nose no lead-in reaches: {len(unreached)} {unreached}")
-    print(f"dead ends: {len(dead)} {[(round(x), round(y)) for x, y in dead]}; corners over 25 deg: {len(sharp)} "
-          f"{[(round(x), round(y), round(d)) for x, y, d in sharp]}")
     print(f"gates in the picture: {len(rows)}, with a jet bridge {nb}, with an aircraft {na}, "
           f"with a stand {ns}, with both {sum(1 for r in rows if r[1] and r[2])}, "
           f"with neither {sum(1 for r in rows if not r[1] and not r[2])}")
