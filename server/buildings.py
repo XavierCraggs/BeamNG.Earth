@@ -1056,7 +1056,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # in a dense core small buildings are row houses even where the footprints leave gaps (Fells Point)
     row = (cls in ROW_CLASSES or (not west_town and not part and ((narrow and (neighbours >= 1 or dense)) or (
         dense and area < 260 and cls not in SHOP_CLASSES)))) and not (airside or terminal)
-    shed = ((cls in SHED_CLASSES and not garage) or (area < 40 and not row and not part)) and not attrs.get("_tower")         and not (airside or terminal)
+    shed = ((cls in SHED_CLASSES and not garage) or (area < 40 and not row and not part)) and not attrs.get("_tower") \
+        and not (airside or terminal)
     shop = cls in SHOP_CLASSES and not airside      # (an airside box has no shopfront: the terminal look)
     industrial = cls in INDUSTRIAL_CLASSES or (area > 2500 and cls in ("", "commercial"))
     # (on industrial land, industrial_rings: a refinery's or a port's control rooms and stores, not houses with porches

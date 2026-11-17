@@ -1271,6 +1271,12 @@ def pads_mask(frame, x0, y0, size, px, pads):
     return None if a is None else np.round(a * 255.0).astype(np.uint8)
 
 
+def parking_pads(feats_list):
+    """The parking lots' outer rings alone as (lat, lon) pads (paintlist's lots: the airports' pads are painted after them,
+    off the grass: photo_lots)."""
+    return _parking_pads(feats_list)
+
+
 def lot_pads(feats_list):
     """Parking-lot outer rings as (lat, lon) pads for the photo painters (class parking, not grass or gravel), and the
     airports' aprons and taxiways (aeroways.pads: a taxiway read as dirt, GitHub #607)."""

@@ -208,11 +208,13 @@ class TerminalTest(unittest.TestCase):
         self.assertEqual(spec.facade, bld.OFFICE)
         self.assertAlmostEqual(spec.height, 9.0, places=3)
 
-    def lifted(self, name, airport, **lines):
+    def lifted(self, name, airport, one=True, **lines):
         """The spec of a 80 x 40 m building named `name`, a line through it, `airport` its context or None."""
         ctx = ab.context(FRAME, [infra(FIELD, apron(0, 0, 90, 90))], *BOX[:2]) if airport else None
         got = bld.tile_buildings(FRAME, *BOX, [building(rect(100, 100, 80, 40), name=name)], ELEV, airport=ctx,
                                  **{k: [np.array([(60.0, 120.0), (220.0, 120.0)])] for k in lines})
+        if not one:                             # (no terminal: whatever the town's rules make of it; upstream's tunnel portals
+            return [g[0] for g in got]          # cut it in pieces since 1.10)
         self.assertEqual(len(got), 1)
         return got[0][0]
 
@@ -220,14 +222,16 @@ class TerminalTest(unittest.TestCase):
         """Heathrow's Terminal 1 (62,000 m2, an Airside Road Tunnel mouth and forecourt roads at it) was a portal building
         / a structure over the roads: a 3 m slab 7.5 m or more over the apron, nothing under it."""
         for kind in ("tunnels_xy", "roads_xy"):
-            other = self.lifted("Terminal 1", False, **{kind: 1})
-            self.assertGreater(other.min_h, 0.5, "(without an airport: lifted over it as before, " + kind + ")")
+            other = self.lifted("Terminal 1", False, one=False, **{kind: 1})
+            self.assertFalse(any(o.terminal for o in other), "(without an airport: no terminal, " + kind + ")")
             term = self.lifted("Terminal 1", True, **{kind: 1})
             self.assertEqual((term.min_h, term.portal, term.terminal), (0.0, False, True), kind)
             self.assertGreaterEqual(term.height, 12.0)
-        shop = self.lifted("Shopping Hall", True, tunnels_xy=1)
-        self.assertGreater(shop.min_h, 0.5, "(a building that is no terminal at the airport: as before)")
-        self.assertFalse(shop.terminal)
+        shop = self.lifted("Shopping Hall", True, one=False, tunnels_xy=1)
+        town = self.lifted("Shopping Hall", False, one=False, tunnels_xy=1)
+        self.assertEqual([(o.min_h, o.portal) for o in shop], [(o.min_h, o.portal) for o in town],
+                         "(a building that is no terminal at the airport: as it is elsewhere)")
+        self.assertFalse(any(o.terminal for o in shop))
 
 
 class AirsideTest(unittest.TestCase):
