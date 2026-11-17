@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """A top-down picture of an airport's buildings by role, to judge server/airportroles.py's rules without the game.
 
-    python tools/airport_map.py <lat> <lon> [--km 2] [--out path.png] [--name X] [--lines]
+    python tools/airport_map.py <lat> <lon> [--km 2] [--out path.png] [--name X] [--lines | --paint [--zoom X Y R]]
 
 Loads the map cells round (lat, lon) as the server does (mapdata.MapData: the cache, else the network), classifies the
 buildings and parts (airportroles.classify) and draws, ~1600 px: the runways, taxiways and aprons in greys, the buildings
@@ -17,6 +17,17 @@ S-bends tighter than the minimum radius are marked and counted (those inside the
 final straight shorter than taxiwaymarks.lead_straight are listed. --lines draws only that network: the pads in light grey, the
 mapped centrelines, spines, connectors and lead-ins each in a colour, the stops as dots with the start of each stand's final
 straight (a cross), and the audit markers (give --out a name ending _lines.png).
+
+--paint draws what taxiwaymarks PAINTS, top down in the picture's metres (north up) and in the game's order (roadmesh.PAINT_ORDER: the
+black material, the red, the yellow and white, the lettering last): the ribbons at their real width and the filled polygons (the
+stands' boxes, bars, numbers, the taxiway names) on grey paving, the buildings tan. Give it --zoom X Y R to read the lettering (R m
+half side about X, Y m from the airport point); --up B turns the view so that compass bearing B (degrees clockwise from north, the
+direction a pilot looks along) is up, about the --zoom point (the axes then read metres right and ahead of it): the lettering reads upright.
+
+--lights draws the airfield lights (server/airfieldlights.py: the same lights and clearing as the tiles) at night: a dark ground, the
+pavement and the yellow paint faint, each light a dot of its colour sized by kind (edge, threshold, end, taxiway edge, approach,
+PAPI, runway centre, taxiway centre, lead-on / lead-off, stop bar, guard, touchdown zone, wing bar), a legend with the counts; --zoom
+X Y R crops it, --skip KIND,KIND leaves kinds out.
 
 --km is the side of the square picture (default 2); data is loaded 300 m beyond it. Needs matplotlib (pip install matplotlib).
 """
@@ -49,6 +60,7 @@ import aeroways  # noqa: E402
 import airportgrade  # noqa: E402
 import airports as airportsmod  # noqa: E402
 import airportroles as ar  # noqa: E402
+import airfieldlights  # noqa: E402
 import airsideprops  # noqa: E402
 import geodesy  # noqa: E402
 import mapcells  # noqa: E402
@@ -66,29 +78,34 @@ LOAD_PAD_M = 300.0
 M_PER_DEG = aeroways.M_PER_DEG
 
 
+DB = None                                           # (the OurAirports database use_runways loaded: --lights reads its runways)
+
+
 def use_runways():
     """Lay the mapped runway lines on the OurAirports runways, as the server does (the cached copy: no download); False without one."""
+    global DB
     try:
         db = airportsmod.Store(airportsmod.DEFAULT_CACHE, netfetch.Fetcher(offline=True)).load(max_age=float("inf"))
     except (airportsmod.AirportsUnavailable, OSError, ValueError) as ex:
         print("no OurAirports copy: the mapped runway lines stay as mapped:", ex)
         return False
+    DB = db
     runwaysnap.set_provider(airportgrade.AirportGrader(db.lean(), None).runways_in_box)
     return True
 
 
-def load(lat, lon, km):
+def load(lat, lon, km, layer_names=LAYERS):
     """(frame, keys, {layer: [Features]}, {key: {layer: Features}}) of the cells under the km square and 300 m round it."""
     half = km * 500.0 + LOAD_PAD_M
     dlat = half / M_PER_DEG
     dlon = half / (M_PER_DEG * math.cos(math.radians(lat)))
     keys = mapcells.cells_for_bbox(lat - dlat, lon - dlon, lat + dlat, lon + dlon)
     md = mapdata.MapData(fetcher=netfetch.Fetcher(offline=False))
-    out, per = {k: [] for k in LAYERS}, {}
+    out, per = {k: [] for k in layer_names}, {}
     for key in keys:
-        layers = md.cell(key, layers=LAYERS).layers
+        layers = md.cell(key, layers=layer_names).layers
         per[str(key)] = layers
-        for name in LAYERS:
+        for name in layer_names:
             f = layers.get(name)
             if f is not None and len(f):
                 out[name].append(f)
@@ -221,6 +238,107 @@ def lines_picture(a, out, frame, infra, nw, shown, box, name):
                 Line2D([], [], marker="o", mfc="none", mec="#e60000", ls="", label=f"final straight too short ({len(shorts)})")]
     ax.legend(handles=handles + audit_handles(shown), loc="upper left", fontsize=9, framealpha=0.9)
     fig.suptitle(f"{name}  ({a.lat:.4f}, {a.lon:.4f})  {a.km:g} km square: the painted network and its audit", fontsize=13, y=0.985)
+    fig.savefig(out, dpi=100)
+
+
+PAINT_RANK = {"black": 0, "red": 1, "yellow": 2, "white": 2, "text": 3, "font_black": 4, "font_yellow": 4, "font_white": 4}   # (roadmesh.PAINT_ORDER by material)
+PAINT_FILL = {"black": "#000000", "red": "#d8262c", "yellow": "#ffd21a", "white": "#ffffff", "text": "#000000",
+              "font_black": "#000000", "font_yellow": "#ffd21a", "font_white": "#ffffff"}
+FONT_SHEET = os.path.join(os.path.dirname(HERE), "mod", "texture_sources", "levels", "beamng_earth", "art", "runway", "bne_paint_font_o.data.webp")
+
+
+def draw_glyph(ax, sheet, corners, uv, colour, zorder):
+    """A character of the lettering as the game draws it: the font sheet's opacity (PIL image `sheet`) over the colour, the crop the quad's
+    UVs name laid on its corners (top left, top right, bottom right, bottom left; uv: the same order, the sheet's V up)."""
+    from matplotlib.transforms import Affine2D
+    w, h = sheet.size
+    u0, v1, u1, v0 = uv[0, 0], uv[0, 1], uv[2, 0], uv[2, 1]
+    crop = np.asarray(sheet.convert("L").crop((int(u0 * w), int(round((1.0 - v1) * h)), int(math.ceil(u1 * w)), int(math.ceil((1.0 - v0) * h)))), np.float64) / 255.0
+    rgba = np.zeros(crop.shape + (4,))
+    rgba[..., :3] = [int(colour[i:i + 2], 16) / 255.0 for i in (1, 3, 5)]
+    rgba[..., 3] = crop
+    bl, br, tl = corners[3], corners[2], corners[0]
+    mat = Affine2D.from_values(br[0] - bl[0], br[1] - bl[1], tl[0] - bl[0], tl[1] - bl[1], bl[0], bl[1])
+    ax.imshow(rgba, extent=(0.0, 1.0, 0.0, 1.0), origin="upper", transform=mat + ax.transData, zorder=zorder, interpolation="bilinear")
+PAINT_GROUND = (("runway", "#6f6f6f"), ("taxiway", "#868686"), ("apron", "#9c9c9c"))
+
+
+def paint_picture(a, out, frame, infra, stands, site, box, name):
+    """The --paint picture: the paving in greys, the buildings tan, then every ribbon (its real width) and filled polygon that
+    taxiwaymarks paints, a material at a time in the order the game draws them (black, red, yellow and white, the lettering: PAINT_RANK)."""
+    feats = [f for f in infra if f is not None and len(f)]
+    lines, _lb, polys, _pb = taxiwaymarks._all_marks(feats, stands, site)
+    pivot = np.array(a.zoom[:2] if a.zoom else (0.0, 0.0))
+    up = np.array([math.sin(math.radians(a.up)), math.cos(math.radians(a.up))])
+    right = np.array([up[1], -up[0]])
+
+    def view(xy):                                           # (the picture's metres turned so that --up is up, about the pivot)
+        xy = np.asarray(xy, np.float64).reshape(-1, 2) - pivot
+        return np.stack([xy @ right, xy @ up], 1) if a.up else xy + pivot
+    if a.up:
+        box = (-math.hypot(box[2], box[3]),) * 2 + (math.hypot(box[2], box[3]),) * 2
+    fig = plt.figure(figsize=(16, 16), dpi=100)
+    ax = fig.add_axes([0.02, 0.02, 0.96, 0.94])
+    ax.set_facecolor("#e9efe3")
+    ax.set_xlim(box[0], box[2])
+    ax.set_ylim(box[1], box[3])
+    ax.set_aspect("equal")
+    ax.tick_params(labelsize=8)
+    ax.grid(True, color="#ffffff", alpha=0.35, lw=0.5)
+    for (_what, colour), rings in zip(PAINT_GROUND, (pad_xy(frame, aeroways.pads(infra, runways=True)),
+                                                    pad_xy(frame, aeroways.ways(infra)), pad_xy(frame, aeroways.aprons(infra)))):
+        ax.add_collection(PatchCollection([Polygon(view(r), closed=True) for r in rings], facecolor=colour, edgecolor="none", zorder=1))
+    blds = []
+    for la, lo in (site.blocks if site is not None else ()):    # (under the paint: any of it that runs into a building shows)
+        if len(la) >= 3:
+            e, n, _ = frame.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), np.zeros(len(la)))
+            blds.append(Polygon(view(np.stack([np.asarray(e), np.asarray(n)], 1)), closed=True))
+    ax.add_collection(PatchCollection(blds, facecolor="#c8b89a", edgecolor="#8a7a5a", lw=0.6, zorder=2))
+    by = {}                                                 # {colour: [Polygon]}
+    n_ribbon = 0
+    for la, lo, width, _kind, colour in lines:
+        e, n, _ = frame.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), np.zeros(len(la)))
+        for q in taxiwaymarks._strip(np.asarray(e), np.asarray(n), width):
+            by.setdefault(colour, []).append(Polygon(view(q), closed=True))
+        n_ribbon += 1
+    if a.zoom:                                              # (the view's limits: only the characters inside it are drawn as pictures)
+        mid = np.zeros(2) if a.up else pivot
+        lim = (mid[0] - a.zoom[2], mid[0] + a.zoom[2], mid[1] - a.zoom[2], mid[1] + a.zoom[2])
+    else:
+        lim = (box[0], box[2], box[1], box[3])
+    sheet = None
+    n_glyph = 0
+    for la, lo, colour, _layer, *uv in polys:
+        e, n, _ = frame.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), np.zeros(len(la)))
+        v = view(np.stack([np.asarray(e), np.asarray(n)], 1))
+        if uv and float(np.ptp(np.asarray(uv[0])[:, 0])) > 1e-9:       # (a character: the sheet's crop, as the game's material shows it)
+            n_glyph += 1
+            if v[:, 0].max() < lim[0] or v[:, 0].min() > lim[1] or v[:, 1].max() < lim[2] or v[:, 1].min() > lim[3]:
+                continue
+            if sheet is None:
+                from PIL import Image
+                sheet = Image.open(FONT_SHEET)
+            draw_glyph(ax, sheet, v, np.asarray(uv[0]), PAINT_FILL[colour], 10 + PAINT_RANK[colour])
+        else:                                                           # (a filled polygon; a ring's bars are quads on the sheet's solid cell)
+            by.setdefault(colour, []).append(Polygon(v, closed=True))
+    for colour, patches in by.items():
+        ax.add_collection(PatchCollection(patches, facecolor=PAINT_FILL[colour], edgecolor="none", zorder=10 + PAINT_RANK[colour]))
+    sc = taxiwaymarks.scene(feats) if a.refs else None
+    for xy, _cls, wi, _f, _l in (taxiwaymarks._mapped_runs(sc) if sc is not None else ()):    # (the ways' refs along their lines, in blue)
+        if sc.ways[wi][2]:
+            v = view(to_view(sc, frame, xy))
+            cum = np.r_[0.0, np.cumsum(np.hypot(*np.diff(v, axis=0).T))]
+            for at in np.arange(min(15.0, cum[-1] / 2.0), cum[-1], 70.0):
+                k = min(int(np.searchsorted(cum, at)), len(v) - 1)
+                ax.text(v[k, 0], v[k, 1], sc.ways[wi][2], color="#1040ff", fontsize=11, weight="bold", ha="center", va="center", zorder=30)
+    ax.set_xlim(lim[0], lim[1])                             # (imshow moves the limits)
+    ax.set_ylim(lim[2], lim[3])
+    handles = [Patch(facecolor=c, edgecolor="#333333", label=f"{k} ({len(by.get(k, ()))} pieces)") for k, c in PAINT_FILL.items() if not k.startswith("font_")]
+    handles.append(Patch(facecolor="#808080", edgecolor="#333333", label=f"lettering ({n_glyph} characters, font sheet)"))
+    handles += [Patch(facecolor=c, label=w) for w, c in PAINT_GROUND]
+    ax.legend(handles=handles, loc="lower right", fontsize=9, framealpha=0.9)
+    fig.suptitle(f"{name}  ({a.lat:.4f}, {a.lon:.4f})  {a.km:g} km square: the paint (taxiwaymarks), game draw order: {n_ribbon} ribbons, "
+                 f"{len(polys)} polygons" + (f"; bearing {a.up:g} up" if a.up else ""), fontsize=13, y=0.985)
     fig.savefig(out, dpi=100)
 
 
@@ -621,6 +739,68 @@ def stand_handles(counts):
             Line2D([], [], marker="o", mfc="none", mec="#ff9900", ls="", label=f"lead-in off its nose ({counts['offnose']})")]
 
 
+LIGHT_COLOURS = {"white": "#fff4d6", "green": "#2dff6e", "red": "#ff3b30", "blue": "#3d7bff", "yellow": "#ffd21a"}
+LIGHT_SIZE = {"edge": 5, "threshold": 7, "end": 7, "taxi": 4, "approach": 6, "papi": 9, "centre": 6, "taxicl": 5, "lead": 7,
+              "stopbar": 9, "guard": 12, "tdz": 6, "wing": 8}       # (marker areas in points squared at the 2 km picture)
+
+
+def lights_picture(a, out, frame, keys, per, infra, box, name):
+    """The --lights picture (the airfield lights as the server makes them, airfieldlights.lights_of_cells: the same clearing of the
+    equipment as the tiles): a dark ground, the pavement and the paint faint, each light a dot of its colour, its size by kind."""
+    db = DB
+    if db is None:
+        sys.exit("--lights needs the OurAirports runways (use_runways)")
+    x0, y0, x1, y1 = box
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]) - 50.0, np.array([y0, y1, y0, y1]) + 50.0, np.zeros(4))
+    la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+    infra_fn = lambda k: per[str(k)].get("infrastructure") if str(k) in per else None
+    bld_fn = lambda k: per[str(k)].get("buildings") if str(k) in per else None
+    road_fn = lambda k: per[str(k)].get("roads") if str(k) in per else None
+    import time
+    t0 = time.time()
+    skip = tuple(k for k in a.skip.split(",") if k)
+    lights, _masts = airfieldlights.lights_of_cells(
+        keys, la, lo, infra_fn, lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), road_fn, bld_fn, masts=False, skip=skip)
+    print(f"lights: {len(lights)} in {time.time() - t0:.1f} s")
+    e, n, _ = frame.geodetic_to_enu(lights.lat, lights.lon, 0.0)
+    e, n = np.asarray(e, np.float64), np.asarray(n, np.float64)
+    inside = (e >= x0) & (e <= x1) & (n >= y0) & (n <= y1)
+    fig = plt.figure(figsize=(16, 16), dpi=100)
+    ax = fig.add_axes([0.02, 0.02, 0.96, 0.94])
+    ax.set_facecolor("#03050a")
+    ax.set_xlim(box[0], box[2])
+    ax.set_ylim(box[1], box[3])
+    ax.set_aspect("equal")
+    ax.tick_params(labelsize=8, colors="#667")
+    for rings, colour in ((pad_xy(frame, aeroways.aprons(infra)), "#0c0f16"), (pad_xy(frame, aeroways.pads(infra, runways=True)), "#10131b")):
+        ax.add_collection(PatchCollection([Polygon(r, closed=True) for r in rings], facecolor=colour, edgecolor="none", zorder=1))
+    try:                                            # (the paint, faint: where a light should sit)
+        for la0, lo0, la1, lo1, _w, kind, _c in taxiwaymarks.strokes([f for f in infra if f is not None and len(f)]):
+            if kind in (taxiwaymarks.CENTRE_KIND, taxiwaymarks.HOLD_KIND[True], taxiwaymarks.HOLD_KIND[False]):
+                pe, pn, _ = frame.geodetic_to_enu(np.array([la0, la1]), np.array([lo0, lo1]), 0.0)
+                ax.plot(pe, pn, color="#5a4d10", lw=0.8, zorder=2, solid_capstyle="butt")
+    except Exception as ex:                         # noqa: BLE001
+        print("paint:", type(ex).__name__, ex)
+    scale = min(6.0, max(1.0, (2000.0 / max(box[2] - box[0], 1.0)) ** 0.6))
+    counts = {}
+    for kind_i, kind in enumerate(airfieldlights.KINDS):
+        for col_i, col in enumerate(airfieldlights.COLOURS):
+            sel = inside & (lights.kind == kind_i) & (lights.colour == col_i)
+            if sel.any():
+                counts[(kind, col)] = int(sel.sum())
+                ax.scatter(e[sel], n[sel], s=LIGHT_SIZE[kind] * scale, c=LIGHT_COLOURS[col], linewidths=0, zorder=5)
+    handles = [Line2D([], [], marker="o", color=LIGHT_COLOURS[c], ls="", markersize=6, label=f"{k} {c} ({v})")
+               for (k, c), v in sorted(counts.items())]
+    ax.legend(handles=handles, loc="lower right", fontsize=8, framealpha=0.85, facecolor="#10131b", labelcolor="#ccd")
+    for (k, c), v in sorted(counts.items()):
+        print(f"  {k:10s} {c:7s} {v}")
+    fig.suptitle(f"{name}  night lights: {int(inside.sum())} in the picture ({len(lights)} loaded)", fontsize=13, y=0.985, color="#ccd")
+    fig.patch.set_facecolor("#03050a")
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    fig.savefig(out, dpi=100, facecolor=fig.get_facecolor())
+    print("saved", out)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("lat", type=float)
@@ -629,8 +809,13 @@ def main():
     ap.add_argument("--out", default=None, help="PNG path (default airport_map_<lat>_<lon>.png)")
     ap.add_argument("--name", default="", help="a name for the title")
     ap.add_argument("--lines", action="store_true", help="draw only the painted yellow network and its audit")
+    ap.add_argument("--paint", action="store_true", help="draw what taxiwaymarks paints (ribbons and polygons by colour, the game's order), see --zoom")
+    ap.add_argument("--lights", action="store_true", help="draw the airfield lights (airfieldlights) as dots on a dark ground, see --zoom")
+    ap.add_argument("--skip", default="", help="--lights: kinds left out, comma separated (airfieldlights.KINDS)")
     ap.add_argument("--zoom", type=float, nargs=3, default=None, metavar=("X", "Y", "R"),
                     help="crop the picture to the square of half side R m about (X, Y) m (for a closer look at a failure)")
+    ap.add_argument("--up", type=float, default=0.0, help="--paint: the compass bearing (degrees) to put up, about the --zoom point (0: north up)")
+    ap.add_argument("--refs", action="store_true", help="--paint: write each named way's ref (blue) along its line")
     ap.add_argument("--as-mapped", action="store_true", help="leave the mapped runway lines where they are mapped (not laid on the OurAirports runways)")
     ap.add_argument("--kml", nargs="*", default=None, help="KML files whose paths are drawn under the --lines network (a reference drawing)")
     ap.add_argument("--summary", default=None, help="write the stand audit's counts as JSON to this path")
@@ -638,11 +823,16 @@ def main():
     out = a.out or f"airport_map_{a.lat:.4f}_{a.lon:.4f}.png"
     if not a.as_mapped:
         use_runways()
-    frame, keys, layers, per, md = load(a.lat, a.lon, a.km)
+    frame, keys, layers, per, md = load(a.lat, a.lon, a.km, LAYERS + (("roads",) if a.lights else ()))
     infra = layers["infrastructure"]
     half = a.km * 500.0
     box = (-half, -half, half, half)
-    res = None if a.lines else ar.classify(layers["buildings"], layers["building_parts"], infra, frame, 0.0, 0.0, landuse=layers["land_use"])
+    if a.lights:
+        if a.zoom:
+            box = (a.zoom[0] - a.zoom[2], a.zoom[1] - a.zoom[2], a.zoom[0] + a.zoom[2], a.zoom[1] + a.zoom[2])
+        lights_picture(a, out, frame, keys, per, infra, box, a.name or "airport")
+        return
+    res = None if (a.lines or a.paint) else ar.classify(layers["buildings"], layers["building_parts"], infra, frame, 0.0, 0.0, landuse=layers["land_use"])
     print(f"{a.name or 'airport'} at {a.lat}, {a.lon}: {len(keys)} cells" + ("" if res is None else
           f", {len(res)} airport footprints, {len(res.gates)} gates"))
 
@@ -657,9 +847,9 @@ def main():
     except Exception as ex:                          # noqa: BLE001 (the picture without them)
         print("aircraft:", type(ex).__name__, ex)
     why = dict(pa.STATS)
-    masts, leads, unreached, base, nw = [], [], [], set(), None
+    masts, leads, unreached, base, nw, site = [], [], [], set(), None, None
     try:
-        for k in () if a.lines else keys:
+        for k in () if (a.lines or a.paint) else keys:
             f = infra_fn(k)
             if f is not None and pa.has_stands(f):
                 blds = pa._flat([pa.building_layers_fn(md)(k)])
@@ -668,7 +858,9 @@ def main():
                         e, n, _ = frame.geodetic_to_enu(np.array([p.lat]), np.array([p.lon]), 0.0)
                         masts.append((float(e[0]), float(n[0])))
         feats = [f for f in infra if pa.has_stands(f)]
-        if every and feats:
+        if a.paint:                                  # (the site as the tiles read it: every cell's buildings)
+            site = taxiwaymarks.site_of(infra, layers["buildings"], layers["building_parts"]) if every else None
+        elif every and feats:
             base = set(taxiwaymarks.strokes(feats))
             site = taxiwaymarks.site_of(infra, layers["buildings"], layers["building_parts"])
             leads = [s for s in taxiwaymarks.strokes(feats, every, site) if s not in base]
@@ -677,6 +869,11 @@ def main():
     except Exception as ex:                          # noqa: BLE001
         print("masts / lead-ins:", type(ex).__name__, ex)
 
+    if a.paint:
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        paint_picture(a, out, frame, infra, every, site, box, a.name or "airport")
+        print("saved", out)
+        return
     shown, whole = audit_view(nw, frame, box) if nw is not None else ({k: [] for k, _m, _c in MARKERS}, {k: 0 for k, _m, _c in MARKERS})
     print(f"audit (inside the picture; the whole loaded area): gaps {len(shown['gaps'])} ({whole['gaps']}), opens {len(shown['opens'])} "
           f"({whole['opens']}), kinks {len(shown['kinks'])} ({whole['kinks']}), S-bends {len(shown['sbends'])} ({whole['sbends']}); "

@@ -33,9 +33,9 @@ Stand marks (_lead_lines; the paint is black, yellow, white and red: airportgrad
   * every yellow lead-in, spine and bar has a black border BORDER_M wider each side, painted underneath (roadmesh layer "edge");
   * stop bars across the axis (STOP_BAR_M x STOP_BAR_W_M) for the stand's own kind at the nose and the next smaller kinds that
     fit (_ladder: each at its own nose, LADDER_K times the door setback), joined by a STOP_BAR_W_M centreline, each with a
-    type label beside it (LABEL: generic codes, never an airline): black segment text on a LABEL_BOX_M yellow box;
-  * the stand number (the gate's `ref`: A-Z, 0-9, at most NUM_MAX characters; standmarks' stencil segment font, NUM_TEXT) black
-    on a yellow box (about 4 x 2 m for "B13"), past the stop bars on the axis, upright for the approaching pilot;
+    type label beside it (LABEL: generic codes, never an airline): black lettering on a LABEL_BOX_M yellow box;
+  * the stand number (the gate's `ref`: A-Z, 0-9, at most NUM_MAX characters; the font texture, standmarks.text_quads, capitals
+    NUM_TEXT tall) black on a yellow box (about 5 x 2 m for "B13"), past the stop bars on the axis, upright for the approaching pilot;
   * two wing-tip clearance lines (WING_LINE_OFF_M outside the wing tips, WING_LINE_LEN_M long, ending level with the stop bar;
     _wing_lines: clipped where they would run under a neighbour's aircraft, dropped near another stand's lead-in, the later of two
     lines that come within WING_CLEAR_M of each other too), with the black border as every yellow line on an apron has, the mapped
@@ -52,9 +52,21 @@ where one pad's edge lies in another's), a break under EDGE_JOIN_M run across, t
 under EDGE_MIN_M long; in a tile they are quads (EDGE_QUAD_M).
 The filled marks (boxes, lettering, hatching, dashes, triangles, the edge lines) are convex polygons (polygons(): [(lat, lon, colour,
 layer)]): in a tile ONE chunk of quads a colour and layer (roadmesh's "poly" chunks with "quads"); layers "edge" (black borders),
-"gutter" (red), "mark" (yellow, white) and "glyph" (the black lettering: its own material, line_runway_text, listed after the
-yellow's, and 3.5 mm up: at the paint's 2 mm plus 0.6 mm the yellow box hid it in game) are the road mesh's heights, so what lies
-over what does not rest on the order of the mesh alone.
+"gutter" (red), "mark" (yellow, white) and "glyph" (the lettering) are the road mesh's heights, so what lies over what does not rest
+on the order of the mesh alone; and the paint writes no depth, so the materials' order (roadmesh.PAINT_ORDER) decides: black, red,
+yellow and white, "text" (solid black: the taxiway names' boxes, over the centreline they stand on), then the lettering.
+The lettering is a texture (tools/make_font_atlas.py: DejaVu Sans Bold, opacity only, standmarks.text_quads): a character is ONE quad
+with UVs into the sheet, in the material of its colour (line_runway_font_black on the yellow stand boxes, _yellow on the names' black
+boxes, _white on the equipment boxes); a polygon of polygons() is then (lat, lon, colour, layer, UVs (4, 2)) and a tile's chunk of
+them carries the UVs ("uvq"). The sheet has a solid cell too: a ring or rule in the lettering's material takes its UVs from it.
+
+Taxiway names (_name_marks; ICAO location markings): on each named way ("ref": the font's characters, at most NAME_MAX) before every junction
+with a way of another name (_approaches) and before each runway holding position, for each direction of travel: a black box (NAME_TEXT
+capitals and NAME_MARGIN_M round them) with a yellow ring and the name in yellow, centred ON the way's centreline (cut out of it, and its
+border, by NAME_CUT_M round the box: _cut_lines; the user, 2026-11-17: the yellow ran visibly through the black in game, so the draw
+order of the materials is not relied on), upright for the pilot looking along the way, 20 to 30 m before the
+junction (NAME_BEFORE_M: the first distance at which the box lies on paving, clear of other paint, a runway's pad, a building and a
+parked aircraft). The same name is not painted twice for one direction within NAME_REPEAT_M.
 
 Spines and lenses (standpaths): the stands that stand in a row (noses within half their spans and SPINE_LINK_M of each other, axes
 within 72 degrees: SPINE_LINK_COS) none of whose axes reach a lane share a spine of their own, a taxilane along the frontage through
@@ -143,10 +155,10 @@ WING_CLEAR_M = 3.0                  # ... none within this of another stand's le
 WING_MIN_M = 6.0                    # ... a piece left after clipping shorter than this is none (_wing_lines),
 WING_NEAR_M, WING_STEP_M = 150.0, 0.25          # ... the stands looked at, the clipping's step
 NUM_MAX = 4                         # a ref longer than this is not painted
-NUM_TEXT = (1.5, 0.95, 0.22, 0.07, 0.2)     # the stand number's characters (standmarks.text_polys): h, cw, bar, gap, between
+NUM_TEXT = 1.5                      # the stand number's characters (standmarks.text_quads): the capitals' height
 NUM_MARGIN = (0.4, 0.25)            # ... on a yellow box this much larger each side (across, along): "B13" in 4.05 x 2.0 m
 NUM_AFTER_M = 1.2                   # ... its box this far past the front stop bar's far edge
-LABEL_TEXT = (0.55, 0.36, 0.085, 0.03, 0.07)  # a stop bar's type label: black on a yellow box LABEL_BOX_M, beside the bar
+LABEL_TEXT = 0.45                   # a stop bar's type label: black on a yellow box LABEL_BOX_M, beside the bar, its capitals this tall
 LABEL_BOX_M = (2.2, 0.9)
 LABEL_SIDE_M = 0.45                 # ... its box this far off the bar's end
 LABEL = {"wide": "WIDE", "narrow": "A320", "turboprop": "AT72", "light": "C172"}    # generic type codes, never an airline's
@@ -186,7 +198,7 @@ EQUIP_PITCH_M = 6.8                 # ... this far apart, up to EQUIP_MAX to a g
 EQUIP_CLEAR_M = 7.0                 # ... this much); only where the road is EQUIP_MIN_C_M or more from the wall
 EQUIP_MAX = 3
 EQUIP_MIN_C_M = 7.3
-EQUIP_TEXT = (0.7, 0.45, 0.11, 0.04, 0.1)
+EQUIP_TEXT = 0.7                    # (the equipment boxes' numbers: white)
 EDGE_KIND = "taxi_edge"             # the taxiways' double yellow edge lines (two EDGE_W_M lines EDGE_GAP_M apart, EDGE_IN_M inside the pad's edge)
 EDGE_W_M, EDGE_GAP_M, EDGE_IN_M = 0.15, 0.15, 0.45
 EDGE_STEP_M = 1.0                   # (the outlines sampled this finely, simplified to EDGE_TOL_M)
@@ -213,6 +225,18 @@ AUDIT_KINK_RAD = dmath.radians(20.0)  # ... a direction change of more than 20 d
 AUDIT_JOIN_RAD = AUDIT_KINK_RAD     # (at a join: a line meets another at more than this from tangent and not straight through it),
 AUDIT_WINDOW_M = 3.0                # ... within 3 m along a line is a kink,
 AUDIT_S_LINK_M = 30.0               # ... two curves of opposite sense within this are an S-bend
+NAME_MAX = 3                        # (the taxiways' names, _name_marks) a ref longer than this is not painted
+NAME_TEXT = 2.0                     # ... its letters (standmarks.text_quads): capitals 2 m tall (3 m read too big in game, the user, 2026-11-17), yellow on a black box this much larger every side,
+NAME_MARGIN_M = 0.4                 # ... (the box's ring: a yellow line NAME_RING_M[1] wide, NAME_RING_M[0] inside its edge, as the location marking of the photographs)
+NAME_RING_M = (0.12, 0.18)
+NAME_BEFORE_M = (25.0, 22.0, 28.0, 20.0, 30.0)  # ... its centre this far before the junction (the first that is clear: 20 to 30 m),
+NAME_JOIN_M = 1.0                   # ... a way's end this near another way's line is a junction on it (a crossing is one too),
+NAME_REPEAT_M = 60.0                # ... the same name is not painted twice for one direction of travel within this,
+NAME_CLEAR_M = 0.25                 # ... clear of any other paint by this (the way's own centreline, within NAME_OWN_M, excepted: it runs under the box),
+NAME_OWN_M = 0.05
+NAME_CUT_M = 0.1                    # ... and every line under it (the way's centreline, its black border) is cut out of the box grown by this: the paint's draw order alone left the yellow showing through the black in game (the user, 2026-11-17)
+NAME_PAVE_M = 1.0                   # ... the box grown by this on paving (the double edge line lies 0.45 to 0.75 m inside the pad's edge),
+NAME_RUNWAY_M = 3.0                 # ... and this far off a runway's pad
 _SITE = "_taxiway_site"
 _RAW = "_taxiway_raw"
 _MEMO = "_taxiway_marks"
@@ -1182,7 +1206,7 @@ def _service_roads(items, rows, walls, leads, bridges=()):
                         at_ = p + nu * (ROAD_W_M / 2.0 + 0.5 + EQUIP_BOX_M[1] / 2.0)
                         polys += [(q, "white", "paint") for q in sm.outline(at_, nu, EQUIP_BOX_M[0], EQUIP_BOX_M[1], ROAD_LINE_W_M)]
                         number += 1
-                        polys += [(q, "white", "paint") for q in sm.text_polys(str(number), at_, mean_u, *EQUIP_TEXT)]
+                        polys += [(q, "font_white", "glyph", uv) for q, uv in sm.text_quads(str(number), at_, mean_u, EQUIP_TEXT)]
     return ribbons, polys
 
 
@@ -1263,8 +1287,8 @@ def _lead_lines(sc, stands, site=None):
             acc.append((sm.box(centre, up, w + 2.0 * BORDER_M, h + 2.0 * BORDER_M), "black", "under"))
         acc.append((sm.box(centre, up, w, h), colour, "paint"))
 
-    def lettered(text, centre, up, spec, acc=None):
-        (polys if acc is None else acc).extend((p, "text", "glyph") for p in sm.text_polys(text, centre, up, *spec))
+    def lettered(text, centre, up, h, acc=None):
+        (polys if acc is None else acc).extend((q, "font_black", "glyph", uv) for q, uv in sm.text_quads(text, centre, up, h))
 
     def put(*builds):
         """The chunks of the first of the builds (functions taking the list to fill) that lies under no footprint, painted; False where
@@ -1272,7 +1296,7 @@ def _lead_lines(sc, stands, site=None):
         for build in builds:
             acc = []
             build(acc)
-            if not any(_hits_blocks(p, blocks) for p, _c, _l in acc):
+            if not any(_hits_blocks(x[0], blocks) for x in acc):
                 polys.extend(acc)
                 return True
         return False
@@ -1323,8 +1347,7 @@ def _lead_lines(sc, stands, site=None):
             add(np.array([p, q]), STAND_KIND, CENTRE_W_M)
         text = str(c.ref or "").upper().replace(" ", "")
         if len(text) <= NUM_MAX and sm.supported(text):  # (the number: black on a yellow box past the stop bars)
-            h, cw, _bar, _gap, cg = NUM_TEXT
-            bw, bh = sm.text_width(len(text), cw, cg) + 2.0 * NUM_MARGIN[0], h + 2.0 * NUM_MARGIN[1]
+            bw, bh = sm.text_width(text, NUM_TEXT) + 2.0 * NUM_MARGIN[0], NUM_TEXT + 2.0 * NUM_MARGIN[1]
             ahead = STOP_BAR_W_M / 2.0 + NUM_AFTER_M + bh / 2.0
             behind = back - STOP_BAR_W_M / 2.0 - NUM_AFTER_M - bh / 2.0
             slide = max(STOP_BAR_M, bw) / 2.0 + bw / 2.0 + NUM_AFTER_M
@@ -1364,24 +1387,297 @@ def _lead_lines(sc, stands, site=None):
         lines.append((la, lo, width, kind, colour))
         boxes.append((la.min(), la.max(), lo.min(), lo.max()))
     plist, pboxes = [], []
-    for pts, colour, layer in polys:
+    for pts, colour, layer, *uv in polys:
         la, lo, _ = sc.frame.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
         la, lo = np.asarray(la), np.asarray(lo)
-        plist.append((la, lo, colour, layer))
+        plist.append((la, lo, colour, layer, *uv))
         pboxes.append((la.min(), la.max(), lo.min(), lo.max()))
     sc.memo[("net", key)] = (net, stops)
     got = sc.memo[key] = (lines, np.array(boxes, np.float64).reshape(-1, 4), plist, np.array(pboxes, np.float64).reshape(-1, 4))
     return got
 
 
+# ---- the taxiways' names: ICAO location markings -----------------------------------------------------------------------------
+
+def _name_of(ref):
+    """A way's `ref` as its name: upper case, no spaces ("" for none)."""
+    return str(ref or "").upper().replace(" ", "")
+
+
+def _name_text(name):
+    """The name as it is painted: itself, or "" for one the font lacks (A-Z, 0-9) or over NAME_MAX characters (a long name is still a
+    name: it tells one way from another, but nothing is painted for it)."""
+    return name if len(name) <= NAME_MAX and standmarks.supported(name) else ""
+
+
+def _meets(R, S):
+    """[point (2,)] where the polylines R (k, 2) and S (m, 2) meet: a segment of one across a segment of the other, or an end of one
+    within NAME_JOIN_M of the other (a way that ends on another)."""
+    d, e = (R[1:] - R[:-1])[:, None], (S[1:] - S[:-1])[None]
+    w = S[:-1][None] - R[:-1][:, None]
+    den = d[..., 0] * e[..., 1] - d[..., 1] * e[..., 0]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = (w[..., 0] * e[..., 1] - w[..., 1] * e[..., 0]) / den
+        u = (w[..., 0] * d[..., 1] - w[..., 1] * d[..., 0]) / den
+    across = (np.abs(den) > 1e-9) & (t >= 0.0) & (t <= 1.0) & (u >= 0.0) & (u <= 1.0)
+    out = [R[i] + d[i, 0] * t[i, j] for i, j in zip(*np.nonzero(across))]
+    for X, Y in ((R, S), (S, R)):
+        out += [end for end in (X[0], X[-1]) if float(_pt_segs(end, Y[:-1], Y[1:]).min()) <= NAME_JOIN_M]
+    return out
+
+
+def _approaches(runs, sc):
+    """[(run index, station of the junction (m along the run), direction +1 / -1 of travel toward it)] of the places a name is
+    wanted: on each run that has a name to paint (runs: [(xy, way index, name, text painted)]), every junction with a run of another name
+    (named, whether it can be painted or not; _meets: both directions
+    along it where it passes through the junction, the one toward it where it ends there; a box that would not fit between the
+    run's end and the junction is none, _name_marks) and every runway holding position on the way (Scene.sites), toward the
+    runway. Unnamed ways have none and meet no name; two approaches of one run and direction within 3 m are one."""
+    named = [i for i, r in enumerate(runs) if r[2]]
+    lo = np.array([runs[i][0].min(axis=0) for i in named]).reshape(-1, 2) - NAME_JOIN_M
+    hi = np.array([runs[i][0].max(axis=0) for i in named]).reshape(-1, 2) + NAME_JOIN_M
+    out = []
+
+    def add(i, s, dr):
+        if runs[i][3] and not any(o[0] == i and o[2] == dr and abs(o[1] - s) < 3.0 for o in out):
+            out.append((i, s, dr))
+    for a, i in enumerate(named):
+        for b in np.flatnonzero((lo[a + 1:] <= hi[a]).all(axis=1) & (hi[a + 1:] >= lo[a]).all(axis=1)) + a + 1:
+            j = named[int(b)]
+            if runs[i][2] == runs[j][2]:
+                continue
+            pts = []
+            for p in _meets(runs[i][0], runs[j][0]):
+                if not any(float(dnp.hypot(*(p - q))) < 2.0 for q in pts):
+                    pts.append(p)
+            for p in pts:
+                for k in (i, j):
+                    s = _station(runs[k][0], p)
+                    add(k, s, 1)
+                    add(k, s, -1)
+    for _ri, wi, p, u in sc.sites:                      # (the holding positions: on the way's own run, toward the runway)
+        best = None
+        for k in named:
+            if runs[k][1] == wi:
+                q, tan, dist = _project(runs[k][0], p)
+                if dist <= 3.0 and (best is None or dist < best[0]):
+                    best = (dist, k, tan)
+        if best is not None:
+            add(best[1], _station(runs[best[1]][0], p), 1 if float(dnp.dot(best[2], -u)) > 0.0 else -1)
+    return out
+
+
+def _cut_out(Q, centre, tv, hx, hy):
+    """The pieces (k, 2) of the polyline Q (m, 2) outside the rectangle `centre` +- hx across and +- hy along the unit vector tv (touching
+    it is not inside), in order, each at least PIECE_MIN_M long (so none is a zero-length sliver for tile_chunks' pieces): [] for a line
+    wholly inside."""
+    left = np.array([-tv[1], tv[0]])
+    d = Q - centre
+    x, y = dnp.vecdot(d, left[None]), dnp.vecdot(d, tv[None])
+    tx0, tx1 = _slab(x[:-1], x[1:] - x[:-1], -hx, hx)
+    ty0, ty1 = _slab(y[:-1], y[1:] - y[:-1], -hy, hy)
+    lo, hi = np.maximum(np.maximum(tx0, ty0), 0.0), np.minimum(np.minimum(tx1, ty1), 1.0)
+    out, cur = [], []
+    for i in range(len(Q) - 1):
+        a, b = Q[i], Q[i + 1]
+        if not hi[i] > lo[i]:                           # (this segment is outside: it goes on the piece)
+            cur = cur or [a]
+            cur.append(b)
+            continue
+        if lo[i] > 0.0:                                 # (it enters the rectangle: the piece ends at the edge)
+            cur = cur or [a]
+            cur.append(a + (b - a) * float(lo[i]))
+        if len(cur) >= 2:
+            out.append(np.array(cur))
+        cur = [a + (b - a) * float(hi[i]), b] if hi[i] < 1.0 else []       # (it leaves it: a new piece from the edge)
+    if len(cur) >= 2:
+        out.append(np.array(cur))
+    return [p for p in out if float(dnp.hypot(*np.diff(p, axis=0).T).sum()) >= PIECE_MIN_M]
+
+
+def _cut_lines(sc, lines, boxes, cuts):
+    """(lines, boxes) with the parts of each line inside one of the rectangles `cuts` ((centre, unit direction, half width, half height) in
+    metres: the name boxes grown by NAME_CUT_M) cut out (_cut_out): a line across one is two, on both sides of it, in its place in the
+    list; the others are the same objects. Deterministic: the lines in their order, each cut by the rectangles in theirs."""
+    if not cuts or not lines:
+        return lines, boxes
+    e, n, _ = sc.frame.geodetic_to_enu(np.concatenate([x[0] for x in lines]), np.concatenate([x[1] for x in lines]), np.zeros(sum(len(x[0]) for x in lines)))
+    pts = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], 1)
+    cnt = np.array([len(x[0]) for x in lines])
+    ends = np.cumsum(cnt)
+    lo = np.array([pts[a:b].min(axis=0) for a, b in zip(ends - cnt, ends)])
+    hi = np.array([pts[a:b].max(axis=0) for a, b in zip(ends - cnt, ends)])
+    hits = {}                                           # (line index -> the rectangles over it)
+    for k, (centre, tv, hx, hy) in enumerate(cuts):
+        r = np.abs(tv) * hy + np.abs(np.array([-tv[1], tv[0]])) * hx          # (the rectangle's extent along each axis)
+        for i in np.flatnonzero((hi >= centre - r).all(axis=1) & (lo <= centre + r).all(axis=1)):
+            hits.setdefault(int(i), []).append(k)
+    if not hits:
+        return lines, boxes
+    out, obox = [], []
+    for i, ln in enumerate(lines):
+        if i not in hits:
+            out.append(ln)
+            obox.append(boxes[i])
+            continue
+        pieces = [pts[ends[i] - cnt[i]:ends[i]]]
+        for k in hits[i]:
+            centre, tv, hx, hy = cuts[k]
+            pieces = [q for p in pieces for q in _cut_out(p, centre, tv, hx, hy)]
+        for p in pieces:
+            la, lo_, _ = sc.frame.enu_to_geodetic(p[:, 0], p[:, 1], np.zeros(len(p)))
+            la, lo_ = np.asarray(la), np.asarray(lo_)
+            out.append((la, lo_) + tuple(ln[2:]))
+            obox.append((la.min(), la.max(), lo_.min(), lo_.max()))
+    return out, np.array(obox, np.float64).reshape(-1, 4)
+
+
+def _name_marks(sc, lines, boxes, polys, stands, site=None):
+    """([(lat (k,), lon (k,), colour, layer)], boxes (n, 4), lines, line boxes) of the taxiways' location markings (ICAO: the name of the taxiway the
+    pilot is on: a black box, a yellow ring in it, yellow capitals NAME_TEXT tall) in polygons()'s form, memoized on the scene: on every
+    named way (one whose `ref` the font can draw: at most NAME_MAX characters of A-Z, 0-9) before each junction with a way of another
+    name and before each runway holding position (_approaches), for each direction of travel, the letters upright as the pilot reads them
+    looking along the way, the box centred on the way's centreline (its black fill, the "text" material, drawn over the line), its
+    centre NAME_BEFORE_M before the junction (the first of them for which all of the following hold):
+      * the box grown by NAME_PAVE_M lies on paving (a taxiway's or an apron's pad: the scene's rings; the way's own width too),
+      * it is NAME_RUNWAY_M clear of a runway's pad and not under a stand's aircraft or a building,
+      * it is NAME_CLEAR_M clear of every other mark (`lines`, `polys`: the other ways' centrelines, lead-ins, bars, boxes, edge lines;
+        the way's own centreline, within NAME_OWN_M, runs under it) and of the names already placed,
+      and none where the same name is already placed for that direction of travel within NAME_REPEAT_M.
+    The approaches are taken in the order of their positions, so every list of cells that holds a place makes the same marks there.
+    The lines come back with the parts inside a box grown by NAME_CUT_M cut out (_cut_lines: the centreline and its border run under the
+    box on paper, but the paint writes no depth and the engine's order of the translucent materials in a mesh is not ours to rely on: in game
+    the yellow showed through the black); the ring and the letters stay."""
+    st = [c for c in stands if c.mode in LEAD_MODES]
+    key = ("names", stand_key(st), None if site is None else site.key)
+    got = sc.memo.get(key)
+    if got is not None:
+        return got
+    runs = [(xy, wi, _name_of(sc.ways[wi][2])) for xy, _cls, wi, _f, _l in _mapped_runs(sc) if len(xy) >= 2]
+    runs = [r + (_name_text(r[2]),) for r in runs]       # (xy, way index, name, the text painted: "" for none)
+    cands = _approaches(runs, sc) if any(r[3] for r in runs) else []
+    placed = []                                         # (name, centre, unit direction of travel, box (4, 2))
+    if cands:
+        def xy_of(la, lo):
+            e, n, _ = sc.frame.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), np.zeros(len(la)))
+            return np.stack([np.asarray(e), np.asarray(n)], 1)
+        # (every other mark: the ribbons as segments with their half widths, the polygons and the footprints as rings with extents)
+        sa = sb = np.zeros((0, 2))
+        shw = np.zeros(0)
+        if lines:
+            pts = xy_of(np.concatenate([x[0] for x in lines]), np.concatenate([x[1] for x in lines]))
+            cnt = np.array([len(x[0]) for x in lines])
+            last = np.cumsum(cnt) - 1
+            keep = np.ones(len(pts), bool)
+            keep[last] = False                          # (a line's last point starts no segment)
+            idx = np.flatnonzero(keep)
+            sa, sb = pts[idx], pts[idx + 1]
+            shw = np.repeat(np.array([x[2] for x in lines], np.float64) / 2.0, cnt - 1)
+        slo, shi = np.minimum(sa, sb), np.maximum(sa, sb)
+        rings = [xy_of(x[0], x[1]) for x in polys if len(x[0]) >= 3]
+        if site is not None:
+            rings += list(_site_xy(sc, site)[2])
+        rlo = np.array([r.min(axis=0) for r in rings]).reshape(-1, 2)
+        rhi = np.array([r.max(axis=0) for r in rings]).reshape(-1, 2)
+        pave = list(sc.memo.get("apron_rings") or ()) + list(sc.memo.get("pad_rings") or ())
+        plo = np.array([r.min(axis=0) for r in pave]).reshape(-1, 2)
+        phi = np.array([r.max(axis=0) for r in pave]).reshape(-1, 2)
+        rsegs = [(np.stack([xy[:-1], xy[1:]], axis=1), half) for xy, half, _ref in sc.runways if len(xy) >= 2]
+        envelopes = []                                  # (nose, unit direction, length, span) of the stands' aircraft
+        if st:
+            e, nn, _ = sc.frame.geodetic_to_enu(np.array([c.lat for c in st]), np.array([c.lon for c in st]), np.zeros(len(st)))
+            for c, x, y in zip(st, np.asarray(e, np.float64), np.asarray(nn, np.float64)):
+                u = _unit2(c.ne, c.nn)
+                envelopes.append((np.array([x, y]) + u * (pa.SPECS[c.kind][0] / 2.0), u, pa.SPECS[c.kind][0], pa.SPECS[c.kind][1]))
+        h = NAME_TEXT
+        at = [standmarks.at(runs[i][0], min(max(s - dr * NAME_BEFORE_M[0], 0.0), _length(runs[i][0])))[0] for i, s, dr in cands]
+        la, lo, _ = sc.frame.enu_to_geodetic(np.array([q[0] for q in at]), np.array([q[1] for q in at]), np.zeros(len(at)))
+        for k in sorted(range(len(cands)), key=lambda k: (round(float(la[k]) * 1e6), round(float(lo[k]) * 1e6), runs[cands[k][0]][3], cands[k][2])):
+            i, s, dr = cands[k]
+            P, wi, _name, text = runs[i]
+            total, half = _length(P), sc.ways[wi][1] / 2.0
+            bw, bh = standmarks.text_width(text, h) + 2.0 * NAME_MARGIN_M, h + 2.0 * NAME_MARGIN_M
+            for before in NAME_BEFORE_M:
+                mid = s - dr * before                   # (the box's centre along the run)
+                if mid - bh / 2.0 < 0.0 or mid + bh / 2.0 > total:
+                    continue
+                tan = (standmarks.at(P, mid + bh / 2.0)[0] - standmarks.at(P, mid - bh / 2.0)[0]) * dr
+                if float(dnp.hypot(*tan)) < _EPS:
+                    continue
+                tv = tan / float(dnp.hypot(*tan))
+                left = np.array([-tv[1], tv[0]])
+                centre = standmarks.at(P, mid)[0]               # (on the centreline: cut out of the box, _cut_lines)
+                if any(t == text and float(dnp.dot(d, tv)) > 0.5 and float(dnp.hypot(*(centre - q))) < NAME_REPEAT_M for t, q, d, _b in placed):
+                    break                               # (the name is there for this direction already: not here at all)
+                box = standmarks.box(centre, tv, bw, bh)
+                grown = standmarks.box(centre, tv, bw + 2.0 * NAME_PAVE_M, bh + 2.0 * NAME_PAVE_M)
+                probe = np.vstack([grown, (grown + np.roll(grown, -1, axis=0)) / 2.0, centre[None]])
+                ok = _pts_dist(probe, np.stack([P[:-1], P[1:]], axis=1)) <= half - NAME_PAVE_M       # (the way's own width ...
+                for r in np.flatnonzero((plo <= probe.max(axis=0)).all(axis=1) & (phi >= probe.min(axis=0)).all(axis=1)):    # ... or a pad)
+                    if not ok.all():
+                        ok[np.flatnonzero(~ok)[polygon.contains_points(pave[r], probe[~ok])]] = True
+                if not ok.all():
+                    continue
+                if any(float(_pts_dist(box, segs).min()) < half_r + NAME_RUNWAY_M for segs, half_r in rsegs):
+                    continue
+                if envelopes and _under_aircraft(np.vstack([box, box[:1]]), envelopes, NAME_CLEAR_M):
+                    continue
+                clear = standmarks.box(centre, tv, bw + 2.0 * NAME_CLEAR_M, bh + 2.0 * NAME_CLEAR_M)
+                near = np.flatnonzero((shi >= clear.min(axis=0) - shw[:, None]).all(axis=1) &
+                                      (slo <= clear.max(axis=0) + shw[:, None]).all(axis=1))
+                if len(near):                           # (the way's own centreline and its border run under the box: not paint in the way)
+                    segs = np.stack([P[:-1], P[1:]], axis=1)
+                    near = near[(_pts_dist(sa[near], segs) > NAME_OWN_M) | (_pts_dist(sb[near], segs) > NAME_OWN_M)]
+                if len(near):                           # (a ribbon across the box grown by its half width: in the box's own axes)
+                    ac, ec = sa[near] - centre, sb[near] - centre
+                    qa = np.stack([dnp.vecdot(ac, -left[None]), dnp.vecdot(ac, tv[None])], 1)
+                    qe = np.stack([dnp.vecdot(ec, -left[None]), dnp.vecdot(ec, tv[None])], 1)
+                    ex, ey = bw / 2.0 + NAME_CLEAR_M + shw[near], bh / 2.0 + NAME_CLEAR_M + shw[near]
+                    tx0, tx1 = _slab(qa[:, 0], qe[:, 0] - qa[:, 0], -ex, ex)
+                    ty0, ty1 = _slab(qa[:, 1], qe[:, 1] - qa[:, 1], -ey, ey)
+                    if bool((np.maximum(np.maximum(tx0, ty0), 0.0) <= np.minimum(np.minimum(tx1, ty1), 1.0)).any()):
+                        continue
+                hit = np.flatnonzero((rhi >= clear.min(axis=0)).all(axis=1) & (rlo <= clear.max(axis=0)).all(axis=1))
+                if _hits_blocks(clear, [(rings[r], (rlo[r][0], rlo[r][1], rhi[r][0], rhi[r][1])) for r in hit]):
+                    continue
+                if _hits_blocks(clear, [(b[3], (b[3][:, 0].min(), b[3][:, 1].min(), b[3][:, 0].max(), b[3][:, 1].max())) for b in placed]):
+                    continue
+                placed.append((text, centre, tv, box))
+                break
+    plist, pboxes = [], []                              # (the black box in the "under" layer, its yellow ring and the yellow letters over it)
+    solid = np.array([standmarks.solid()] * 4)           # (the ring: quads of the font sheet's opaque cell)
+    for text, centre, tv, box in placed:
+        inset, ring = NAME_RING_M
+        w, hh = float(dnp.hypot(*(box[1] - box[0]))), float(dnp.hypot(*(box[3] - box[0])))
+        for pts, colour, layer, *uv in ([(box, "text", "glyph")] +
+                                        [(q, "font_yellow", "glyph", solid) for q in standmarks.outline(centre, tv, w - 2.0 * inset, hh - 2.0 * inset, ring)] +
+                                        [(q, "font_yellow", "glyph", uv) for q, uv in standmarks.text_quads(text, centre, tv, NAME_TEXT)]):
+            la, lo, _ = sc.frame.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
+            la, lo = np.asarray(la), np.asarray(lo)
+            plist.append((la, lo, colour, layer, *uv))
+            pboxes.append((la.min(), la.max(), lo.min(), lo.max()))
+    cuts = []                                           # (the boxes grown by NAME_CUT_M: centre, unit direction, half width, half height)
+    for _text, centre, tv, box in placed:
+        cuts.append((centre, tv, float(dnp.hypot(*(box[1] - box[0]))) / 2.0 + NAME_CUT_M, float(dnp.hypot(*(box[3] - box[0]))) / 2.0 + NAME_CUT_M))
+    lines, boxes = _cut_lines(sc, lines, boxes, cuts)
+    got = sc.memo[key] = (plist, np.array(pboxes, np.float64).reshape(-1, 4), lines, boxes)
+    return got
+
+
 def _all_marks(feats_list, stands, site=None):
-    """(lines, boxes, polys, pboxes): _marks plus the stands' lead-ins and marks (_lead_lines)."""
+    """(lines, boxes, polys, pboxes): _marks plus the stands' lead-ins and marks (_lead_lines) and the taxiways' names (_name_marks)."""
     lines, boxes = _marks(feats_list)
-    sc = scene(feats_list) if stands else None
+    sc = scene(feats_list) if len(lines) else None
     if sc is None:
         return lines, boxes, [], np.zeros((0, 4))
+    stands = list(stands or ())
     extra, xboxes, polys, pboxes = _lead_lines(sc, stands, site)
-    return (lines + extra, np.concatenate([boxes, xboxes]) if extra else boxes, polys, pboxes)
+    if extra:
+        lines, boxes = lines + extra, np.concatenate([boxes, xboxes])
+    names, nboxes, lines, boxes = _name_marks(sc, lines, boxes, polys, stands, site)
+    if names:
+        polys, pboxes = polys + names, np.concatenate([pboxes, nboxes])
+    return lines, boxes, polys, pboxes
 
 
 def _cached(feats, slot, build):
@@ -2336,7 +2632,7 @@ def tile_chunks_md(md, keys, frame, tx, ty, elev, tile_bbox):
 # of the mesh): the black borders first, the red marks, the yellow and white paint, the black lettering last
 LAYER_OF = {"under": "edge", "red": "gutter", "paint": "apaint", "glyph": "glyph"}   # (roadmesh.LIFT: 1, 1.5, 3, 4.5 mm)
 LAYER_ORDER = ("under", "red", "paint", "glyph")     # (the order of the chunks: the road mesh draws a material's triangles in one primitive, in
-                                                     # the order the materials first appear: the lettering's ("text") after the yellow's)
+                                                     # the order the materials first appear: the lettering's (font) after the yellow's)
 RIBBON_LAYER = {"black": "under", "red": "red"}
 
 
@@ -2426,6 +2722,7 @@ def tile_chunks(feats_list, frame, tx, ty, elev, tile_bbox, stands=None, site=No
                 i += m
     pnear = inside(pboxes) if len(polys) else []
     groups = {("yellow", "paint"): list(edge_quads)} if len(near) and edge_quads else {}
+    uvs = {}
     if len(pnear) or groups:
         lat = np.concatenate([polys[i][0] for i in pnear] or [np.zeros(0)])
         lon = np.concatenate([polys[i][1] for i in pnear] or [np.zeros(0)])
@@ -2442,10 +2739,13 @@ def tile_chunks(feats_list, frame, tx, ty, elev, tile_bbox, stands=None, site=No
             if (p[:, 0].max() < x0 or p[:, 0].min() > x1 or p[:, 1].max() < y0 or p[:, 1].min() > y1) or m < 3:
                 continue
             groups.setdefault((polys[i][2], polys[i][3]), []).extend(_quads(p))
+            if len(polys[i]) > 4:                       # (a character: its quad's UVs into the font sheet, one per corner)
+                uvs.setdefault((polys[i][2], polys[i][3]), []).append(np.asarray(polys[i][4], np.float64))
         for (colour, layer), quads in sorted(groups.items(), key=lambda kv: (LAYER_ORDER.index(kv[0][1]), kv[0][0])):
             look = airportgrade.MARK_LOOK.get(colour, airportgrade.MARK_LOOK["white"])
             pts = np.concatenate(quads)
             out.append({"m": look["m"], "w": 0.0, "tl": look["tl"], "p": look["p"], "layer": LAYER_OF[layer],
                         "poly": [[round(float(x), 3), round(float(y), 3)] for x, y in pts],
-                        "uvq": [[0.5, 0.5]] * len(pts), "quads": 1, "n": []})
+                        "uvq": [[round(float(u), 6), round(float(v), 6)] for u, v in np.concatenate(uvs[(colour, layer)])]
+                        if (colour, layer) in uvs else [[0.5, 0.5]] * len(pts), "quads": 1, "n": []})
     return out

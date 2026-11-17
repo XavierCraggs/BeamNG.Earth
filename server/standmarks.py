@@ -1,33 +1,49 @@
-"""Stand marking shapes: the bold stencil segment font and the plane geometry of the painted boxes of an aircraft stand
-(taxiwaymarks draws them: the stand number and the type labels on yellow boxes, the red hatched box under a jet bridge, the
+"""Stand marking shapes: the lettering and the plane geometry of the painted boxes of an aircraft stand (taxiwaymarks draws them:
+the stand number and the type labels on yellow boxes, the taxiways' names on black ones, the red hatched box under a jet bridge, the
 service road, the equipment parking). Pure: metres in a plane, no ground; every shape is a convex polygon (k, 2), counter-clockwise
 or not (the road mesh turns its triangles up), or a polyline.
 
-Font: digits as seven segments, letters as fourteen (the usual display tables), every segment its own bar with a gap between
-them, as a stencil: text_polys(text, centre, up, h, cw, t, g, cg) -> [(4, 2)], a block of characters h tall and cw wide (cg
-apart), the bars t wide with g between them, centred on `centre`, upright as read looking along `up` (left to right across it).
+Font: DejaVu Sans Bold as a texture (tools/make_font_atlas.py: the sheet's table is data/paint_font.json). A character is ONE quad with
+its UVs into that sheet (the sheet is the letters' opacity, the paint's material gives the colour: line_runway_font_black / _yellow /
+_white): text_quads(text, centre, up, h) -> [(corners (4, 2), uvs (4, 2))], a line of capitals h tall (h = the capital's height),
+centred on `centre` (its ink, the capitals' middle: a letter with a tail hangs below), upright as read looking along `up` (left to right
+across it). The corners run top left, top right, bottom right, bottom left as the reader sees them, and the UVs the same way round
+(the sheet's V runs up: markings.arrow_quad's convention, its picture upright when the quad's top is ahead).
 """
+import json
+import os
+
 import numpy as np
 
 import dnp
 
 _EPS = 1e-9
-# The segments of a character cell: a top, b upper right, c lower right, d bottom, e lower left, f upper left, g the middle
-# bar (l and r its halves), j / m the top / bottom middle verticals, 1 2 3 4 the diagonals (upper left, upper right, lower left,
-# lower right) to the centre.
-_CODES = {
-    "0": "abcdef", "1": "bc", "2": "abged", "3": "abcdg", "4": "bcfg", "5": "acdfg", "6": "acdefg", "7": "abc", "8": "abcdefg",
-    "9": "abcdfg",
-    "A": "abcefg", "B": "abcdrjm", "C": "adef", "D": "abcdjm", "E": "adefg", "F": "aefg", "G": "acdefr", "H": "bcefg",
-    "I": "adjm", "J": "bcde", "K": "efl24", "L": "def", "M": "bcef12", "N": "bcef14", "O": "abcdef", "P": "abefg",
-    "Q": "abcdef4", "R": "abefg4", "S": "acdfg", "T": "ajm", "U": "bcdef", "V": "ef32", "W": "bcef34", "X": "1234",
-    "Y": "12m", "Z": "ad23",
-}
+_FONT = None
+
+
+def _table():
+    global _FONT
+    if _FONT is None:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "paint_font.json"), encoding="utf-8") as f:
+            _FONT = json.load(f)
+    return _FONT
+
+
+def font():
+    """The table of the font sheet: {character: {"uv": [u0, v0, u1, v1], "box": [x0, y0, x1, y1], "adv": advance}} (capital heights: tools/
+    make_font_atlas.py's docstring), read once."""
+    return _table()["chars"]
 
 
 def supported(text):
-    """Can the font draw every character of text (A-Z, 0-9; a non-empty text)?"""
-    return bool(text) and all(ch in _CODES for ch in text)
+    """Can the font draw every character of text (a non-empty text of the sheet's characters: A-Z, 0-9, - / . and the arrows)?"""
+    return bool(text) and all(ch in font() for ch in text)
+
+
+def solid():
+    """The (u, v) of a texel in the font sheet's cell that is opaque all over: a quad with this at all four corners is a solid fill in the
+    letters' material (the ring of a name's box)."""
+    return _table()["solid"]
 
 
 def _unit(v):
@@ -35,65 +51,39 @@ def _unit(v):
     return v / max(float(dnp.hypot(v[0], v[1])), _EPS)
 
 
-def _rect(x0, y0, x1, y1):
-    return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], np.float64)
+def _pens(text):
+    """([pen position of each character (capital heights)], left, right): where the characters stand along the baseline and the extent
+    of their quads' ink from the first pen position."""
+    f, x, pens = font(), 0.0, []
+    for ch in text:
+        pens.append(x)
+        x += f[ch]["adv"]
+    return pens, f[text[0]]["box"][0], pens[-1] + f[text[-1]]["box"][2]
 
 
-def _segment(s, w, h, t, g):
-    """The polygon (4, 2) of segment s in a w x h cell (x right, y up from its lower left corner), bars t wide, gaps g."""
-    x0, x1 = t + g, w - t - g                           # (the horizontals run between the verticals)
-    lo, hi = h / 2.0 - t / 2.0, h / 2.0 + t / 2.0       # the middle bar's edges
-    c0, c1 = w / 2.0 - t / 2.0, w / 2.0 + t / 2.0
-    if s == "a":
-        return _rect(x0, h - t, x1, h)
-    if s == "d":
-        return _rect(x0, 0.0, x1, t)
-    if s == "g":
-        return _rect(x0, lo, x1, hi)
-    if s == "l":
-        return _rect(x0, lo, w / 2.0 - g / 2.0, hi)
-    if s == "r":
-        return _rect(w / 2.0 + g / 2.0, lo, x1, hi)
-    if s == "b":
-        return _rect(w - t, hi + g, w, h)
-    if s == "c":
-        return _rect(w - t, 0.0, w, lo - g)
-    if s == "e":
-        return _rect(0.0, 0.0, t, lo - g)
-    if s == "f":
-        return _rect(0.0, hi + g, t, h)
-    if s == "j":
-        return _rect(c0, hi + g, c1, h - t - g)
-    if s == "m":
-        return _rect(c0, t + g, c1, lo - g)
-    corner = {"1": (t, h - t), "2": (w - t, h - t), "3": (t, t), "4": (w - t, t)}[s]
-    p, c = np.array(corner), np.array([w / 2.0, h / 2.0])
-    d = _unit(c - p)
-    gd = g + t * 0.6
-    a, b = p + d * gd, c - d * gd
-    n = np.array([-d[1], d[0]]) * (t / 2.0)
-    return np.array([a + n, b + n, b - n, a - n])
+def text_width(text, h):
+    """The width of `text` at capital height h: from the first character's left to the last one's right."""
+    _pens_, left, right = _pens(text)
+    return (right - left) * h
 
 
-def text_width(n, cw, cg):
-    """The width of n characters."""
-    return n * cw + (n - 1) * cg
-
-
-def text_polys(text, centre, up, h, cw, t, g, cg):
-    """The bars (4, 2) of `text` (supported()), as the module docstring says; [] for a text the font lacks."""
+def text_quads(text, centre, up, h):
+    """The quads of `text` (supported()), as the module docstring says: [(corners (4, 2), uvs (4, 2))]; [] for a text the font lacks."""
     if not supported(text):
         return []
     up = _unit(up)
     right = np.array([up[1], -up[0]])
     c = np.asarray(centre, np.float64)
-    left0 = -text_width(len(text), cw, cg) / 2.0
+    pens, left, edge = _pens(text)
+    mid = (left + edge) / 2.0
     out = []
-    for i, ch in enumerate(text):
-        x0 = left0 + i * (cw + cg)
-        for s in _CODES[ch]:
-            p = _segment(s, cw, h, t, g)
-            out.append(c + right[None] * (x0 + p[:, 0:1]) + up[None] * (p[:, 1:2] - h / 2.0))
+    for pen, ch in zip(pens, text):
+        g = font()[ch]
+        x0, y0, x1, y1 = g["box"]
+        u0, v0, u1, v1 = g["uv"]
+        local = [(x0, y1), (x1, y1), (x1, y0), (x0, y0)]                 # (top left, top right, bottom right, bottom left)
+        corners = np.array([c + right * ((pen + x - mid) * h) + up * ((y - 0.5) * h) for x, y in local])
+        out.append((corners, np.array([[u0, v1], [u1, v1], [u1, v0], [u0, v0]])))
     return out
 
 

@@ -70,10 +70,15 @@ def metres(stroke):
 
 def filled(f, stands, site=None):
     """[(polygon (k, 2) m east / north of the frame's origin, colour, layer)] of the stands' filled marks."""
+    return [x[:3] for x in filled_uv(f, stands, site)]
+
+
+def filled_uv(f, stands, site=None):
+    """[(polygon, colour, layer, UVs (k, 2) or None)]: a character of the lettering is a quad with its UVs into the font sheet."""
     out = []
-    for la, lo, colour, layer in tm.polygons([f], list(stands), site):
+    for la, lo, colour, layer, *uv in tm.polygons([f], list(stands), site):
         e, n, _ = FRAME.geodetic_to_enu(la, lo, np.zeros(len(la)))
-        out.append((np.stack([e, n], 1), colour, layer))
+        out.append((np.stack([e, n], 1), colour, layer, uv[0] if uv else None))
     return out
 
 
@@ -544,7 +549,8 @@ class LeadIns(Unpaved):
 
     def test_wing_tip_lines_and_a_stand_number(self):
         f = feats(self.LANE)
-        L, span = self.NARROW[0], self.NARROW[1]
+        L = self.NARROW[0]
+        span = self.NARROW[1]
         nose = 60.0 + L / 2.0
         c = craft("narrow", 0.0, 60.0, 0.0, 1.0)
         base = tm.strokes([f], [c])
@@ -556,28 +562,30 @@ class LeadIns(Unpaved):
             self.assertAlmostEqual(x0, x1, 2)                                   # parallel to the axis ...
             self.assertAlmostEqual(y1 - y0, tm.WING_LINE_LEN_M, 2)              # ... 20 m long, ending level with the bar
             self.assertAlmostEqual(y1, nose, 2)
-        number = lambda ref: [p for p, colour, layer in filled(f, [c._replace(ref=ref)])
+        number = lambda ref: [(p, uv) for p, colour, layer, uv in filled_uv(f, [c._replace(ref=ref)])
                               if layer == "glyph" and p[:, 1].min() > nose + 1.0 and abs(p[:, 0].mean()) < 4.0]
         glyph = number("12")
-        self.assertGreater(len(glyph), 6)                                           # (a 1 and a 2: their segments)
-        pts = np.concatenate(glyph)
-        h, cw, _bar, _gap, cg = tm.NUM_TEXT
-        low = nose + tm.STOP_BAR_W_M / 2.0 + tm.NUM_AFTER_M + tm.NUM_MARGIN[1]
-        self.assertAlmostEqual(pts[:, 1].min(), low, 2)                             # past the stop bar ...
-        self.assertAlmostEqual(pts[:, 1].max(), low + h, 2)                         # ... 1.5 m tall characters ...
-        half = (2 * cw + cg) / 2.0
-        self.assertAlmostEqual(pts[:, 0].max(), half, 2)                            # ... centred on the axis (the 2's right edge)
+        self.assertEqual(len(glyph), 2)                                             # (a 1 and a 2: a quad each, with its UVs)
+        pts = np.concatenate([p for p, _uv in glyph])
+        h = tm.NUM_TEXT
+        mid = nose + tm.STOP_BAR_W_M / 2.0 + tm.NUM_AFTER_M + tm.NUM_MARGIN[1] + h / 2.0
+        self.assertAlmostEqual((pts[:, 1].min() + pts[:, 1].max()) / 2.0, mid, delta=0.05)   # past the stop bar, the capitals centred on the box ...
+        self.assertTrue(h < pts[:, 1].max() - pts[:, 1].min() < 1.2 * h)                            # ... 1.5 m tall (a quad's margin a few % of that),
+        self.assertAlmostEqual(float(pts[:, 0].max() + pts[:, 0].min()), 0.0, 2)                    # ... centred on the axis
+        self.assertAlmostEqual(float(np.ptp(pts[:, 0])), standmarks.text_width("12", h), 2)
         boxes = [p for p, colour, layer in filled(f, [c._replace(ref="12")]) if colour == "yellow" and layer == "paint"
                  and p[:, 1].min() > nose + 1.0 and abs(p[:, 0].mean()) < 0.01]
         self.assertEqual(len(boxes), 1)                                             # on one yellow box, the text's size and a margin
-        self.assertAlmostEqual(np.ptp(boxes[0][:, 0]), 2 * cw + cg + 2 * tm.NUM_MARGIN[0], 2)
+        self.assertAlmostEqual(np.ptp(boxes[0][:, 0]), standmarks.text_width("12", h) + 2 * tm.NUM_MARGIN[0], 2)
         self.assertAlmostEqual(np.ptp(boxes[0][:, 1]), h + 2 * tm.NUM_MARGIN[1], 2)
         black = [p for p, colour, layer in filled(f, [c._replace(ref="12")]) if layer == "under" and p[:, 1].min() > nose + 1.0
                  and abs(p[:, 0].mean()) < 0.01]
         self.assertEqual(len(black), 1)                                             # ... over a black one BORDER_M larger each side
         self.assertAlmostEqual(np.ptp(black[0][:, 0]) - np.ptp(boxes[0][:, 0]), 2 * tm.BORDER_M, 2)
         self.assertEqual(number("12@"), [])                                         # (no font for an @: none)
-
+        for p, uv in glyph:                                                         # (black letters: the font sheet over the black paint)
+            self.assertEqual(uv.shape, (4, 2))
+            self.assertTrue(((uv >= 0.0) & (uv <= 1.0)).all())
     def test_stop_bars_per_kind_with_generic_labels_and_a_border(self):
         f = feats(self.LANE)
         for kind, want in (("wide", ["WIDE", "A320", "AT72"]), ("narrow", ["A320", "AT72", "C172"]), ("turboprop", ["AT72", "C172"])):
@@ -596,9 +604,9 @@ class LeadIns(Unpaved):
             for lab in labels:
                 inner = [p for p, colour, layer in at if layer == "glyph" and abs(p[:, 0].mean() - lab[:, 0].mean()) < 1.0
                          and abs(p[:, 1].mean() - lab[:, 1].mean()) < 0.45]
-                self.assertGreater(len(inner), 8)
+                self.assertEqual(len(inner), 4)                                     # (a quad a character of a four-letter code)
                 pts = np.concatenate(inner)
-                self.assertLessEqual(pts[:, 1].max() - pts[:, 1].min(), tm.LABEL_TEXT[0] + 1e-3)
+                self.assertLessEqual(pts[:, 1].max() - pts[:, 1].min(), tm.LABEL_TEXT * 1.25)
                 self.assertGreaterEqual(pts[:, 0].min(), lab[:, 0].min())           # (the text is inside its box)
                 self.assertLessEqual(pts[:, 0].max(), lab[:, 0].max())
             for p in bars:                                                          # every bar has its black border under it
@@ -706,57 +714,51 @@ class LeadSpine(Unpaved):
 
 
 class StandFont(unittest.TestCase):
-    """The bold stencil segment font (standmarks)."""
-    SPEC = tm.NUM_TEXT
+    """The lettering (standmarks): DejaVu Sans Bold from a texture sheet, a quad with UVs for each character."""
+    H = tm.NUM_TEXT
 
-    def bars(self, text, up=(0.0, 1.0)):
-        h, cw, bar, gap, cg = self.SPEC
-        return standmarks.text_polys(text, np.zeros(2), np.array(up), h, cw, bar, gap, cg)
+    def quads(self, text, up=(0.0, 1.0)):
+        return standmarks.text_quads(text, np.zeros(2), np.array(up), self.H)
 
-    def test_every_character_is_inside_its_cell(self):
-        h, cw, bar, gap, cg = self.SPEC
-        for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789":
-            got = self.bars(ch)
-            self.assertTrue(got, ch)
-            pts = np.concatenate(got)
-            self.assertGreaterEqual(pts[:, 0].min(), -cw / 2.0 - 1e-9, ch)
-            self.assertLessEqual(pts[:, 0].max(), cw / 2.0 + 1e-9, ch)
-            self.assertGreaterEqual(pts[:, 1].min(), -h / 2.0 - 1e-9, ch)
-            self.assertLessEqual(pts[:, 1].max(), h / 2.0 + 1e-9, ch)
-            for p in got:
-                self.assertEqual(p.shape, (4, 2))
+    def test_every_character_is_one_undistorted_quad_with_its_cell_of_the_sheet(self):
+        table = standmarks.font()
+        for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/.":
+            got = self.quads(ch)
+            self.assertEqual(len(got), 1, ch)
+            corners, uv = got[0]
+            self.assertEqual((corners.shape, uv.shape), ((4, 2), (4, 2)))
+            self.assertTrue(((uv >= 0.0) & (uv <= 1.0)).all(), ch)
+            w, h = float(np.ptp(corners[:, 0])), float(np.ptp(corners[:, 1]))
+            self.assertAlmostEqual(w / h, np.ptp(uv[:, 0]) / np.ptp(uv[:, 1]), 3, ch)            # (the sheet is square: no stretch)
+            self.assertAlmostEqual(h, (table[ch]["box"][3] - table[ch]["box"][1]) * self.H, 5, ch)
+        self.assertTrue(standmarks.supported("A\u2197"))
         self.assertFalse(standmarks.supported("A@"))
-        self.assertEqual(self.bars("a?"), [])
+        self.assertEqual(self.quads("a?"), [])
 
-    def test_seven_segment_digits_and_their_stencil_gaps(self):
-        h, cw, bar, gap, cg = self.SPEC
-        self.assertEqual([len(self.bars(d)) for d in "0123456789"], [6, 2, 5, 5, 4, 5, 6, 3, 7, 6])
-        for d in "0123456789":                              # (bars never touch: at least the gap between any two, axis-aligned)
-            got = self.bars(d)
-            for i, a in enumerate(got):
-                for b in got[i + 1:]:
-                    sep = max(b[:, 0].min() - a[:, 0].max(), a[:, 0].min() - b[:, 0].max(),
-                              b[:, 1].min() - a[:, 1].max(), a[:, 1].min() - b[:, 1].max())
-                    self.assertGreaterEqual(sep, gap - 1e-9, d)
-        self.assertAlmostEqual(min(float(np.ptp(p[:, 0])) for p in self.bars("1")), bar, 6)       # (a vertical bar is one bar wide)
+    def test_the_corners_and_uvs_run_top_left_top_right_bottom_right_bottom_left_and_the_text_is_upright(self):
+        corners, uv = self.quads("H")[0]
+        self.assertTrue(corners[0, 1] > corners[3, 1] and corners[1, 1] > corners[2, 1])         # (the top corners over the bottom ones)
+        self.assertTrue(corners[0, 0] < corners[1, 0] and corners[3, 0] < corners[2, 0])         # (left to right)
+        self.assertTrue(uv[0, 1] > uv[3, 1] and uv[0, 0] < uv[1, 0])                             # (the sheet's V runs up: the top has the larger V)
+        np.testing.assert_allclose(uv[0], [uv[3, 0], uv[1, 1]])
 
-    def test_text_is_centred_upright_and_rotates_with_up(self):
-        h, cw, bar, gap, cg = self.SPEC
-        pts = np.concatenate(self.bars("H13"))
-        half = standmarks.text_width(3, cw, cg) / 2.0
-        self.assertAlmostEqual(pts[:, 0].max(), half, 6)
-        self.assertAlmostEqual(pts[:, 0].min(), -half, 6)
-        self.assertAlmostEqual(pts[:, 1].max(), h / 2.0, 6)
+    def test_text_is_centred_and_rotates_with_up(self):
+        h = self.H
+        pts = np.concatenate([q for q, _uv in self.quads("H13")])
+        self.assertAlmostEqual(float(pts[:, 0].max() + pts[:, 0].min()), 0.0, 6)                  # (centred on the point)
+        self.assertAlmostEqual(float(pts[:, 0].max() - pts[:, 0].min()), standmarks.text_width("H13", h), 6)
+        self.assertAlmostEqual(float(pts[:, 1].max() + pts[:, 1].min()), 0.0, 3)                  # (the capitals' middle on it)
         up = np.array([-0.6, 0.8])
         right = np.array([up[1], -up[0]])
-        q = np.concatenate(self.bars("H13", up=up))
-        self.assertAlmostEqual((q @ right).max(), half, 6)                  # (left to right across up)
-        self.assertAlmostEqual((q @ up).max(), h / 2.0, 6)
+        q = np.concatenate([q for q, _uv in self.quads("H13", up=up)])
+        self.assertAlmostEqual(float((q @ right).max()), standmarks.text_width("H13", h) / 2.0, 6)   # (left to right across up)
+        self.assertAlmostEqual(float((q @ up).max() + (q @ up).min()), 0.0, 3)
+        xs = [float(c.mean(axis=0) @ right) for c, _uv in self.quads("H13", up=up)]
+        self.assertEqual(xs, sorted(xs))                                                         # (the characters in reading order)
 
-    def test_the_stand_number_box_is_about_4_by_2_m(self):
-        h, cw, bar, gap, cg = self.SPEC
-        w, hh = standmarks.text_width(3, cw, cg) + 2 * tm.NUM_MARGIN[0], h + 2 * tm.NUM_MARGIN[1]
-        self.assertAlmostEqual(w, 4.05, 2)
+    def test_the_stand_number_box_is_about_5_by_2_m(self):
+        w, hh = standmarks.text_width("B13", self.H) + 2 * tm.NUM_MARGIN[0], self.H + 2 * tm.NUM_MARGIN[1]
+        self.assertTrue(4.5 < w < 6.0, w)
         self.assertAlmostEqual(hh, 2.0, 2)
 
 
@@ -814,7 +816,7 @@ class ServiceRoad(unittest.TestCase):
         walls = [np.array(self.wall(-15.0), np.float64)]
         lead = np.array([[10.0, 30.0], [10.0, -20.0]])                # a line across the road at x = 10
         ribbons, polys = tm._service_roads(items, [(list(range(5)), "row")], walls, [lead])
-        tri = [p for p, colour, layer in polys if len(p) == 3]
+        tri = [x[0] for x in polys if len(x[0]) == 3]
         self.assertEqual(len(tri), 2 * tm.GIVEWAY_N)                  # a row each side of the crossing
         c = np.array([p.mean(axis=0) for p in tri])
         self.assertEqual(int((c[:, 0] > 10.0).sum()), tm.GIVEWAY_N)
@@ -822,13 +824,13 @@ class ServiceRoad(unittest.TestCase):
         self.assertTrue(all(abs(abs(x - 10.0) - (tm.LEAD_W_M / 2 + tm.GIVEWAY_AT_M + tm.GIVEWAY_H_M / 3)) < 0.2 for x in c[:, 0]))
         self.assertLess(np.ptp(c[:, 1]), tm.ROAD_W_M)                 # across the road's width
         none = tm._service_roads(items, [(list(range(5)), "row")], walls, [np.array([[10.0, 30.0], [10.0, 20.0]])])[1]
-        self.assertFalse([p for p, colour, layer in none if len(p) == 3])        # (a line that does not reach it: none)
+        self.assertFalse([x for x in none if len(x[0]) == 3])        # (a line that does not reach it: none)
 
     def test_equipment_boxes_between_stands_on_the_wall_side(self):
         items = [(np.array([x, 5.0]), np.array([0.0, -1.0]), self.NARROW[0], self.NARROW[1]) for x in self.XS]
         walls = [np.array(self.wall(-15.0), np.float64)]
         ribbons, polys = tm._service_roads(items, [(list(range(5)), "row")], walls, [])
-        thin = [p for p, colour, layer in polys if colour == "white" and 0.1 < min(np.ptp(p[:, 0]), np.ptp(p[:, 1])) < 0.2
+        thin = [p for p, colour, layer, *_ in polys if colour == "white" and 0.1 < min(np.ptp(p[:, 0]), np.ptp(p[:, 1])) < 0.2
                 and max(np.ptp(p[:, 0]), np.ptp(p[:, 1])) > 2.5]       # (the long outline bars of a box, not the dashes)
         self.assertGreater(len(thin), 8)
         pts = np.concatenate([p for p in thin if np.ptp(p[:, 1]) > 0.25 or np.ptp(p[:, 0]) > 5.0])
@@ -955,7 +957,7 @@ class NoseMarksClearOfBuildings(unittest.TestCase):
         f = feats(taxiway((-150, 60), (150, 60), cls="taxilane"))
         st = craft("narrow", 0.0, 5.0 + self.NARROW[0] / 2.0, 0.0, -1.0)._replace(ref="B13")     # (the nose at y = 5, toward the terminal: -y)
         site = site_of_metres([], blocks=blocks)
-        return [(p, c, l) for p, c, l in filled(f, [st], site) if c in ("yellow", "text", "black")]
+        return [(p, c, l) for p, c, l in filled(f, [st], site) if c in ("yellow", "font_black", "black")]
 
     @staticmethod
     def overlaps(poly, rect):
@@ -1007,12 +1009,36 @@ class GlyphOverBox(unittest.TestCase):
         self.assertGreater(lift["mark"], lift["gutter"])
         self.assertGreater(lift["gutter"], lift["edge"])                          # (the borders under all)
         look = airportgrade.MARK_LOOK
-        self.assertNotEqual(look["text"]["m"], look["yellow"]["m"])
-        self.assertNotEqual(look["text"]["m"], look["black"]["m"])                # (not the borders' material, which draws first)
+        fonts = [look[k]["m"] for k in ("font_black", "font_yellow", "font_white")]
+        self.assertEqual(len(set(fonts)), 3)
+        for k in fonts:
+            self.assertNotIn(k, (look["yellow"]["m"], look["black"]["m"], look["text"]["m"]))
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels", "beamng_earth",
                             "art", "runway", "main.materials.json")
         with open(path, encoding="utf-8") as fh:
-            self.assertIn(look["text"]["m"], json.load(fh))                       # (and the mod has it)
+            mats = json.load(fh)
+        for k, colour in (("font_black", "black"), ("font_yellow", "yellow"), ("font_white", "white")):
+            stage = mats[look[k]["m"]]["Stages"][0]                                # (the mod has them: the paint's colour under the sheet's opacity)
+            self.assertTrue(stage["baseColorMap"].endswith(f"t_paint_{colour}_b.color.dds"), stage)
+            self.assertTrue(stage["opacityMap"].endswith("bne_paint_font_o.data.dds"), stage)
+            self.assertFalse(mats[look[k]["m"]]["translucentZWrite"])
+        self.assertIn(look["text"]["m"], mats)
+
+    def test_the_sheet_is_a_power_of_two_in_the_texture_manifest_and_the_table_is_inside_it(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod")
+        with open(os.path.join(root, "texture_sources", "textures.json"), encoding="utf-8") as fh:
+            entry = json.load(fh)["textures"]["levels/beamng_earth/art/runway/bne_paint_font_o.data.dds"]
+        self.assertEqual(entry["format"], "BC4")                                   # (one channel: the opacity)
+        from PIL import Image
+        with Image.open(os.path.join(root, "texture_sources", *entry["source"].split("/"))) as im:
+            side = im.size[0]
+            self.assertEqual(im.size, (side, side))
+            self.assertEqual(side & (side - 1), 0)
+            solid = standmarks._table()["solid"]
+            self.assertEqual(im.convert("L").getpixel((int(solid[0] * side), int((1.0 - solid[1]) * side))), 255)    # (the solid cell is solid)
+        for ch, g in standmarks.font().items():
+            u0, v0, u1, v1 = g["uv"]
+            self.assertTrue(0.0 <= u0 < u1 <= 1.0 and 0.0 <= v0 < v1 <= 1.0, ch)
 
     def test_polygons_glyphs_lie_inside_a_yellow_box(self):
         f = feats(taxiway((-120, 0), (100, 0), cls="taxilane"))
@@ -1020,12 +1046,11 @@ class GlyphOverBox(unittest.TestCase):
         got = filled(f, [c])
         glyphs = [p for p, colour, layer in got if layer == "glyph"]
         self.assertTrue(glyphs)
-        self.assertEqual({colour for _p, colour, layer in got if layer == "glyph"}, {"text"})
+        self.assertEqual({colour for _p, colour, layer in got if layer == "glyph"}, {"font_black"})
         boxes = [p for p, colour, layer in got if colour == "yellow" and layer == "paint"]
         for g in glyphs:
             self.assertTrue(any(g[:, 0].min() >= b[:, 0].min() - 1e-6 and g[:, 0].max() <= b[:, 0].max() + 1e-6
                                 and g[:, 1].min() >= b[:, 1].min() - 1e-6 and g[:, 1].max() <= b[:, 1].max() + 1e-6 for b in boxes))
-
     def test_a_tiles_chunks_list_the_lettering_after_the_yellow_and_higher(self):
         import roadmesh
         f = feats(taxiway((-120, 0), (300, 0), cls="taxilane"))
@@ -1033,7 +1058,7 @@ class GlyphOverBox(unittest.TestCase):
         side = 256.0
         bbox = lambda tx, ty: (tx * side, ty * side, (tx + 1) * side, (ty + 1) * side)
         chunks = tm.tile_chunks([f], FRAME, 0, 0, lambda la, lo: np.full(len(la), 7.0), bbox, [c])
-        text, yellow = airportgrade.MARK_LOOK["text"]["m"], airportgrade.MARK_LOOK["yellow"]["m"]
+        text, yellow = airportgrade.MARK_LOOK["font_black"]["m"], airportgrade.MARK_LOOK["yellow"]["m"]
         order = []
         for ch in chunks:
             if ch["m"] not in order:
@@ -1053,6 +1078,12 @@ class GlyphOverBox(unittest.TestCase):
         # (the chunks of the polygons come in the layers' order: the border under, then the paint, then the lettering)
         layers = [ch["layer"] for ch in chunks if ch.get("poly")]
         self.assertEqual(layers, sorted(layers, key=lambda x: ["edge", "gutter", "apaint", "glyph"].index(x)))
+        # (the paint writes no depth: the mesh's material order decides what is on top, whatever order the chunks of a tile
+        # came in; the black borders, the red, the yellow and white, the lettering)
+        po = roadmesh.PAINT_ORDER
+        rank = [po[airportgrade.MARK_LOOK[k]["m"]] for k in ("black", "red", "yellow", "text")]
+        self.assertEqual(rank, sorted(set(rank)))
+        self.assertEqual(po[airportgrade.MARK_LOOK["white"]["m"]], po[yellow])
 
 
 def circumradii(P, min_side=0.2):
@@ -1638,6 +1669,246 @@ class NetworkAudit(unittest.TestCase):
         self.assertLess(got.sbends[0][2], 15.0)
         self.assertEqual(len(tm.audit([s_curve(40.0, 0.6)], rmin=15.0).sbends), 0)
         self.assertEqual(len(tm.audit([s_curve(8.0, 0.8)], rmin=8.0).sbends), 0)       # (the radius of a light aircraft: not tight)
+
+
+class TaxiwayNames(unittest.TestCase):
+    """The taxiways' names (ICAO location markings, as in the photographs): a black box with a thin yellow ring and the name in yellow
+    letters, centred on the way's yellow centreline (the box is drawn over it), upright for the pilot looking along the way, 20 to 30 m
+    before each junction with a way of another name and before a runway's holding position; none on an unnamed way, off the paving or
+    over other paint."""
+    def setUp(self):
+        patcher = mock.patch.object(tm, "_edge_lines", lambda sc, feats_list: [])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def named(self, ref, *pts, **kw):
+        tags = dict(kw.pop("tags", {}))
+        if ref:
+            tags["ref"] = ref
+        return taxiway(*pts, tags=tags, **kw)
+
+    def marks(self, f):
+        """[(box (4, 2), ring [(4, 2)], letters [(quad (4, 2), UVs (4, 2))])] of the names painted on the Features f, in metres east /
+        north of the frame's origin: the black fill ("text" material), the yellow ring and the letters (both in the yellow font
+        material; the ring's quads sit on the sheet's solid cell), over it."""
+        got = filled_uv(f, [])
+        boxes = [p for p, colour, layer, _uv in got if (colour, layer) == ("text", "glyph")]
+        rest = [x for x in got if (x[1], x[2]) == ("font_yellow", "glyph")]
+        self.assertEqual(len(got), len(boxes) + len(rest), "a name is a black box, a ring and letters, nothing else")
+        solid = np.array(standmarks.solid())
+        out = []
+        for b in boxes:
+            lo, hi = b.min(axis=0) - 1e-3, b.max(axis=0) + 1e-3
+            mine = [x for x in rest if (x[0].min(axis=0) >= lo).all() and (x[0].max(axis=0) <= hi).all()]
+            ring = [p for p, _c, _l, uv in mine if np.allclose(uv, solid)]
+            letters = [(p, uv) for p, _c, _l, uv in mine if not np.allclose(uv, solid)]
+            self.assertEqual(len(ring), 4, "a ring of four bars")
+            self.assertTrue(letters, "letters in every box")
+            out.append((b, ring, letters))
+        self.assertEqual(sum(len(r) + len(m) for _b, r, m in out), len(rest), "every ring and letter is in a box")
+        return out
+
+    def cross(self, *extra, ref_a="A", ref_b="B"):
+        return feats(self.named(ref_a, (-300, 0), (300, 0)), self.named(ref_b, (0, -300), (0, 300)), *extra)
+
+    def test_two_named_ways_crossing_have_a_name_on_each_approach_centred_on_the_line_and_upright(self):
+        got = self.marks(self.cross())
+        self.assertEqual(len(got), 4, "a name on each of the four approaches")
+        h = tm.NAME_TEXT
+        for name, up in (("A", (1, 0)), ("A", (-1, 0)), ("B", (0, 1)), ("B", (0, -1))):
+            up = np.array(up, np.float64)
+            left = np.array([-up[1], up[0]])
+            near = [x for x in got if float(np.hypot(*(x[0].mean(axis=0) - (-up * 25.0)))) < 6.0]
+            self.assertEqual(len(near), 1, f"{name} travelling {tuple(up)}")
+            box, ring, letters = near[0]
+            centre = box.mean(axis=0)
+            self.assertTrue(20.0 <= -float(centre @ up) <= 30.0, centre)           # (20 to 30 m before the crossing)
+            self.assertAlmostEqual(float(centre @ left), 0.0, 2)                    # (centred on the centreline)
+            # the box: the name's width and the capitals' height with a margin all round, the ring inside it
+            bw, bh = standmarks.text_width(name, h) + 2.0 * tm.NAME_MARGIN_M, h + 2.0 * tm.NAME_MARGIN_M
+            self.assertAlmostEqual(float(np.ptp(box @ left)), bw, 2)
+            self.assertAlmostEqual(float(np.ptp(box @ up)), bh, 2)
+            inset, width = tm.NAME_RING_M
+            outer = np.concatenate(ring)
+            self.assertAlmostEqual(float(np.ptp(outer @ left)), bw - 2.0 * inset, 2)
+            self.assertAlmostEqual(float(np.ptp(outer @ up)), bh - 2.0 * inset, 2)
+            self.assertTrue(all(abs(float(np.ptp(r @ left)) - width) < 1e-2 or abs(float(np.ptp(r @ up)) - width) < 1e-2 for r in ring))
+            # upright for the pilot: the font's quads read looking along `up`, with the UVs of the sheet
+            want = standmarks.text_quads(name, centre, up, h)
+            self.assertEqual(len(letters), len(want))
+            for (p, uv), (q, quv) in zip(letters, want):
+                np.testing.assert_allclose(p, q, atol=0.02)
+                np.testing.assert_allclose(uv, quv, atol=1e-6)
+
+    def test_the_box_is_over_the_centreline_and_clear_of_every_other_paint_and_the_paving_edge(self):
+        f = self.cross()
+        got = self.marks(f)
+        strokes = [np.array(metres(s)).reshape(2, 2) for s in tm.strokes([f])]
+        for box, _ring, _letters in got:
+            centre = box.mean(axis=0)
+            on_a = abs(float(centre[1])) < 1e-2
+            other = [seg for seg in strokes if (float(np.abs(seg[:, 0]).max()) < 1e-2) == on_a]      # (the other way's strokes)
+            self.assertTrue(other)
+            for seg in other:
+                near = min(float(tm._pt_segs(q, seg[:1], seg[1:]).min()) for q in box)
+                self.assertGreaterEqual(near, 0.2)
+            across = np.minimum(np.abs(box[:, 0]), np.abs(box[:, 1]))             # (inside the 15 m wide pad of the way it is on)
+            self.assertLessEqual(float(across.max()), aeroways.TAXIWAY_M / 2.0 - tm.NAME_PAVE_M + 1e-3)
+
+    def test_an_unnamed_way_gets_none_and_meets_no_name(self):
+        self.assertEqual(self.marks(self.cross(ref_b="")), [])                  # (A across an unnamed way: nothing to tell apart)
+        self.assertEqual(self.marks(self.cross(ref_b="A")), [])                 # (two ways of one name)
+        for unpaintable in ("TAXIWAY", "A;B"):                                  # (a name over NAME_MAX characters, one the font cannot draw: still
+            got = self.marks(self.cross(ref_b=unpaintable))                     # a name, so A has its two approaches' and B, painted nothing, none)
+            self.assertEqual(len(got), 2)
+            self.assertTrue(all(abs(float(b.mean(axis=0)[1])) < 1e-2 for b, _r, _m in got))
+        got = self.marks(self.cross(self.named("", (-300, 80), (300, 80))))     # (a third way across both, unnamed: no name on it, none for it)
+        self.assertEqual(len(got), 4)
+        for box, _ring, _letters in got:
+            self.assertGreater(abs(float(box.mean(axis=0)[1] - 80.0)), 8.0)
+
+    def test_a_name_is_none_where_it_would_touch_other_paint_or_leave_the_paving(self):
+        lane = self.named("", (-300, 2.3), (300, 2.3), cls="taxilane")          # (an unnamed lane's yellow line 2.3 m off A: across A's box
+        with mock.patch.object(tm, "NAME_TEXT", 3.0), mock.patch.object(tm, "NAME_MARGIN_M", 0.6):   # at 3 m capitals: nearer, the
+            got = self.marks(self.cross(lane))                                  # lane is smoothed into A's own line)
+        self.assertEqual(len(got), 2, "A's two names have the lane's line across them; B's keep theirs")
+        self.assertTrue(all(abs(float(b.mean(axis=0)[0])) < 1e-2 and abs(float(b.mean(axis=0)[1])) > 15.0 for b, _r, _m in got))
+        narrow = feats(self.named("A", (-300, 0), (300, 0), tags={"width": "5"}), self.named("B", (0, -300), (0, 300)))
+        got = self.marks(narrow)
+        self.assertEqual(len(got), 2, "none on A where its pad is 5 m wide (the box is wider): B's two")
+        self.assertTrue(all(abs(float(b.mean(axis=0)[0])) < 1e-2 and abs(float(b.mean(axis=0)[1])) > 15.0 for b, _r, _m in got))
+
+    def test_the_same_name_is_not_repeated_within_60_m_for_one_direction(self):
+        f = feats(self.named("A", (-300, 0), (300, 0)), self.named("B", (0, -300), (0, 300)), self.named("C", (40, -300), (40, 300)))
+        got = sorted(float(b.mean(axis=0)[0]) for b, _r, _m in self.marks(f) if abs(float(b.mean(axis=0)[1])) < 8.0)      # (the names on A)
+        self.assertEqual(len(got), 2, "one A for each direction, though B and C are 40 m apart")
+        self.assertAlmostEqual(got[0], -25.0, delta=5.0)                          # (before B going east, before B going west: the farther C's dropped)
+        self.assertAlmostEqual(got[1], 25.0, delta=5.0)
+
+    def test_a_name_before_a_runway_holding_position_toward_the_runway(self):
+        f = feats(runway((-1000, 0), (1000, 0)), self.named("A", (0, 400), (0, 0)))
+        got = self.marks(f)
+        self.assertEqual(len(got), 1)
+        centre = got[0][0].mean(axis=0)
+        self.assertGreaterEqual(float(centre[1]), tm.HOLD_DIST_M + 20.0)       # (before the hold line, coming from the far end)
+        self.assertLessEqual(float(centre[1]), tm.HOLD_DIST_M + 30.0)
+        self.assertAlmostEqual(float(centre[0]), 0.0, 2)                       # (on the centreline)
+        up = np.array([0.0, -1.0])                                             # (heading south, toward the runway)
+        for (p, uv), (q, quv) in zip(got[0][2], standmarks.text_quads("A", centre, up, tm.NAME_TEXT)):
+            np.testing.assert_allclose(p, q, atol=0.02)
+
+    def test_the_names_are_in_the_tiles_chunks_a_black_fill_then_the_yellow_ring_and_letters_with_their_uvs(self):
+        f = self.cross()
+        bbox = lambda tx, ty: (tx * 256.0 - 128.0, ty * 256.0 - 128.0, tx * 256.0 + 128.0, ty * 256.0 + 128.0)      # (the crossing's tile: no box on its edge)
+        chunks = tm.tile_chunks([f], FRAME, 0, 0, lambda la, lo: np.full(len(la), 7.0), bbox)
+        look = airportgrade.MARK_LOOK
+        fill = [c for c in chunks if c["m"] == look["text"]["m"] and c.get("poly")]
+        font = [c for c in chunks if c["m"] == look["font_yellow"]["m"] and c.get("poly")]
+        self.assertTrue(fill and font)
+        self.assertEqual({c["layer"] for c in fill + font}, {"glyph"})
+        self.assertEqual(sum(len(c["poly"]) for c in fill), 4 * 4, "four boxes of four corners")
+        self.assertEqual(sum(len(c["poly"]) for c in font), 4 * (4 + 1) * 4, "a ring of four bars and a letter in each")
+        for c in font:
+            self.assertEqual(len(c["uvq"]), len(c["poly"]))
+            self.assertTrue(all(0.0 <= u <= 1.0 and 0.0 <= v <= 1.0 for u, v in c["uvq"]))
+        self.assertTrue(any(c["uvq"] != [[0.5, 0.5]] * len(c["uvq"]) for c in font))
+        import roadmesh
+        po = roadmesh.PAINT_ORDER
+        self.assertGreater(po[look["font_yellow"]["m"]], po[look["text"]["m"]])      # (the letters and ring drawn over the fill, which hides the centreline)
+        self.assertGreater(po[look["text"]["m"]], po[look["yellow"]["m"]])
+
+    def ribbons(self, f):
+        """[(polyline (k, 2) m east / north, kind)] of the marks' lines of the Features f (the centrelines and their black borders)."""
+        out = []
+        for la, lo, _w, kind, _c in tm._all_marks([f], [], None)[0]:
+            e, n, _ = FRAME.geodetic_to_enu(la, lo, np.zeros(len(la)))
+            out.append((np.stack([e, n], 1), kind))
+        return out
+
+    @staticmethod
+    def samples(P, step=0.02):
+        """Points along the polyline P every `step` m (its vertices too)."""
+        out = [P[:1]]
+        for a, b in zip(P[:-1], P[1:]):
+            k = max(1, int(np.ceil(float(np.hypot(*(b - a))) / step)))
+            out.append(a + (b - a) * (np.arange(1, k + 1) / k)[:, None])
+        return np.concatenate(out)
+
+    def test_the_centreline_and_its_border_are_cut_out_of_a_name_box_and_resume_on_both_sides(self):
+        """The user, 2026-11-17: the yellow centreline showed through the black box in game (the draw order of the paint was no help):
+        no line of the way runs inside the box grown by NAME_CUT_M, and it goes on either side of it."""
+        f = self.cross()
+        boxes = [b for b, _r, _m in self.marks(f)]
+        self.assertEqual(len(boxes), 4)
+        ribbons = self.ribbons(f)
+        kinds = {k for _p, k in ribbons}
+        self.assertIn(tm.CENTRE_KIND, kinds)
+        for box in boxes:
+            centre = box.mean(axis=0)
+            up = (np.array([1.0, 0.0]) if abs(float(centre[1])) < 1e-2 else np.array([0.0, 1.0]))      # (the way's axis: A east-west, B north-south)
+            hx = float(np.ptp(box @ np.array([-up[1], up[0]]))) / 2.0 + tm.NAME_CUT_M
+            hy = float(np.ptp(box @ up)) / 2.0 + tm.NAME_CUT_M
+            left = np.array([-up[1], up[0]])
+            for P, kind in ribbons:
+                q = self.samples(P)
+                inside = (np.abs((q - centre) @ left) < hx - 1e-6) & (np.abs((q - centre) @ up) < hy - 1e-6)
+                self.assertFalse(inside.any(), f"{kind} runs through the box at {centre}")
+            for kind in (tm.CENTRE_KIND, tm.UNDER_KIND):            # (a line on each side of it: just past the cut, 1 m on)
+                mine = [P for P, k in ribbons if k == kind and float(np.abs((P - centre) @ left).max()) < 1e-2]      # (this way's own)
+                if kind == tm.UNDER_KIND and not mine:
+                    continue                                        # (the border is on aprons only)
+                for side in (-1.0, 1.0):
+                    for off in (hy + 0.01, hy + 1.0):
+                        at = centre + up * side * off
+                        near = min(float(tm._pt_segs(at, P[:-1], P[1:]).min()) for P in mine)
+                        self.assertLess(near, 1e-3, f"{kind} {side:+} {off}")
+
+    def test_without_the_cut_the_line_runs_through_the_box(self):
+        """(the check above bites: the same Features with the cut switched off have the line in the box)"""
+        f = self.cross()
+        box = self.marks(f)[0][0]
+        centre = box.mean(axis=0)
+        with mock.patch.object(tm, "_cut_lines", lambda sc, lines, boxes, cuts: (lines, boxes)):
+            uncut = self.ribbons(self.cross())
+        up = np.array([1.0, 0.0]) if abs(float(centre[1])) < 1e-2 else np.array([0.0, 1.0])
+        left = np.array([-up[1], up[0]])
+        self.assertTrue(any(bool(((np.abs((self.samples(P) - centre) @ left) < 1e-2) & (np.abs((self.samples(P) - centre) @ up) < 1.0)).any())
+                            for P, _k in uncut))
+
+    def test_the_cut_pieces_are_the_same_every_time_and_in_the_tiles_chunks_none_runs_through_a_box(self):
+        one, two = self.ribbons(self.cross()), self.ribbons(self.cross())
+        self.assertEqual(len(one), len(two))
+        for (p, k), (q, l) in zip(one, two):
+            self.assertEqual(k, l)
+            np.testing.assert_array_equal(p, q)
+        for P, _k in one:
+            self.assertGreaterEqual(len(P), 2)
+            self.assertGreaterEqual(float(np.hypot(*np.diff(P, axis=0).T).sum()), tm.PIECE_MIN_M)       # (no zero-length piece)
+        f = self.cross()
+        boxes = [b for b, _r, _m in self.marks(f)]
+        bbox = lambda tx, ty: (tx * 256.0 - 128.0, ty * 256.0 - 128.0, tx * 256.0 + 128.0, ty * 256.0 + 128.0)
+        chunks = [c for c in tm.tile_chunks([f], FRAME, 0, 0, lambda la, lo: np.full(len(la), 7.0), bbox) if not c.get("poly")]
+        self.assertTrue(chunks)
+        for c in chunks:
+            self.assertGreaterEqual(len(c["n"]), 2)
+            nodes = np.array(c["n"])[:, :2]
+            ends = float(np.hypot(*np.diff(nodes, axis=0).T).sum())
+            self.assertGreater(ends, 0.0)
+            for box in boxes:
+                centre = box.mean(axis=0)
+                up = np.array([1.0, 0.0]) if abs(float(centre[1])) < 1e-2 else np.array([0.0, 1.0])
+                left = np.array([-up[1], up[0]])
+                q = self.samples(nodes)
+                inside = ((np.abs((q - centre) @ left) < float(np.ptp(box @ left)) / 2.0 - 1e-3) &
+                          (np.abs((q - centre) @ up) < float(np.ptp(box @ up)) / 2.0 + tm.NAME_CUT_M - 1e-3))
+                self.assertFalse(inside.any())
+
+    def test_the_same_names_whatever_the_order_of_the_ways(self):
+        a, b = self.named("A", (-300, 0), (300, 0)), self.named("B", (0, -300), (0, 300))
+        one = sorted(tuple(np.round(p.mean(axis=0), 2)) for p, _c, _l in filled(feats(a, b), []))
+        two = sorted(tuple(np.round(p.mean(axis=0), 2)) for p, _c, _l in filled(feats(b, a), []))
+        self.assertTrue(one)
+        self.assertEqual(one, two)
 
 
 if __name__ == "__main__":

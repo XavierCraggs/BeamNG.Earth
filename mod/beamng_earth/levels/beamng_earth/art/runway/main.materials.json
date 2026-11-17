@@ -20,7 +20,7 @@
   "annotation": "SOLID_LINE",
   "castShadows": false,
   "translucent": true,
-  "translucentZWrite": true,
+  "translucentZWrite": false,
   "materialTag0": "RoadAndPath",
   "materialTag1": "beamng_earth"
  },
@@ -45,7 +45,7 @@
   "annotation": "SOLID_LINE",
   "castShadows": false,
   "translucent": true,
-  "translucentZWrite": true,
+  "translucentZWrite": false,
   "materialTag0": "RoadAndPath",
   "materialTag1": "beamng_earth"
  },
@@ -70,7 +70,7 @@
   "annotation": "SOLID_LINE",
   "castShadows": false,
   "translucent": true,
-  "translucentZWrite": true,
+  "translucentZWrite": false,
   "materialTag0": "RoadAndPath",
   "materialTag1": "beamng_earth"
  },
@@ -95,7 +95,7 @@
   "annotation": "SOLID_LINE",
   "castShadows": false,
   "translucent": true,
-  "translucentZWrite": true,
+  "translucentZWrite": false,
   "materialTag0": "RoadAndPath",
   "materialTag1": "beamng_earth"
  },
@@ -120,7 +120,82 @@
   "annotation": "SOLID_LINE",
   "castShadows": false,
   "translucent": true,
-  "translucentZWrite": true,
+  "translucentZWrite": false,
+  "materialTag0": "RoadAndPath",
+  "materialTag1": "beamng_earth"
+ },
+ "line_runway_font_black": {
+  "name": "line_runway_font_black",
+  "mapTo": "line_runway_font_black",
+  "class": "Material",
+  "version": 1.5,
+  "persistentId": "7b1d0c4e-2f63-4a8b-9e51-3c6d8a0f1b31",
+  "Stages": [
+   {
+    "baseColorMap": "/levels/beamng_earth/art/runway/t_paint_black_b.color.dds",
+    "normalMap": "/assets/materials/decalroad/lines/line_white/t_line_white_nm.normal.dds",
+    "opacityMap": "/levels/beamng_earth/art/runway/bne_paint_font_o.data.dds",
+    "roughnessFactor": 0.45
+   },
+   {},
+   {},
+   {}
+  ],
+  "alphaRef": 255,
+  "annotation": "SOLID_LINE",
+  "castShadows": false,
+  "translucent": true,
+  "translucentZWrite": false,
+  "materialTag0": "RoadAndPath",
+  "materialTag1": "beamng_earth"
+ },
+ "line_runway_font_yellow": {
+  "name": "line_runway_font_yellow",
+  "mapTo": "line_runway_font_yellow",
+  "class": "Material",
+  "version": 1.5,
+  "persistentId": "7b1d0c4e-2f63-4a8b-9e51-3c6d8a0f1b32",
+  "Stages": [
+   {
+    "baseColorMap": "/levels/beamng_earth/art/runway/t_paint_yellow_b.color.dds",
+    "normalMap": "/assets/materials/decalroad/lines/line_white/t_line_white_nm.normal.dds",
+    "opacityMap": "/levels/beamng_earth/art/runway/bne_paint_font_o.data.dds",
+    "roughnessFactor": 0.45
+   },
+   {},
+   {},
+   {}
+  ],
+  "alphaRef": 255,
+  "annotation": "SOLID_LINE",
+  "castShadows": false,
+  "translucent": true,
+  "translucentZWrite": false,
+  "materialTag0": "RoadAndPath",
+  "materialTag1": "beamng_earth"
+ },
+ "line_runway_font_white": {
+  "name": "line_runway_font_white",
+  "mapTo": "line_runway_font_white",
+  "class": "Material",
+  "version": 1.5,
+  "persistentId": "7b1d0c4e-2f63-4a8b-9e51-3c6d8a0f1b33",
+  "Stages": [
+   {
+    "baseColorMap": "/levels/beamng_earth/art/runway/t_paint_white_b.color.dds",
+    "normalMap": "/assets/materials/decalroad/lines/line_white/t_line_white_nm.normal.dds",
+    "opacityMap": "/levels/beamng_earth/art/runway/bne_paint_font_o.data.dds",
+    "roughnessFactor": 0.45
+   },
+   {},
+   {},
+   {}
+  ],
+  "alphaRef": 255,
+  "annotation": "SOLID_LINE",
+  "castShadows": false,
+  "translucent": true,
+  "translucentZWrite": false,
   "materialTag0": "RoadAndPath",
   "materialTag1": "beamng_earth"
  }

@@ -35,7 +35,11 @@ RUNWAY_PAD_SHOULDER_M = 1.5    # m of paved shoulder painted each side of a runw
 MARK_LOOK = {"white": {"m": "line_runway_white", "tl": 6.4, "p": 2},      # mod: levels/beamng_earth/art/runway
              "yellow": {"m": "line_runway_yellow", "tl": 6.4, "p": 2},
              "black": {"m": "line_runway_black", "tl": 6.4, "p": 2},      # (the stand marks' borders and lettering, taxiwaymarks)
-             "text": {"m": "line_runway_text", "tl": 6.4, "p": 2},        # (black too: the lettering's own material, drawn after the yellow boxes)
+             "text": {"m": "line_runway_text", "tl": 6.4, "p": 2},        # (black too, drawn after the yellow: the taxiways' name boxes, over their centreline)
+             # (the lettering: the font sheet's opacity over a solid colour, drawn last: tools/make_font_atlas.py, standmarks.text_quads)
+             "font_black": {"m": "line_runway_font_black", "tl": 6.4, "p": 2},
+             "font_yellow": {"m": "line_runway_font_yellow", "tl": 6.4, "p": 2},
+             "font_white": {"m": "line_runway_font_white", "tl": 6.4, "p": 2},
              "red": {"m": "line_runway_red", "tl": 6.4, "p": 2}}          # (the equipment restraint lines and the bridges' hatching)
 
 

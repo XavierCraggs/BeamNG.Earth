@@ -77,6 +77,11 @@ DIRT_EDGE_SLACK = 12.0
 # where the road joins another strip or goes on over a bridge does not fade (roads._strip_open_ends). Anything else in
 # a mesh that has a strip samples the solid middle.
 FADE_PREFIX = ("bne_dirt_", "bne_wear_")   # the materials that fade (dirtroad.materials.json, roadwear.materials.json)
+# the airports' paint (levels/beamng_earth/art/runway: no depth written, as the wear's): drawn last, in this order, so what
+# is painted over what rests on the order, not on the 1-4.5 mm lifts (each triangle follows the ground to FOLLOW_TOL, 2 cm:
+# the black borders came out over the yellow on whole pieces and the stands' lettering under its yellow box, 2026-11-17)
+PAINT_ORDER = {"line_runway_black": 0, "line_runway_red": 1, "line_runway_yellow": 2, "line_runway_white": 2,
+               "line_runway_text": 3, "line_runway_font_black": 4, "line_runway_font_yellow": 4, "line_runway_font_white": 4}
 EDGE_FADE_M = 1.2
 EDGE_FADE_SHARE = 0.38
 END_FADE_M = 14.0
@@ -1437,7 +1442,14 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         P, UV, T = _shared(P, UV, T)
     out =(P - np.asarray(origin, np.float64), T, UV, mats, M)
     if not asphalt and not dirt:
-        return out
+        if sum(m in PAINT_ORDER for m in mats) < 2:
+            return out
+        # (the airports' paint without a strip in the mesh: the sort below was past this return, so a plain airport tile kept the order
+        # the chunks first named the materials in; the user, 2026-11-17: the yellow centreline ran through the taxiway names' black boxes)
+        order = sorted(range(len(mats)), key=lambda j: (PAINT_ORDER.get(mats[j], -1), j))
+        remap = np.empty(len(mats), np.int64)
+        remap[order] = np.arange(len(mats))
+        return out[0], T, UV, [mats[j] for j in order], remap[np.asarray(M, np.int64)]
     # a strip in the mesh: the fade uv for every point (a sixth element: write, plazas.merge), and the strips' materials
     # first, so the markings and anything else translucent in the mesh draw over them (one primitive per material, in
     # the list's order)
@@ -1451,7 +1463,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         out[0][used, 2] -= (LIFT["frontage"] + lift - .001) * (1 - blend)
         fade[used] = np.c_[.001 + .499 * weight, np.full(len(used), .5)]
     order = sorted(range(len(mats)), key=lambda j: (not (mats[j].startswith(FADE_PREFIX)
-                                                        or mats[j] == FRONTAGE_ASPHALT), j))
+                                                        or mats[j] == FRONTAGE_ASPHALT), PAINT_ORDER.get(mats[j], -1), j))
     remap = np.empty(len(mats), np.int64)
     remap[order] = np.arange(len(mats))
     return out[0], T, UV, [mats[j] for j in order], remap[np.asarray(M, np.int64)], fade
