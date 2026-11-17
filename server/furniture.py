@@ -995,10 +995,12 @@ class RoadClearance:
         return True
 
 
-def lamp_lenses(rows):
+def lamp_lenses(rows, mast_group=G_HIGH_MAST_LENS, head_scale=1.0):
     """A lens row [G_LENS, x, y, z, yaw, 1, 1, 0] under each head of every lamp row (LAMP_HEADS, MAPPED_LAMP_HEADS: a
     double arm has two; its scale: the row's height over the catalog's, 1 for both), and a G_GLOW row at the same
-    place. A lantern's lens is its own group (fr_lantern_light), a high mast's G_HIGH_MAST_LENS."""
+    place. A lantern's lens is its own group (fr_lantern_light), a high mast's `mast_group` (G_HIGH_MAST_LENS: the road
+    masts'; the apron masts' own, airsideprops.G_LENS). head_scale is the lens' and glow's size (their rows' height, which
+    trees.lua scales the shapes by, 2.5 at most): 1 a street lamp's head, more a mast's cluster of floodlights."""
     out = []
     for r in rows:
         heads = MAPPED_LAMP_HEADS.get(r[0])
@@ -1010,13 +1012,13 @@ def lamp_lenses(rows):
         a = math.radians(r[4])
         c, s_ = dmath.cos(a), dmath.sin(a)
         k = r[6] / LAMP_H.get(r[0], r[6]) if r[6] else 1.0     # (a scaled lamp: its head scaled alike)
-        group = ("fr_lantern_light" if r[0] == "fr_lantern" else G_HIGH_MAST_LENS if r[0] == "streetlight_high_mast"
+        group = ("fr_lantern_light" if r[0] == "fr_lantern" else mast_group if r[0] == "streetlight_high_mast"
                  else G_LENS)
         for head in heads:
             hx, hy, hz = head[0] * k, head[1] * k, head[2] * k
             yaw = (r[4] + head[3]) % 360. if len(head) > 3 and head[3] else r[4]
             lens = [group, round(r[1] + c * hx - s_ * hy, 2), round(r[2] + s_ * hx + c * hy, 2),
-                    round(r[3] + hz - LENS_DROP_M, 2), yaw, 1.0, 1.0, r[7]]
+                    round(r[3] + hz - LENS_DROP_M, 2), yaw, 1.0, head_scale, r[7]]
             out += [lens, [G_GLOW] + lens[1:]]
     return out
 

@@ -3500,7 +3500,7 @@ class Server:
                     props.extend(airfieldlights.tile_rows(anchor.frame, box, infra_fn,
                                                           lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), elev,
                                                           roads_fn=lambda k: self.mapdata.cell(k, layers=("roads",), kind="demand").layers.get("roads"),
-                                                          buildings_fn=bld_fn))
+                                                          buildings_fn=bld_fn, reach_m=airfieldlights.CENTRE_REACH_M))
                 except Exception as ex:
                     log.warning("airfield lights: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
                 try:   # (a windsock near each runway end: windsocks; along the runway, the wind would freeze in the tile)

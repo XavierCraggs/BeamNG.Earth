@@ -53,6 +53,15 @@ SPECS = {"tug": (-1.45, 1.45, 0.71, 1.8), "cart": (-1.5, 1.5, 0.85, 1.1), "pushb
          "stairs": (-2.8, 3.2, 1.15, 3.4), "container": (-3.03, 3.06, 1.25, 2.59), "cone": (-0.18, 0.18, 0.18, 0.70)}
 VARIANTS = {k: (1 if k == "cone" else 3) for k in GROUPS}       # the models of a group (liveries, container colours)
 MAST_GROUP, MAST_H = "streetlight_high_mast", 18.03             # the stock high mast (worldprops.HIGH_MAST_H)
+# An apron mast's light is its own, not the road masts' (furniture.G_HIGH_MAST_LENS): nightlights.lua gives it a wide, flat
+# floodlight (APRON_MAST) and a share of the light pool kept for it, so a whole apron lights at once (the user, 2026-11-17:
+# real aprons are one even wash of light under every mast, near and far; ours were a few bright puddles by the camera and
+# nothing beyond). Two more rows at each mast: its head a cluster of floodlights (the lens and
+# the glow ball at MAST_HEAD_SCALE, the largest trees.lua pick gives), and a pool of light on the ground (G_POOL: a flat,
+# soft-edged glow, night only, drawn only beyond the real lights' reach: tools/build_apron_glow.py).
+G_LENS, G_POOL = "apron_mast_light", "apron_glow"
+MAST_HEAD_SCALE = 2.5
+POOL_LIFT_M = 0.12              # the pool over the ground under the mast (clear of the pavement's own layers)
 CART_PITCH_M = 3.15             # a cart's centre behind the one before (3.0 m long, 0.15 m between)
 HITCH_M = 3.1                   # the first cart's centre behind the tug's
 BELT_ANGLE_DEG = 50.0           # the belt loader's axis to the fuselage's
@@ -515,7 +524,33 @@ def tile_rows(frame, box, infra_fn, buildings_fn, elev, keys=None):
                round(pa._yaw(float(xe - x), float(yn - y)), 1), 1.0, heights[p.group],
                rank_for(p.group, p.variant) if p.group != MAST_GROUP else 0.0]
         (masts if p.group == MAST_GROUP else rows).append(row)
-    if masts:                                           # (a lens and a glow at each mast's head: they light at night)
+    if masts:                                           # (a lens and a glow at each mast's head, a pool on the ground: they light at night)
         import furniture
-        rows += masts + furniture.lamp_lenses(masts)
+        rows += masts + furniture.lamp_lenses(masts, G_LENS, MAST_HEAD_SCALE) + pool_rows(masts)
     return rows
+
+
+def pool_rows(masts):
+    """A G_POOL row [G_POOL, x, y, z, 0, 1, 1, 0] on the ground under each mast row (a flat glow of light, night only)."""
+    return [[G_POOL, m[1], m[2], round(m[3] + POOL_LIFT_M, 2), 0.0, 1.0, 1.0, 0.0] for m in masts]
+
+
+# The apron masts in the far and skyline tiles (the user, 2026-11-17: distant aprons were dark; the road tiles' props, the lens and
+# glow rows and the pool, reach ~1.3 km): [x, y, z, c] points of each mast's head glow and ground pool, as airfieldlights.far_points'
+# lights beside the tile's street lamps (blockworker._lamps_by_geotile). c is roads.lua's far lamp code: FAR_POOL the pool's group
+# number (FAR_LAMP_GROUPS: after lampglow and the five afl colours), FAR_HEAD the head's glow, which the mod draws as lampglow at
+# the height MAST_HEAD_SCALE (roads.FAR_HEAD_HEIGHT: a point has no scale of its own).
+FAR_POOL, FAR_HEAD = 6, 7
+
+
+def far_points(frame, box, infra_fn, buildings_fn, elev):
+    """tile_rows' mast rows of a far tile (box in frame, or a geotile's OwnedBox: each mast in one tile, the arguments tile_rows')
+    as [x, y, z, c]: a point at each of a mast's head glow rows and one on the ground under it (the pool). [] without apron masts."""
+    import furniture
+    out = []
+    for r in tile_rows(frame, box, infra_fn, buildings_fn, elev):
+        if r[0] == G_POOL:
+            out.append([r[1], r[2], r[3], FAR_POOL])
+        elif r[0] == furniture.G_GLOW:
+            out.append([r[1], r[2], r[3], FAR_HEAD])
+    return out

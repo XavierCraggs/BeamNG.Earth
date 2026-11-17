@@ -1890,7 +1890,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                 props.extend(airfieldlights.tile_rows(frame, box, infra_fn,
                                                       lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), elev,
                                                       roads_fn=lambda k: _s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads"),
-                                                      buildings_fn=bld_fn))
+                                                      buildings_fn=bld_fn, reach_m=airfieldlights.CENTRE_REACH_M))
             except Exception as ex:
                 log.warning("airfield lights: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             try:       # (a windsock near each runway end: windsocks; along the runway, the wind would freeze in the tile)
@@ -3227,14 +3227,19 @@ def far_geo_piece(key, sub, kind="brfar"):
     return f"{FAR_GEO[kind]}_{key}_{sub}.cdae"
 
 
-def _lamps_by_geotile(frame, lamps):
-    """Far lamps [[x, y, z], ...] of frame's world as {road geotile key: {"pivot": m, "rows": [[x, y, z], ...]}}: each
-    in the geotile (geotiles.FAR_Z) its place lies in, in that tile's own frame (the mod's trees.lua places each group
-    there and with it at a rebase); pivot the median height of its rows."""
+def _lamps_by_geotile(frame, lamps, afl=()):
+    """Far lamps [[x, y, z], ...] and airfield lights [[x, y, z, c], ...] (airfieldlights.far_points) of frame's world
+    as {road geotile key: {"pivot": m, "rows": [[x, y, z], ...]}}: each in the geotile (geotiles.FAR_Z) its place lies
+    in, in that tile's own frame (the mod's trees.lua places each group there and with it at a rebase); pivot the
+    median height of its rows. An airfield light's row keeps its c (roads.lua FAR_LAMP_GROUPS), a lamp's has none."""
     import geotiles
-    if not lamps:
+    if not lamps and not len(afl):
         return {}
     p = np.asarray(lamps, np.float64).reshape(-1, 3)
+    c = np.zeros(len(p), np.int64)
+    if len(afl):
+        a = np.asarray(afl, np.float64).reshape(-1, 4)
+        p, c = np.concatenate([p, a[:, :3]]), np.concatenate([c, a[:, 3].astype(np.int64)])
     la, lo, h = geotiles.world_to_geodetic(frame, p)
     la, lo, h = np.asarray(la, np.float64), np.asarray(lo, np.float64), np.asarray(h, np.float64)
     gx, gy = geotiles.tile_of(la, lo, geotiles.FAR_Z)
@@ -3244,8 +3249,63 @@ def _lamps_by_geotile(frame, lamps):
         x, y, z = geotiles.geodetic_to_world(geotiles.frame(kx, ky, geotiles.FAR_Z), la[sel], lo[sel], h[sel])
         rows = np.round(np.c_[np.asarray(x, np.float64), np.asarray(y, np.float64), np.asarray(z, np.float64)],
                         FAR_LAMP_ROUND)
-        out[geotiles.key(kx, ky, geotiles.FAR_Z)] = {"pivot": round(float(np.median(rows[:, 2])), 2),
-                                                      "rows": rows.tolist()}
+        out[geotiles.key(kx, ky, geotiles.FAR_Z)] = {
+            "pivot": round(float(np.median(rows[:, 2])), 2),
+            "rows": [r + [k] if k else r for r, k in zip(rows.tolist(), c[sel].tolist())]}
+    return out
+
+
+# --- far airfield lights: the far and skyline geotiles carry a lit runway's and its taxiways' lights and the apron masts' glow too ------------
+# (airfieldlights.far_points; the user, 2026-11-17: "what lets me see city lights all the way in the distance, but
+# not all the taxiways or to the end of the runway": only the road tiles had them.) In the tile's lamps, rows with a
+# fourth number, shown by the mod with the tile (a tile with no buildings too: roads.lua updateFarGeo).
+
+def _far_afl_cells(frame, box):
+    """The map cells under far geotile box (frame) with a runway in reach of the airfield lights (airfieldlights.
+    TAXI_REACH_M; the database keeps each cell's answer): [] without airport data or none near."""
+    if _s.airports is None:
+        return []
+    import airfieldlights
+    db = _s.airports.db
+    return [k for k in airfieldlights._keys_of(frame, box)[0] if db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M)]
+
+
+def _far_afl_key(tile):
+    """The revisit key's part of far geotile tile for its airfield lights: the rows' format and the airports' snapshot
+    where a runway is in reach of it, nothing elsewhere (the other tiles' keys, so their files, as before)."""
+    if not _far_afl_cells(tile.frame, tile.box):
+        return ()
+    import airfieldlights
+    return (f"afl={airfieldlights.FAR_FORMAT}", str(getattr(_s.airports.db, "snapshot", "?")))
+
+
+def _far_afl(kind, tile, raw, lane="demand"):
+    """The airfield lights and the apron masts' glow and pools [[x, y, z, c], ...] of far geotile tile (airfieldlights.far_points,
+    airsideprops.far_points, in its frame, over the ground raw(lat, lon)), or None when the infrastructure and buildings cells
+    round it are not at hand yet (asked again later). lane: the map data's fetch lane for them (the skyline's "prefetch": never
+    before what the player is near)."""
+    cells = _far_afl_cells(tile.frame, tile.box)
+    if not cells:
+        return []
+    if not _far_cells_ready(("afl", kind, tile.key), cells, ("infrastructure", "buildings", "building_parts"), lane):
+        return None
+    import airfieldlights
+    import airsideprops
+    db = _s.airports.db
+    infra = lambda k: _s.md.cell(k, layers=("infrastructure",), kind="background").layers.get("infrastructure")
+    out = []
+    try:
+        out += airfieldlights.far_points(tile.frame, tile.box, infra,
+                                         lambda k: db.in_cell(k, margin_m=airfieldlights.TAXI_REACH_M), raw)
+    except Exception as ex:             # (decoration: the far buildings' tile is not lost with it, as the road tiles')
+        log.warning("far airfield lights: tile %s: %s: %s", tile.key, type(ex).__name__, ex)
+    try:                                # (the apron masts of an airport in reach: their head glow and ground pool, after the lights)
+        def blds(k):
+            layers = _s.md.cell(k, layers=("buildings", "building_parts"), kind="background").layers
+            return [layers.get("buildings"), layers.get("building_parts")]
+        out += airsideprops.far_points(tile.frame, tile.box, infra, blds, raw)
+    except Exception as ex:
+        log.warning("far apron masts: tile %s: %s: %s", tile.key, type(ex).__name__, ex)
     return out
 
 
@@ -3263,11 +3323,11 @@ FAR_CELLS_WAIT_S = 30.0     # s a far geotile waits for its cells' downloads bef
 _far_cells_miss = {}        # (kind, key) -> monotonic of its first ask with cells missing
 
 
-def _far_cells_ready(tag, keys, layers):
+def _far_cells_ready(tag, keys, layers, lane="demand"):
     """Are all far geotile tag's (cell, layer)s in the map data's cache? If not, their downloads start together (in the
-    map data's own threads, MapData.warm) and the tile is asked again later (None to the tracker): the one far
-    process goes on with tiles whose cells are here. A blocking download per tile there held every far building
-    behind the slowest cell of a first visit (2026-11-07). Past FAR_CELLS_WAIT_S it is built anyway (its cell()
+    map data's own threads, MapData.warm, in its fetch lane) and the tile is asked again later (None to the tracker):
+    the one far process goes on with tiles whose cells are here. A blocking download per tile there held every far
+    building behind the slowest cell of a first visit (2026-11-07). Past FAR_CELLS_WAIT_S it is built anyway (its cell()
     calls fetch what is still missing, or fail as before)."""
     need = [(k, layer) for k in keys for layer in layers if not _s.md.has(k, layer)]
     # (France's measured buildings, bdtopo: their downloads started with the cells', the tile asked again until they
@@ -3283,7 +3343,7 @@ def _far_cells_ready(tag, keys, layers):
     if len(_far_cells_miss) > 4096:
         _far_cells_miss.clear()
     if need:
-        _s.md.warm(need, kind="demand")
+        _s.md.warm(need, kind=lane)
     return False
 
 
@@ -3304,6 +3364,9 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     if kind in ("bldfar", "bldpack"):  # (a pack: the far buildings of a whole skyline square, buildings.PACK_*)
         if not _far_cells_ready((kind, tile.key), *buildingsmod.far_needs(frame, tile, None)):
             return None
+        afl = _far_afl(kind, tile, raw)
+        if afl is None:
+            return None
         items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region, _urban_fn(), _s.widths)
         # (meshes under the 16-bit indices, one shape; a pack's in buildings.PACK_STYLE)
         mesh = (buildingsmod.pack_meshes(items) if kind == "bldpack" else buildingsmod.build_parts(items, lite=True)) \
@@ -3311,6 +3374,9 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
         n = len(items)
     elif kind == "bldsky":
         keys = roadsmod.cells_of_tile(frame, tile, None, margin=0.0)
+        afl = _far_afl(kind, tile, raw, "prefetch")
+        if afl is None:
+            return None
         got = buildingsmod.sky_items(frame, (x0, y0, x1, y1), sorted(keys, key=str), _s.md, raw, lamp_region,
                                      own=tile.box)
         if got is None:
@@ -3373,7 +3439,7 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
         data["pos"] = [x0, y0, 0.0]
         data.update(_shape_info(os.path.join(out_dir, names["shape"]), data["pos"], kind))
         shapes["shape"] = names["shape"]
-    by = _lamps_by_geotile(frame, lamps)
+    by = _lamps_by_geotile(frame, lamps, afl)      # (the airfield lights with the street lamps' rows)
     if by:
         data["lamps"] = by
     return data, shapes, n
@@ -3417,6 +3483,7 @@ def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
     k = revisit.key(kind, "g", tile.key, int(gzoom), _md_versions(kind != "brfar"), lamp_region,
                     _nyc_key(tile.frame, tile.box) if kind in ("bldfar", "bldpack") else None,
                     *((f"style={style}",) if style != "lite" else ()),     # (the lite packs' keys as before)
+                    *(_far_afl_key(tile) if kind in ("bldfar", "bldpack", "bldsky") else ()),   # (airfield lights)
                     *(_bldhz_key(gx, gy) if kind == "bldhz" else ()))
     frame_ll = (float(tile.frame.lat0), float(tile.frame.lon0))
     got = revisit.load(_s.cache_dir, kind, k)

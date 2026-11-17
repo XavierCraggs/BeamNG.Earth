@@ -18,7 +18,10 @@ import os
 
 import build_lamp_glow as lg
 
-AFL_SCALE = 0.6                                     # each ball's size against the lamp glow's, at every level
+# each ball's size against the lamp glow's, at every level (0.6 drew pinpoints from 100 m off at night: the user,
+# 2026-11-17: "make all the lights a bit brighter and larger, the ground based ones": 1.5 times, with nightlights.lua's
+# AFL_NITS_FACTOR; the same detail sizes, so every ball switches 1.5 times farther out and reads 1.5 times larger)
+AFL_SCALE = 0.9
 COLOURS = {                                         # nightlights.lua AFL_COLOURS (its emissive colours; the same)
     "white": (1.0, 0.95, 0.85),
     "green": (0.2, 1.0, 0.35),

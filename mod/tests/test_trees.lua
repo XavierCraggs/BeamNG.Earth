@@ -83,6 +83,19 @@ shape, sc = trees.pick('streetlight_double_arm', 13.76, 0)
 T.check(shape == '/art/shapes/objects/pole_light_double' and sc == 1,
         'double-arm lamp: West Coast stock pole at authored scale')
 T.check(trees.NO_COLLIDE.high_mast_light == true, 'high-mast light markers do not collide')
+-- the apron masts' own lens and the pool of light on the ground under each (server airsideprops.py G_LENS, G_POOL;
+-- tools/build_apron_glow.py): the lens the lamps', the pool a flat shape, neither colliding; the pool night only, seen
+-- far out (the real lights reach 450 m, the glow carries the apron beyond)
+T.check(trees.CATALOG.apron_mast_light and trees.CATALOG.apron_mast_light[1][1] == '/levels/beamng_earth/art/shapes/beamngEarth/bne_lamp_lens'
+        and trees.NO_COLLIDE.apron_mast_light == true and trees.GROUP_MAX_M.apron_mast_light == 800, "the apron masts' lens: the lamp lens, no collision")
+T.check(trees.CATALOG.apron_glow and #trees.CATALOG.apron_glow == 1 and trees.CATALOG.apron_glow[1][2] == 1.0
+        and trees.CATALOG.apron_glow[1][1] == '/levels/beamng_earth/art/shapes/beamngEarth/bne_apron_pool', 'the apron pool catalogued, a 1 x shape')
+T.check(trees.NO_COLLIDE.apron_glow == true and trees.groupOff.apron_glow == true, 'the apron pool never collides, off until night')
+T.check(trees.GROUP_MAX_M.apron_glow >= 2500, 'the apron pool drawn far out')
+local apronShape, apronScale = trees.pick('apron_glow', 1.0, 0)
+T.check(apronShape:find('bne_apron_pool', 1, true) ~= nil and apronScale == 1, 'the pool at its authored size')
+_, apronScale = trees.pick('lampglow', 2.5, 0)
+T.check(math.abs(apronScale - 2.5) < 1e-9, "a mast head's glow at 2.5 times a lamp's (the largest pick gives)")
 -- the airfield lights' glow groups (server airfieldlights.py GROUPS; tools/build_airfield_lights.py), as the lamps' glow:
 -- a one-metre shape each, never colliding, drawn far out, off until nightlights.lua turns them on at dusk
 for _, c in ipairs({ 'white', 'green', 'red', 'blue', 'yellow' }) do
@@ -91,7 +104,8 @@ for _, c in ipairs({ 'white', 'green', 'red', 'blue', 'yellow' }) do
   T.check(e and #e == 1 and e[1][1] == '/levels/beamng_earth/art/shapes/beamngEarth/bne_afl_' .. c and e[1][2] == 1.0,
           g .. ' catalogued: a 1 m glow shape')
   T.check(trees.NO_COLLIDE[g] == true, g .. ' never collides')
-  T.check(trees.GROUP_MAX_M[g] == 4000, g .. ' shown out to 4 km')
+  T.check(trees.GROUP_MAX_M[g] == trees.GROUP_MAX_M.lampglow and trees.GROUP_MAX_M[g] == 6000,
+          g .. ' shown as far as the street lamps (6 km: the far and skyline tiles carry them)')
   T.check(trees.groupOff[g] == true, g .. ' off until night')
 end
 
