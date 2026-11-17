@@ -129,6 +129,9 @@ mod decisions;
 mod lidarz;
 mod paintlist;
 mod nearcross;
+mod standpaths;
+mod aerofillets;
+mod pagates;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -2375,17 +2378,23 @@ fn seg_dist_min(line: PyReadonlyArray2<f64>, px: f64, py: f64) -> f64 {
 #[pyfunction]
 fn contains_points<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, pts: PyReadonlyArray2<'py, f64>)
                         -> Bound<'py, PyArray1<bool>> {
-    let r = ring.as_array();
-    let p = pts.as_array();
-    let (n, m) = (r.nrows(), p.nrows());
+    let (r, p) = (ring.as_array(), pts.as_array());
+    let rv: Vec<[f64; 2]> = (0..r.nrows()).map(|i| [r[[i, 0]], r[[i, 1]]]).collect();
+    let pv: Vec<[f64; 2]> = (0..p.nrows()).map(|i| [p[[i, 0]], p[[i, 1]]]).collect();
+    contains_points_vec(&rv, &pv).into_pyarray(py)
+}
+
+/// contains_points on plain points (standpaths.rs's paving test calls it too): the crossings in horizontal bands.
+pub(crate) fn contains_points_vec(r: &[[f64; 2]], p: &[[f64; 2]]) -> Vec<bool> {
+    let (n, m) = (r.len(), p.len());
     let mut out = vec![false; m];
     if n < 3 || m == 0 {
-        return out.into_pyarray(py);
+        return out;
     }
     let (mut ex0, mut ey0, mut elo, mut ehi, mut esl) = (vec![], vec![], vec![], vec![], vec![]);
     for i in 0..n {
-        let (x0, y0) = (r[[i, 0]], r[[i, 1]]);
-        let (x1, y1) = (r[[(i + 1) % n, 0]], r[[(i + 1) % n, 1]]);
+        let (x0, y0) = (r[i][0], r[i][1]);
+        let (x1, y1) = (r[(i + 1) % n][0], r[(i + 1) % n][1]);
         if y0 == y1 {
             continue;
         }
@@ -2397,12 +2406,12 @@ fn contains_points<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, pts: 
     }
     let ne = ex0.len();
     if ne == 0 {
-        return out.into_pyarray(py);
+        return out;
     }
     let (mut bx0, mut bx1, mut by0, mut by1) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
     for i in 0..n {
-        bx0 = bx0.min(r[[i, 0]]); bx1 = bx1.max(r[[i, 0]]);
-        by0 = by0.min(r[[i, 1]]); by1 = by1.max(r[[i, 1]]);
+        bx0 = bx0.min(r[i][0]); bx1 = bx1.max(r[i][0]);
+        by0 = by0.min(r[i][1]); by1 = by1.max(r[i][1]);
     }
     let nb = 512usize.min(1usize.max(ne / 4));
     let mut h = (by1 - by0) / nb as f64;
@@ -2418,7 +2427,7 @@ fn contains_points<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, pts: 
         }
     }
     for j in 0..m {
-        let (x, y) = (p[[j, 0]], p[[j, 1]]);
+        let (x, y) = (p[j][0], p[j][1]);
         if !(x >= bx0 && x <= bx1 && y >= by0 && y <= by1) {
             continue;
         }
@@ -2431,7 +2440,7 @@ fn contains_points<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, pts: 
         }
         out[j] = c & 1 == 1;
     }
-    out.into_pyarray(py)
+    out
 }
 
 fn rf_hash3(i: i64, j: i64, k: i64) -> f64 {
@@ -6466,6 +6475,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // tile endpoint: server/mtarchive.py)
     m.add_function(wrap_pyfunction!(pmtiles::pmt_find_many, m)?)?;
     m.add_function(wrap_pyfunction!(pmtiles::pmt_ranges, m)?)?;
-    m.add("VERSION", 305)?;
+    // 306: standpaths::sp_build (standpaths.build whole, the stands' lead-ins: the lanes, then each stand's lens off its
+    // lane; the user, 2026-11-17: "directly port standpaths.build whole")
+    standpaths::register(m)?;
+    // 307: aerofillets::aero_fillets (aeroways._fillets whole: the taxiways' corners where they meet other pavement)
+    aerofillets::register(m)?;
+    // 308: pagates::pa_area / pa_pip / pa_seg_dist / pa_bridge (parkedaircraft's hottest geometry: the gates' fitting)
+    pagates::register(m)?;
+    m.add("VERSION", 308)?;
     Ok(())
 }
