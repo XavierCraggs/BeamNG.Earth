@@ -36,6 +36,7 @@ import fast
 import dmath
 import dnp
 import mapgeom
+import polygon
 import heightmap
 import mapcells
 import revisit
@@ -931,6 +932,10 @@ def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False, p
     lots = []
     if not simple:          # (simple, a stand-in's: the carriageways alone, photo_roads)
         lots = _square_lots(frame, x0, y0, size, surface)
+        # an airport's aprons, taxiways and runways, flat (photo_airfield), first: paintlist's native call paints the lots
+        # and the carriageways after it (upstream's 1.10 call painted the car parks only, so the airfield was left the bare
+        # photo, shadows and all: the user, 2026-11-17)
+        rgb = photo_airfield(rgb, frame, x0, y0, size, lots)
         if pads is None:
             pads = _square_pads(frame, x0, y0, size, surface)
     if simple and not roads:
@@ -1301,11 +1306,9 @@ def _parking_pads(feats_list):
 
 
 # An airfield's paving in the photo (Brisbane's international apron, 2026-11-14: a taxiway across it a darker band with
-# ragged edges, a pale haze past the paving onto the grass). Each pixel of a pad takes the tone of the photo's own pavement
-# round it (PHOTO_TONE_RADIUS_M), so (a) the real asphalt of a taxiway inside a concrete apron kept its dark tone, a band
-# in the apron's one surface: the photo under the ways inside an apron is first replaced by the apron's own colour
-# (_even_aprons), and (b) an apron or taxiway outline that overshoots the paving painted the light tone of the paving
-# beside it over the grass: the grass the photo shows is left (_off_green).
+# ragged edges, a pale haze past the paving onto the grass): a taxiway across an apron takes the apron's own colour
+# (photo_airfield: one surface), and an apron or taxiway outline that overshoots the paving is not painted over the grass the
+# photo shows (_off_green).
 APRON_EVEN_MIN_PX = 40      # px: an apron needs this much of its own pavement outside its ways to give its colour
 GREEN_EDGE = (0.25, 0.75)   # the share of green pixels round one (3 x 3) below which a pad pixel is painted whole, above which not at all
 
@@ -1325,38 +1328,6 @@ def _off_green(rgb, cov):
     out = cov.copy()
     out[r0:r1, c0:c1] *= keep
     return out
-
-
-def _even_aprons(rgb, frame, x0, y0, size, feats_list):
-    """The photo with the pixels of each apron's taxiways and taxilanes (aeroways.ways) inside it replaced by the colour
-    of the rest of that apron's pavement (the median of its pixels outside the ways, the grass left out): painted over,
-    the apron is one surface, not its concrete round the asphalt of the lane the aerial shows across it. rgb itself is
-    not changed (None-safe: no apron or no lane in it: rgb)."""
-    aprons, lanes = aeroways.aprons(feats_list), aeroways.ways(feats_list)
-    if not aprons or not lanes:
-        return rgb
-    h, w = rgb.shape[:2]
-    way = _pads_px(frame, x0, y0, size, w, h, lanes)
-    if way is None:
-        return rgb
-    way = way > 0.0
-    out = None
-    for r0, c0, a in _windows_px(frame, x0, y0, size, w, h, aprons):
-        r1, c1 = r0 + a.shape[0], c0 + a.shape[1]
-        whole, lane = a >= 1.0, way[r0:r1, c0:c1]
-        band = whole & lane
-        if not band.any():
-            continue
-        win = rgb[r0:r1, c0:c1]
-        c = win.astype(np.int16)
-        grass = (c[..., 1] > c[..., 0] + PHOTO_TONE_GREEN) & (c[..., 1] > c[..., 2] + PHOTO_TONE_GREEN)
-        base = whole & ~lane & ~grass
-        if int(base.sum()) < APRON_EVEN_MIN_PX:
-            continue
-        if out is None:
-            out = rgb.copy()
-        out[r0:r1, c0:c1][band] = np.median(win[base], axis=0).astype(np.uint8)
-    return rgb if out is None else out
 
 
 # Concrete slabs on an airport's aprons: the photo's flat apron tone gets the joints of a real concrete apron (a thin, slightly darker
@@ -1582,20 +1553,187 @@ def _infield_grass(rgb, frame, x0, y0, size, feats_list, before=None):
     return rgb if out is None else out
 
 
+# An airfield's paving in the ground photo is flat, one solid colour a surface (the user, 2026-11-17: "i can see shadows from
+# the satellite on the pavement render, why are it and the runway no longer their solid colours"): the photo's aircraft and
+# building shadows, stains and rubber must not show through (the paving here is not toned from the photo, unlike a road or a
+# car park: paintlist's). Each apron, taxiway and runway is concrete (pale) or asphalt (a little darker than a road's, so the
+# paving stands out from dry ground at dusk): by the map's surface tag where it has one, else by the median luma of its own
+# pavement in the photo (outside the grass, and an apron's outside the ways, a way's outside the aprons), so Atlanta's pale
+# concrete taxiways are not a dark band in their pale shoulders; a pad the photo has too little of to say takes the colour of
+# the one it overlaps most (an apron: concrete, the usual). A taxiway across an apron takes the apron's colour (one
+# surface). Not over the grass the photo shows (_off_green).
+AIRFIELD_ASPHALT = (78, 78, 78)
+AIRFIELD_CONCRETE = (172, 170, 164)     # = PHOTO_ROAD_RGBA["concrete"]
+APRON_CONCRETE_LUMA = 125.0             # a pad whose photo pavement's median luma is at least this is concrete, else asphalt
+AIRFIELD_CONCRETE_SURFACES = ("concrete", "concrete:plates", "concrete:lanes", "cement", "paving_stones")
+AIRFIELD_ASPHALT_SURFACES = ("asphalt", "tarmac", "bitumen")
+AIRFIELD_PAVED_CLASSES = (aeroways.APRON, aeroways.RUNWAY, aeroways.STOPWAY) + aeroways.WAYS
+
+
+def _blend_solid(rgb, out, cov, colour, r0=0, c0=0):
+    """out (a copy of rgb, made here when None) with colour laid over the window cov (float 0..1, its corner at row r0,
+    column c0) at each pixel's coverage. Deterministic float32 arithmetic."""
+    ys, xs = np.flatnonzero(cov.any(axis=1)), np.flatnonzero(cov.any(axis=0))
+    if not len(ys) or not len(xs):
+        return out
+    if out is None:
+        out = rgb.copy()
+    ra, rb, ca, cb = r0 + int(ys[0]), r0 + int(ys[-1]) + 1, c0 + int(xs[0]), c0 + int(xs[-1]) + 1
+    a = cov[ra - r0:rb - r0, ca - c0:cb - c0][..., None]
+    sub = out[ra:rb, ca:cb].astype(np.float32)
+    out[ra:rb, ca:cb] = np.clip(np.round(sub + (np.array(colour, np.float32) - sub) * a), 0, 255).astype(np.uint8)
+    return out
+
+
+def _tagged_surfaces(feats_list):
+    """[(is_area, pts (k, 2) lon / lat, concrete, (lon min, lat min, lon max, lat max))] of the airport's apron, taxiway and
+    runway features that carry a surface tag of a concrete or an asphalt kind (the column's, else the tags')."""
+    out = []
+    for feats in feats_list:
+        if feats is None or len(feats) == 0:
+            continue
+        sub, cls = feats.attrs.get("subtype"), feats.attrs.get("class")
+        if sub is None or cls is None:
+            continue
+        sel = (np.asarray(sub).astype(str) == aeroways.SUBTYPE) & np.isin(np.asarray(cls).astype(str), AIRFIELD_PAVED_CLASSES)
+        col = feats.attrs.get("surface")
+        for i in np.flatnonzero(sel):
+            value = col[i] if col is not None else None
+            if value is None or not str(value).strip():
+                value = aeroways._tags(feats, i).get("surface")
+            value = str(value or "").strip().lower()
+            if value not in AIRFIELD_CONCRETE_SURFACES and value not in AIRFIELD_ASPHALT_SURFACES:
+                continue
+            for part in feats.parts(int(i)):
+                for ring in part:
+                    pts = np.asarray(ring, np.float64)
+                    if len(pts) >= 2:
+                        out.append((int(feats.kind[i]) == 3, pts, value in AIRFIELD_CONCRETE_SURFACES,
+                                    (pts[:, 0].min(), pts[:, 1].min(), pts[:, 0].max(), pts[:, 1].max())))
+    return out
+
+
+def _tagged_concrete(pad, tagged):
+    """Is the pad ((lat, lon) ring) of a tagged feature concrete (True), asphalt (False), or not of one (None): an apron
+    ring is its feature's own ring, a way's or runway's contains the vertices of its line (by the larger share of its
+    tagged lines; a fillet holds none)."""
+    la, lo = np.asarray(pad[0], np.float64), np.asarray(pad[1], np.float64)
+    ring = np.stack([lo, la], 1)
+    box = (lo.min(), la.min(), lo.max(), la.max())
+    votes = []
+    for is_area, pts, concrete, bb in tagged:
+        if bb[0] > box[2] or bb[2] < box[0] or bb[1] > box[3] or bb[3] < box[1]:
+            continue
+        if is_area:
+            if len(pts) == len(ring) and np.array_equal(pts, ring):
+                votes.append(concrete)
+        elif len(ring) >= 3 and polygon.contains_points(ring, pts).mean() >= 0.5:
+            votes.append(concrete)
+    if not votes:
+        return None
+    return sum(votes) * 2 > len(votes)
+
+
+def _photo_concrete(win, sel):
+    """Is the photo's pavement in win (its pixels sel, the grass left out) concrete (its median luma at least
+    APRON_CONCRETE_LUMA), or None when sel holds fewer than APRON_EVEN_MIN_PX of it to say."""
+    c = win.astype(np.int16)
+    sel = sel & ~((c[..., 1] > c[..., 0] + PHOTO_TONE_GREEN) & (c[..., 1] > c[..., 2] + PHOTO_TONE_GREEN))
+    if int(sel.sum()) < APRON_EVEN_MIN_PX:
+        return None
+    med = np.median(win[sel].astype(np.float32), axis=0)
+    return 0.299 * float(med[0]) + 0.587 * float(med[1]) + 0.114 * float(med[2]) >= APRON_CONCRETE_LUMA
+
+
+def _pad_windows(rgb, frame, x0, y0, size, pads, tagged, avoid):
+    """[(pad, r0, c0, coverage window, concrete: True / False / None)] of the pads that lie in the photo: concrete by the
+    tag (_tagged_concrete), else by the photo's pavement under the pad's whole pixels outside avoid (bool h x w or None)."""
+    h, w = rgb.shape[:2]
+    out = []
+    for pad in pads:
+        for r0, c0, a in _windows_px(frame, x0, y0, size, w, h, [pad]):
+            concrete = _tagged_concrete(pad, tagged) if tagged else None
+            if concrete is None:
+                r1, c1 = r0 + a.shape[0], c0 + a.shape[1]
+                sel = a >= 1.0
+                if avoid is not None:
+                    sel = sel & ~avoid[r0:r1, c0:c1]
+                concrete = _photo_concrete(rgb[r0:r1, c0:c1], sel)
+            out.append((pad, r0, c0, a, concrete))
+    return out
+
+
+def _settle(items, default):
+    """items [(pad, r0, c0, window, concrete)] with each undecided (None) one taking the verdict of the decided one its
+    window overlaps most, else default (a fillet, a sliver the photo has too little of)."""
+    out = []
+    for pad, r0, c0, a, concrete in items:
+        if concrete is None:
+            best = 0
+            for _p, q0, d0, b, other in items:
+                if other is None:
+                    continue
+                ov = (min(r0 + a.shape[0], q0 + b.shape[0]) - max(r0, q0)) * (min(c0 + a.shape[1], d0 + b.shape[1]) - max(c0, d0))
+                if ov > best:
+                    best, concrete = ov, other
+            if concrete is None:
+                concrete = default
+        out.append((pad, r0, c0, a, concrete))
+    return out
+
+
+def photo_airfield(rgb, frame, x0, y0, size, feats_list):
+    """The photo with an airport's aprons, taxiways and runways (aeroways) painted flat (AIRFIELD_ASPHALT, AIRFIELD_CONCRETE:
+    each by its surface tag or the photo's own pavement), at their 2 x 2 sub-pixel coverage, not over the grass the photo
+    shows (_off_green), the apron concrete's slab joints and stand stains (_apron_slabs) and the infield inside the
+    airport's boundary pulled toward a mown green (_infield_grass). rgb itself is not changed (rgb when there is no airport
+    in feats_list). Pure."""
+    if rgb is None or size <= 0 or not feats_list:
+        return rgb
+    aprons = aeroways.aprons(feats_list)
+    ways = aeroways.ways(feats_list) + aeroways.runway_pads(feats_list)
+    if not aprons and not ways:
+        return rgb
+    h, w = rgb.shape[:2]
+    tagged = _tagged_surfaces(feats_list)
+    cov_a = _pads_px(frame, x0, y0, size, w, h, aprons) if aprons else None
+    cov_w = _pads_px(frame, x0, y0, size, w, h, ways) if ways else None
+    out = None
+    if cov_a is not None:
+        lane = None if cov_w is None else cov_w > 0.0
+        for pad, r0, c0, a, concrete in _settle(_pad_windows(rgb, frame, x0, y0, size, aprons, tagged, lane), True):
+            colour = AIRFIELD_CONCRETE if concrete else AIRFIELD_ASPHALT
+            out = _blend_solid(rgb, out, _off_green(rgb[r0:r0 + a.shape[0], c0:c0 + a.shape[1]], a), colour, r0, c0)
+    if cov_w is not None:
+        mine = _settle(_pad_windows(rgb, frame, x0, y0, size, ways, tagged, None if cov_a is None else cov_a > 0.0), False)
+        groups = {True: [p for p, _r, _c, _a, c in mine if c], False: [p for p, _r, _c, _a, c in mine if not c]}
+        covs = {k: (_pads_px(frame, x0, y0, size, w, h, v) if v else None) for k, v in groups.items()}
+        free = None if cov_a is None else 1.0 - np.minimum(cov_a, 1.0)      # (across an apron: the apron's own colour)
+        taken = None
+        for concrete, colour in ((True, AIRFIELD_CONCRETE), (False, AIRFIELD_ASPHALT)):
+            raw = covs[concrete]
+            if raw is None:
+                continue
+            cov = _off_green(rgb, raw)
+            if free is not None:
+                cov = cov * free
+            if taken is not None:
+                cov = cov * (1.0 - np.minimum(taken, 1.0))                  # (a concrete way's pixels are not asphalt's too)
+            out = _blend_solid(rgb, out, cov, colour)
+            taken = raw
+    paved = rgb if out is None else out
+    return _infield_grass(_apron_slabs(paved, frame, x0, y0, size, feats_list), frame, x0, y0, size, feats_list, before=rgb)
+
+
 def photo_lots(rgb, frame, x0, y0, size, feats_list):
     """The photo with parking-lot polygons painted in the paved roads' colour (under the carriageways), then an
-    airport's aprons and taxiways (aeroways.pads: the taxiways inside an apron in the apron's own tone, _even_aprons,
-    and not over the grass, _off_green), the apron concrete's slab joints and stand stains (_apron_slabs) and the infield inside
-    the airport's boundary pulled toward a mown green (_infield_grass). Pure."""
+    airport's paving (photo_airfield: flat, not photo-toned). Pure. (paint_square paints the airfield first, then the lots
+    and the carriageways in its one native call.)"""
     if not feats_list:
         return rgb
     import paintlist
-    rgb = paintlist.paint(rgb, frame, x0, y0, size, (), feats_list, steps={"lots"})
-    air = aeroways.pads(feats_list)
-    if not air:
-        return rgb
-    paved = photo_pads(_even_aprons(rgb, frame, x0, y0, size, feats_list), frame, x0, y0, size, air, off_green=True)
-    return _infield_grass(_apron_slabs(paved, frame, x0, y0, size, feats_list), frame, x0, y0, size, feats_list, before=rgb)
+    return photo_airfield(paintlist.paint(rgb, frame, x0, y0, size, (), feats_list, steps={"lots"}),
+                          frame, x0, y0, size, feats_list)
 
 
 def photo_fields(rgb, frame, x0, y0, size, feats_list, roads=None, urban_fn=None, widths=None):

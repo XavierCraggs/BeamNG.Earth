@@ -272,7 +272,9 @@ class ApronPhoto(unittest.TestCase):
         f, rgb, inside, lane = self.scene()
         was = sf.photo_pads(rgb, FRAME, -128.0, -128.0, 256.0, sf.lot_pads([f]))
         out = sf.photo_lots(rgb, FRAME, -128.0, -128.0, 256.0, [f])
-        band, rest = inside & lane, inside & ~lane
+        cols, rows = np.arange(256)[None, :] - 128, 128 - np.arange(256)[:, None]
+        deep = (np.abs(cols) < 58) & (np.abs(rows) < 58)         # (inside the apron's own ring, not its 2 m margin)
+        band, rest = inside & lane & deep, inside & ~lane
         self.assertGreater(abs(float(was[band].mean()) - float(was[rest].mean())), 40.0, "(the band the aerial had)")
         self.assertLess(abs(float(np.median(out[band])) - float(np.median(out[rest]))), 3.0, "one surface")
         self.assertLess(float(out[band].std()), 8.0, "(a few joints, no asphalt band)")
@@ -435,3 +437,116 @@ class RunwaySnap(unittest.TestCase):
         self.assertEqual(aeroways.snapped(f), ({}, {}))
         self.assertTrue(covered(aeroways.pads([f]), 1000, 30.0))                        # (the pale strip, as mapped)
         self.assertTrue(covered(aeroways.pads([f]), 3070, 20.0))
+
+
+class AirfieldGround(unittest.TestCase):
+    """The ground photo of an airfield (surface.paint_square, as the game paints it): every apron, taxiway and runway pad
+    is painted, flat, one solid colour a surface, and the satellite's shadows and stains do not show on it (the user,
+    2026-11-17: "why are it and the runway no longer their solid colours"; upstream's 1.10 paint list painted only the car
+    parks, the airfield was left the bare photo). Each is concrete or asphalt: by its surface tag, else by the photo."""
+    PX, SIZE = 256, 256.0
+    ORIGIN = -128.0
+
+    class Surf:
+        urban = None
+
+        def __init__(self, lots):
+            self.lots_ = lots
+
+        def roads(self, la, lo):
+            return [], True
+
+        def lots(self, la, lo):
+            return self.lots_
+
+    def scene(self, surface=None):
+        apron = (poly((-60, -60), (60, -60), (60, 60), (-60, 60)), "apron", "airport", {}, None)
+        rw = (line((-125, -95), (125, -95)), "runway", "airport", {"width": "45"}, surface)
+        return feats(intl_field(), apron, taxiway((-125, 0), (125, 0), surface=surface), rw)
+
+    def photo(self, base):
+        """The satellite's pavement: base (r, g, b) with grain and soft shadow stripes (a fixed seed)."""
+        rng = np.random.RandomState(7)
+        px = self.PX
+        c = (np.arange(px)[None, :] * np.ones((px, 1)))
+        shade = 1.0 - 0.25 * (np.sin(c / 9.0) > 0.6)                    # (shadow stripes)
+        grain = 1.0 + rng.uniform(-0.12, 0.12, (px, px))
+        rgb = np.asarray(base, np.float64)[None, None, :] * (shade * grain)[..., None]
+        return np.clip(np.round(rgb), 0, 255).astype(np.uint8)
+
+    def paint(self, f, rgb):
+        return sf.paint_square(rgb, FRAME, self.ORIGIN, self.ORIGIN, self.SIZE, self.Surf([f]), None)
+
+    def grid(self):
+        px = self.PX
+        e = (np.arange(px)[None, :] + 0.5) * self.SIZE / px + self.ORIGIN
+        n = self.ORIGIN + self.SIZE - (np.arange(px)[:, None] + 0.5) * self.SIZE / px
+        return np.broadcast_arrays(e, n)
+
+    def ways_of(self, out):
+        e, n = self.grid()
+        taxi = (np.abs(n) < 8) & (np.abs(e) > 75) & (np.abs(e) < 118)    # (the taxiway's core, outside the apron)
+        run = (np.abs(n + 95) < 18) & (np.abs(e) < 110)
+        self.assertTrue(taxi.sum() > 500 and run.sum() > 500)
+        return {"taxiway": out[taxi], "runway": out[run]}
+
+    def test_taxiway_and_runway_are_solid_asphalt(self):
+        f = self.scene()
+        rgb = self.photo((92, 92, 94))                                  # (the photo's own asphalt, shadows and grain)
+        was = rgb.copy()
+        out = self.paint(f, rgb)
+        self.assertTrue(np.array_equal(rgb, was), "the photo itself untouched")
+        for name, got in self.ways_of(out).items():
+            self.assertTrue((got == np.array(sf.AIRFIELD_ASPHALT, np.uint8)).all(), name + " one solid asphalt colour")
+        self.assertLessEqual(sf.AIRFIELD_ASPHALT[0], 82, "darker than a road's pavement")
+
+    def test_concrete_taxiways_and_runways_are_solid_concrete(self):
+        # Atlanta's taxiways are pale concrete in the photo: not a dark band in their pale shoulders
+        out = self.paint(self.scene(), self.photo((190, 188, 182)))
+        for name, got in self.ways_of(out).items():
+            self.assertTrue((got == np.array(sf.AIRFIELD_CONCRETE, np.uint8)).all(), name + " one solid concrete colour")
+
+    def test_the_surface_tag_beats_the_photo(self):
+        pale, dark = self.photo((190, 188, 182)), self.photo((92, 92, 94))
+        for surface, photo, flat in (("asphalt", pale, sf.AIRFIELD_ASPHALT), ("tarmac", pale, sf.AIRFIELD_ASPHALT),
+                                     ("concrete", dark, sf.AIRFIELD_CONCRETE), ("paving_stones", dark, sf.AIRFIELD_CONCRETE)):
+            out = self.paint(self.scene(surface), photo)
+            for name, got in self.ways_of(out).items():
+                self.assertTrue((got == np.array(flat, np.uint8)).all(), (surface, name))
+
+    def test_an_apron_is_painted_whole_and_flat(self):
+        f = self.scene()
+        e, n = self.grid()
+        core = (np.abs(e) < 52) & (np.abs(n) < 52) & (np.abs(n) > 14)  # (inside the apron, off the taxiway across it)
+        for base, flat in (((190, 188, 182), sf.AIRFIELD_CONCRETE), ((92, 92, 94), sf.AIRFIELD_ASPHALT)):
+            rgb = self.photo(base)
+            out = self.paint(f, rgb)
+            lo = np.floor(np.array(flat, np.float64) * (1.0 - sf.APRON_DARKEN_MAX)) - 1
+            hi = np.array(flat, np.float64) + 1
+            vals = out[core].astype(np.float64)
+            self.assertTrue(((vals >= lo) & (vals <= hi)).all(), (base, "the apron's own colour, a few joints and stains only"))
+            self.assertLess(float(vals.std(axis=0).max()), 6.0, (base, "no photo shadows or grain"))
+            across = (np.abs(e) < 52) & (np.abs(n) < 6)
+            self.assertLess(abs(float(np.median(out[across])) - float(np.median(out[core]))), 4.0,
+                            "a taxiway across the apron is the apron's surface")
+
+    def test_no_pad_is_left_unpainted(self):
+        f = self.scene()
+        for base in ((190, 172, 132), (92, 92, 94)):
+            rgb = self.photo(base)
+            out = self.paint(f, rgb)
+            mask = sf.pads_mask(FRAME, self.ORIGIN, self.ORIGIN, self.SIZE, self.PX, aeroways.pads([f])) == 255
+            inner = mask.copy()
+            for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1), (2, 0), (-2, 0), (0, 2), (0, -2)):
+                inner &= np.roll(np.roll(mask, dr, axis=0), dc, axis=1)
+            inner[:3, :] = inner[-3:, :] = False
+            inner[:, :3] = inner[:, -3:] = False
+            self.assertTrue(inner.sum() > 20000)
+            changed = (out != rgb).any(axis=2)
+            self.assertEqual(int((inner & ~changed).sum()), 0, "every pixel of every apron, taxiway and runway pad is painted")
+
+    def test_a_square_without_an_airport_is_as_it_was(self):
+        lot = feats((poly((-20, -20), (20, -20), (20, 20), (-20, 20)), "parking", "transit", {}, None))
+        rgb = self.photo((190, 172, 132))
+        self.assertTrue(np.array_equal(sf.photo_airfield(rgb, FRAME, self.ORIGIN, self.ORIGIN, self.SIZE, [lot]), rgb))
+        self.assertIs(sf.photo_airfield(rgb, FRAME, self.ORIGIN, self.ORIGIN, self.SIZE, []), rgb)
