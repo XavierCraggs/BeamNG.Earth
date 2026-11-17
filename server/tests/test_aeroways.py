@@ -369,3 +369,69 @@ class RoadEdges(unittest.TestCase):
         self.assertEqual(len(pieces), 2)
         self.assertTrue(all(abs(p[:, 0]).min() >= 9.0 for p in pieces))
         self.assertEqual(len(roads.cut_in_pads(np.array([[-40.0, 30, 0], [40.0, 30, 0]]), pads)), 1)
+
+
+class RunwaySnap(unittest.TestCase):
+    """The mapped runway and stopway lines are laid on the OurAirports runway they are (a few metres across, a fraction of a degree
+    off, a runway's length along), the taxiways' ends on them with them (runwaysnap)."""
+    OA = [(0.0, 0.0), (3000.0, 0.0)]                                 # the OurAirports runway: 3000 m east from the frame's origin, 45 m wide
+
+    def setUp(self):
+        import runwaysnap
+        self.rs = runwaysnap
+        (e0, n0), (e1, n1) = self.OA
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([e0, e1]), np.array([n0, n1]), 0.0)
+        self.rws = [(float(la[0]), float(lo[0]), float(la[1]), float(lo[1]), 45.0)]
+        runwaysnap.set_provider(lambda la0, lo0, la1, lo1: list(self.rws))
+        self.addCleanup(runwaysnap.set_provider, None)
+
+    @staticmethod
+    def runway(*pts, width="45"):
+        return (line(*pts), "runway", "airport", {"width": width}, None)
+
+    def rows(self):
+        return (self.runway((100, 5), (3075, 20)),                                   # (4 to 20 m across, 75 m past the end)
+                (line((3075, 20), (3135, 22)), "stopway", "airport", {}, None),
+                taxiway((1500, 200), (1500, 12.06), tags={"width": "15"}))
+
+    def test_the_runway_line_is_paved_on_the_oa_centreline_at_its_width_and_only_between_its_ends(self):
+        pads = aeroways.pads([feats(*self.rows())])
+        self.assertTrue(covered(pads, 1000, 0.0))
+        self.assertTrue(covered(pads, 1000, 22.0))
+        self.assertTrue(covered(pads, 1000, -22.0))
+        self.assertFalse(covered(pads, 1000, 24.0), "the pale strip beside the real runway is gone (the mapped line was 9 m across there)")
+        self.assertFalse(covered(pads, 1000, -24.0))
+        self.assertTrue(covered(pads, 2990, 0.0))
+        self.assertFalse(covered(pads, 3100, 0.0), "... and beyond it")
+
+    def test_a_stopway_line_follows_to_the_runways_end_its_length_kept(self):
+        pads = aeroways.pads([feats(*self.rows())])
+        self.assertTrue(covered(pads, 3030, 0.0))                                      # (from the runway's end ...)
+        self.assertTrue(covered(pads, 3055, 20.0))
+        self.assertFalse(covered(pads, 3075, 0.0))                                     # (... 60 m on, not at the mapped line's end)
+
+    def test_a_taxiways_end_on_the_mapped_runway_line_ends_on_the_centreline(self):
+        f = feats(*self.rows())
+        lines, ways = aeroways.snapped(f)
+        self.assertEqual(len(ways), 1)
+        (_row, _k), ln = next(iter(ways.items()))
+        e, n, _ = FRAME.geodetic_to_enu(ln[:, 1], ln[:, 0], np.zeros(len(ln)))
+        self.assertAlmostEqual(float(n[-1]), 0.0, delta=0.15)                           # (the end on the runway's centreline ...)
+        self.assertAlmostEqual(float(e[-1]), 1500.0, delta=0.2)                         # (... where it was along it)
+        self.assertAlmostEqual(float(n[0]), 200.0, delta=0.5)                           # (the far end moved by little or nothing)
+        self.assertTrue(covered(aeroways.pads([f]), 1500, 60.0))                        # (its pad still reaches the apron end)
+
+    def test_a_line_off_the_runways_heading_or_too_far_across_is_left_alone(self):
+        skew = feats(self.runway((100, 5), (3075, 5 + 2975 * 0.2)))                    # 11 degrees off
+        far = feats(self.runway((100, 100), (3075, 100)), taxiway((3200, 0), (3400, 0)))   # 100 m across
+        for f in (skew, far):
+            self.assertEqual(aeroways.snapped(f), ({}, {}))
+        self.assertTrue(covered(aeroways.pads([far]), 1000, 100.0))
+        self.assertTrue(covered(aeroways.pads([far]), 3070, 100.0))
+
+    def test_nothing_moves_without_the_oa_runways(self):
+        self.rs.set_provider(None)
+        f = feats(*self.rows())
+        self.assertEqual(aeroways.snapped(f), ({}, {}))
+        self.assertTrue(covered(aeroways.pads([f]), 1000, 30.0))                        # (the pale strip, as mapped)
+        self.assertTrue(covered(aeroways.pads([f]), 3070, 20.0))

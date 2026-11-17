@@ -143,6 +143,14 @@ class RoleTest(unittest.TestCase):
         g = [v for v in r.gates.values() if v["bridge"] == "jb"][0]
         self.assertAlmostEqual(g["end"][1], 170.0, delta=0.1)
 
+    def test_a_bridge_mapped_twice_one_over_the_other_both_get_the_cab(self):
+        r = run([TERM, B("jb", rect(95, 180, 3.5, 20)), B("dup", rect(95, 180, 3.5, 20)), B("cab", rect(95, 170, 3.5, 10))])
+        self.assertEqual(r["cab"], ar.JET_BRIDGE)
+        self.assertEqual({b for b in r.bridges}, {"jb", "dup"})
+        for bid in ("jb", "dup"):
+            self.assertAlmostEqual(r.bridges[bid][2][1], 170.0, delta=0.1, msg=bid + " ends at the cab")
+        self.assertEqual(r.tails["cab"], {"jb", "dup"})
+
     def test_a_narrow_building_far_from_a_gate_is_no_bridge(self):
         r = run([TERM, B("strip", rect(250, 170, 3.5, 25))], gates=GATES)
         self.assertNotEqual(r["strip"], ar.JET_BRIDGE)

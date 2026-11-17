@@ -5,8 +5,9 @@ carried paint, runwaymarks).
 strokes(feats_list) -> [(lat0, lon0, lat1, lon1, width, kind, color)]: the Overture "infrastructure" Features (subtype
 "airport") of the cells around a block, as the strokes runwaymarks.to_world gives a runway's (AirportGrader._marks):
   * "taxi_centreline" (yellow, CENTRE_W_M): along each way's mapped line, cut away within the half width plus
-    RUNWAY_GAP_M of a runway centreline the way ends on or crosses (a taxiway is mapped to the runway's centreline: the
-    line must not run across the runway),
+    RUNWAY_GAP_M of a runway centreline the way CROSSES; a way that ENDS on the runway's centreline (the mapped runway lines are laid
+    on the OurAirports runways first: runwaysnap, with the ways' ends on them) runs on to it, finishing with a tangent arc of
+    RUNWAY_LEAD_R_M into the centreline where it meets it at under RUNWAY_LEAD_RAD (_lead_on: lead-on and lead-off lines),
   * "hold_solid" / "hold_dashed" (yellow, HOLD_LINE_W_M): ICAO pattern A across the way's width where it enters a
     runway, four lines HOLD_LINE_W_M + HOLD_LINE_GAP_M apart, the two dashed nearer the runway (its first at HOLD_DIST_M
     from the runway's centreline, along the way) and the two solid ones on the taxiway side. A mapped
@@ -17,20 +18,17 @@ Features of every cell it touches: those are read once (by id) and the strokes o
 first (bounded), so every tile of a block shares them. Pure: no ground, no frame.
 
 Stand lead-ins (strokes / tile_chunks take `stands`, parkedaircraft's Craft list of the cells, parkedaircraft.lead_stands:
-every valid stand, with or without an aircraft): for each gate or remote stand (not a general-aviation row) a yellow line (CENTRE_KIND, CENTRE_W_M: the same paint) from the
-taxiway or taxilane that the aircraft's axis (extended tail-ward) meets nearest: along that line, then a circular arc (a radius
-of half the wingspan: LEAD_RADIUS_K, never under MIN_RADIUS_M, 8 m for a light aircraft: the join point slides back along the lane
-until it fits; else an arc, a straight and an arc from a point slid along the lane, _dubins; only where none fits the tightest
-smooth arc, TIGHT_RADIUS_M, never a dropped line and no corner over 25 degrees) into a straight run along the axis to the nose, and a stop bar STOP_BAR_M across the axis at the nose. A lane that ends
-short of the axis is carried on straight (up to LEAD_EXT_M) to it; a lane's end the nose points along (the stand's own
-mapped lead-in) is carried on to the nose. A line over LEAD_LINE_MAX_M long or across the pad of a taxiway or runway that is not the lane it leaves is passed over
-for the next lane; where none is left, the first lane whose line crosses taxiway pads only (never a runway's: an apron is
-criss-crossed with mapped taxiways, a dense one lost most of its stands' lines) is used, and a stand still without a line
-(no lane near, or only across a runway) gets a straight stub along its axis from LEAD_STUB_M behind the tail to the nose:
-every stand has a line reaching its nose.
+every valid stand, with or without an aircraft): for each gate or remote stand (not a general-aviation row) a yellow line (CENTRE_KIND,
+CENTRE_W_M: the same paint) from a taxiway or taxilane to the nose, laid out by standpaths.build (its docstring is the spec): the lanes
+first (the mapped centrelines, and a spine of our own behind a row of stands whose axes reach none), then for each stand a half lens off
+the first lane its axis meets, one for each way along the lane an aircraft can arrive from (a tangent arc of the kind's radius, MIN_RADIUS_M
+at the least, 8 m for a light aircraft, leaving the lane and arriving along the axis), and a straight run along the axis to the nose,
+and a stop bar STOP_BAR_M across the axis at the nose. A stand whose axis meets no lane is joined to the nearest by one smooth curve,
+and a stand with no lane within reach gets a straight stub along its axis from LEAD_STUB_M behind the tail to the nose: every stand has
+a line reaching its nose.
 A stand that overlaps another of the list is passed over, and no line is painted twice (every tile reads the same list
 of stands, and paints the parts of the lines inside its own box: see tile_chunks). The mapped lines are cut only at
-runways (not at an apron's edge). A mapped way that already runs along a stand's axis near its nose is its lead-in: none is painted beside it.
+runways (not at an apron's edge). A mapped way that runs head on into a stand along its axis is the start of its lead-in (standpaths: the slit).
 Stand marks (_lead_lines; the paint is black, yellow, white and red: airportgrade.MARK_LOOK):
   * every yellow lead-in, spine and bar has a black border BORDER_M wider each side, painted underneath (roadmesh layer "edge");
   * stop bars across the axis (STOP_BAR_M x STOP_BAR_W_M) for the stand's own kind at the nose and the next smaller kinds that
@@ -49,28 +47,23 @@ Stand marks (_lead_lines; the paint is black, yellow, white and red: airportgrad
     white edges, a dashed centre, ROAD_WALL_M from the wall, none where a nose is under ROAD_MIN_GAP_M from it; a row of white
     give-way triangles each side of every lead-in that crosses it; boxes for equipment, white outlines with a number, on its wall side).
 Taxiway edges (_edge_lines): double yellow lines, two EDGE_W_M lines EDGE_GAP_M apart, along the outline of every taxiway pad
-(aeroways.ways) except where it lies inside an apron, a runway's strip or another pad; in a tile they are quads (EDGE_QUAD_M).
+(aeroways.ways), only along the OUTER boundary of the paving (the union of the taxiway, apron and runway pads, each grown by PAVE_BUFFER_M: not
+where one pad's edge lies in another's), a break under EDGE_JOIN_M run across, the pieces ending within it of each other one line, and none
+under EDGE_MIN_M long; in a tile they are quads (EDGE_QUAD_M).
 The filled marks (boxes, lettering, hatching, dashes, triangles, the edge lines) are convex polygons (polygons(): [(lat, lon, colour,
 layer)]): in a tile ONE chunk of quads a colour and layer (roadmesh's "poly" chunks with "quads"); layers "edge" (black borders),
 "gutter" (red), "mark" (yellow, white) and "glyph" (the black lettering: its own material, line_runway_text, listed after the
 yellow's, and 3.5 mm up: at the paint's 2 mm plus 0.6 mm the yellow box hid it in game) are the road mesh's heights, so what lies
 over what does not rest on the order of the mesh alone.
 
-Lead-ins as a tree (_spines): the stands that stand in a row (noses near each other, axes within 72 degrees) share a spine, a
-taxilane along the frontage through the points behind each tail by the largest half wingspan and SPINE_CLEAR_M (a ring for a satellite), its corners rounded and
-painted as a centreline; the rounded line is also what the lead-ins leave, so each lead-in ends exactly on the paint. The spine is
-joined to every mapped way it comes within SPINE_JOIN_MAX_M of (up to SPINE_CONN_MAX: _spine_connectors), each by a curve that leaves
-the way along it and arrives along the spine, tangent at both ends (none where no way is near: it stands alone; a line is never cut
-short on the open apron: a lead-in too long for LEAD_OVER_M still runs on to its lane); where a mapped way already runs within SPINE_LANE_M of
-those points it is the spine and nothing is painted. Each stand's lead-in leaves the spine with a short curve onto its axis and
-runs straight to the nose (every branch turning the same way; the spine ends at its last branch: _trim_spines); a stand of a row takes its lead-in from its row's spine only (one
-that is longer than the aircraft plus LEAD_OVER_M is the straight run from the spine's nearest point), never also a line from another
-lane; of two lead-ins that cross the longer is dropped. A stand that is in no row gets the nearest-lane line as before. Lane,
-spine and lead-ins are a tree: no closed loop. The rows are made of the stand list alone, so every tile that reads the same stands
-paints the same. Each lead-in ends in a straight run along its axis to the stop bar of at least lead_straight(length) (the nose to the main
-gear and a quarter of the length, 20 m at least: an aircraft is lined up straight before it stops) and its arc (the radius of the kind or
-more) starts behind it: where the lane is too close the join slides along the lane or spine, or the spine sits further out (_push_spine);
-the straight is never shortened.
+Spines and lenses (standpaths): the stands that stand in a row (noses within half their spans and SPINE_LINK_M of each other, axes
+within 72 degrees: SPINE_LINK_COS) none of whose axes reach a lane share a spine of their own, a taxilane along the frontage through
+the points behind each tail by the largest half wingspan and SPINE_CLEAR_M (round the centre of a fan or ring: _fan_centre), its
+corners rounded and painted as a centreline, joined at one end to the network by a curve tangent to the lane and trimmed at its free end
+to the first lens leaving it; the lenses leave that polyline, so each ends exactly on the paint. Each lead-in ends in a straight run
+along its axis to the stop bar of at least lead_straight(length) (the nose to the main gear and a quarter of the length, 20 m at
+least: an aircraft is lined up straight before it stops) and its arcs (the radius of the kind or more) start behind it; the straight is
+never shortened. The rows are made of the stand list alone, so every tile that reads the same stands paints the same.
 
 The mapped centrelines are painted rounded (_mapped_runs: _smooth_ways; SMOOTH_MAPPED_M): a way that goes back on another is two ways
 that end on it, every corner an arc, each join tangent (a fillet), an end in an apron carried on to its edge, a gap closed, and the lead-ins
@@ -108,7 +101,11 @@ CENTRE_W_M = 0.3            # m: the centreline's width (ICAO Annex 14: 0.15 m o
 CENTRE_KIND = "taxi_centreline"
 STAND_KIND = "stand_mark"   # the stand details' strokes (wing-tip clearance lines, stand numbers): the same paint
 COLOR = "yellow"
-RUNWAY_GAP_M = 1.0          # the centreline stops this far outside a runway's edge
+RUNWAY_GAP_M = 1.0          # a way's centreline that crosses a runway stops this far outside its edge (one that ends on the runway runs on to its centreline)
+RUNWAY_LEAD_RAD = dmath.radians(60.0)   # a way ending on a runway's centreline at less than this angle to it finishes with a tangent arc into it
+RUNWAY_LEAD_R_M = 30.0              # ... of this radius (the tangent length and so the radius less where the way's last straight is shorter)
+RUNWAY_LEAD_MIN_M = 2.0             # ... none where the way is straight for less than this before the runway
+STRAIGHT_TOL_M = 0.15               # (a polyline's last vertices lie within this of the line through its end: straight)
 HOLD_DIST_M = 60.0          # the holding position's distance from the runway centreline (ICAO code 3 / 4: 75 m to 90 m)
 HOLD_LINE_W_M = 0.15        # pattern A: four lines this wide, this far apart (two solid, two dashed)
 HOLD_LINE_GAP_M = 0.15
@@ -118,51 +115,26 @@ HOLD_SNAP_M = 4.0           # a holding_position point this far off a way's edge
 HOLD_MAX_M = 150.0          # ... and one further than this from the runway's centreline holds something else (an ILS)
 HOLD_KIND = {True: "hold_solid", False: "hold_dashed"}
 MIN_RUN_M = 0.5             # a centreline fragment shorter than this (a sliver beside a cut) is dropped
-REACH_M = 280.0             # the margin round a tile whose cells the hook reads (a runway's and a way's join; a stand's lead-in,
-                            # up to LEAD_LINE_MAX_M long, ends in the tile: its stand and lane are in the cells read)
+REACH_M = 280.0             # the margin round a tile whose cells the hook reads (a runway's and a way's join; a stand's lead-in ends in
+                            # the tile: its stand and lane are in the cells read)
 CACHE_MAX = 8               # strokes kept per first Features (one per list of cells asked)
 HOLD_POINT = "holding_position"
 LEAD_MODES = ("gate", "remote")     # the stands (parkedaircraft's Craft.mode) that get a lead-in
-LEAD_RADIUS_K = 0.5                 # the lead-in's curve: the radius of this of the wingspan
-LEAD_MAX_M = 260.0                  # a lane meeting the axis further than this behind the nose is none
-LEAD_LINE_MAX_M = 260.0             # a lead-in (the lane's carried-on end, the arc and the run to the nose) at most this long:
-                                    # ~90 m from the lane to the tail and the aircraft's own length under it (at 90 m in all
-                                    # nearly every stand lost its line, Heathrow 46 of 73)
-LEAD_TRIES = 12                     # the lanes tried, nearest first, for one that is short enough and crosses no taxiway
 PAD_EDGE_M = 0.5                    # a lead-in may graze a taxiway's or runway's pad this far in (a junction's corner)
 SAMPLE_M = 1.0                      # the lead-in's sampling for the pads
-LEAD_EXT_M = 80.0                   # a lane's end carried on to the axis by up to this far
-LEAD_STRAIGHT_M = 2.0               # the straight run along the axis at least this long (_lead_line's default; a stand's own: lead_straight)
 LEAD_STRAIGHT_MIN_M = 20.0          # a stand's lead-in is lined up straight along its axis for at least this far before the stop bar,
 LEAD_STRAIGHT_K = 0.25              # ... or, if more, the aircraft's nose-to-main-gear distance and this of its length
-LEAD_D_MIN_M = 2.0                  # the curve's tangent length at least this
-LEAD_MIN_SIN = 0.17                 # a lane within 10 degrees of the axis (sine) is not crossed by it
-ALONG_COS = 0.94                    # a lane end the nose points along (20 degrees) ...
-ALONG_LAT_M = 2.0                   # ... within this of the axis, is the stand's own lead-in
-LEAD_OVER_M = 40.0                  # a lead-in at most the aircraft's length and this long (a longer one is tried last, below)
-LEAD_FAR_M = 400.0                  # ... a line is cut short by no length cap under this: it runs on to a lane (never a dead end)
-SPINE_CLEAR_M = 7.5                 # a row's spine: through the points behind each stand's tail by the row's largest half wingspan and this
-SPINE_PUSH_M = (0.0, 4.0, 8.0, 12.0, 18.0, 25.0, 35.0, 50.0, 70.0)    # (ICAO taxilane clearance; pushed further back, in these steps, where its curve is tighter than the radius, or
-#                                     # a stand has no room between the spine and its nose for a straight run (lead_straight) and the arc of the radius),
-SPINE_LINK_M = 25.0                 # ... of the stands (noses within half the spans and this of each other, axes within 72 degrees)
-SPINE_LINK_COS = 0.3                # that stand in a row,
-SPINE_RING_MIN = 4                  # ... a ring round a satellite (at least this many stands, their mean heading under
-SPINE_RING_MEAN = 0.5               # this long: they face every way),
-SPINE_LANE_M = 25.0                 # a mapped lane within this of every one of those points is the spine,
-SPINE_JOIN_MAX_M = 60.0             # a spine's one end joined to the nearest mapped way by a curve at most this long (none: it stands alone),
-MIN_RADIUS_M = 15.0                 # every curve of the painted yellow lines (lane to spine, spine to lead-in, a spine's corners, a
-MIN_RADIUS_LIGHT_M = 8.0            # ... connector) a circular arc of at least this radius (light aircraft: this), or, where nothing
-TIGHT_RADIUS_M = 3.0                # ... fits, the tightest smooth arc, this at the least (a line is never dropped for its radius)
-CONNECTOR_FALLBACK_M = (12.0, 10.0, 8.0, 6.0, 4.5)     # (the radii tried between: a connector's largest that fits)
+SPINE_CLEAR_M = 7.5                 # a row's spine (standpaths): through the points behind each stand's tail by the row's largest half wingspan
+                                    # and this (ICAO's taxilane clearance)
+SPINE_LINK_M = 25.0                 # stands stand in a row: their noses within half the spans and this of each other,
+SPINE_LINK_COS = 0.3                # ... and their axes within 72 degrees (cosine)
+SPINE_RING_MIN = 4                  # a ring round a satellite (the service road's): at least this many stands
+SPINE_FAN_GAP_DEG = 120.0           # a fan whose stands leave no gap wider than this round its centre is a closed ring
+MIN_RADIUS_M = 15.0                 # every curve of the painted yellow lines (a lens, a spine's corners, a connector) a circular arc of
+MIN_RADIUS_LIGHT_M = 8.0            # ... at least this radius (light aircraft: this)
 ARC_STEP_RAD = 0.1                  # an arc is chords turning at most this (no kink: under 25 degrees)
 TURN_MAX_RAD = 3.3                  # an arc, a straight and an arc (_dubins) turning more than this in all is a loop: none
-DUBINS_SLIDE_M, DUBINS_STEP_M = 60.0, 2.0       # the join point slid along a lane this far each way (_connector), this often
-DUBINS_POINTS = 60                  # _lead_dubins tries the points of the lanes nearest to the axis point, this many
 APRON_STEP_M = 1.0                  # a mapped line's parts on an apron found at this step (their black border)
-SPINE_TRIES = 8                     # ... each from the nearest of this many points of the spine,
-SPINE_CONN_MAX = 4                  # a spine joins up to this many mapped ways (a connector to each: _spine_connectors)
-JOIN_TRIES = 4                      # a spine's connector tried from this many different mapped ways (nearest first)
-TRIM_TOL_M = 0.1                    # a lead-in starts on its spine within this
 LEAD_STUB_M = 25.0                  # a stand with no lane: a straight run from this far behind its tail to the nose
 STOP_BAR_M = 3.6                    # the stop bars' length across the axis
 WING_LINE_OFF_M = 3.0               # the wing-tip clearance lines: this far outside the wing tips,
@@ -219,11 +191,11 @@ EDGE_KIND = "taxi_edge"             # the taxiways' double yellow edge lines (tw
 EDGE_W_M, EDGE_GAP_M, EDGE_IN_M = 0.15, 0.15, 0.45
 EDGE_STEP_M = 1.0                   # (the outlines sampled this finely, simplified to EDGE_TOL_M)
 EDGE_TOL_M = 0.05
-EDGE_MIN_M = 3.0
+EDGE_MIN_M = 15.0                   # a line shorter than this is none (a stray piece in a junction),
+EDGE_JOIN_M = 5.0                   # ... a break shorter than this is run across, and pieces that end this near each other are one line,
+PAVE_BUFFER_M = 0.5                 # ... the paving is the union of its pads each grown by this (an edge inside it is no outer edge)
 EDGE_QUAD_M = 3.0                   # (in a tile the edge lines are quads of at most this long: one chunk, the corners draped)
 PIECE_MIN_M = 0.05                  # a part of a line inside a tile shorter than this (a corner's sliver) is not painted
-ALONG_CHECK_M = (2.0, 6.0, 10.0, 14.0, 18.0, 22.0)     # a mapped way along the axis (within ALONG_NEAR_M, ALONG_ALIGN of its
-ALONG_NEAR_M, ALONG_ALIGN, ALONG_GAP = 2.5, 0.9, 2     # direction) at all but ALONG_GAP of these distances before the nose is the lead-in
 BRIDGE_STAND_M = 45.0               # a jet bridge's red box only where a stand's nose is this near its outer end
 EDGE_RUNWAY_M = 1.5                 # the taxiway edge lines stop this far outside a runway's edge
 SMOOTH_MAPPED_M = MIN_RADIUS_M      # the mapped centrelines are painted rounded (corners, joins, ends: _smooth_ways) at this radius (0: as mapped)
@@ -246,33 +218,6 @@ _RAW = "_taxiway_raw"
 _MEMO = "_taxiway_marks"
 _SCENE = "_taxiway_scene"
 _EPS = 1e-9
-
-
-def _round(pts, cut, closed=False, steps=4):
-    """The polyline pts (k, 2) with each corner rounded: a quadratic curve (steps chords) from `cut` before the corner to `cut`
-    after it (less where a side is short: at most half of it, so that neighbouring corners do not meet). A closed polyline
-    (closed, or its first point repeated at its end) is rounded at its first point too; its result ends where it began."""
-    P = np.asarray(pts, np.float64)
-    closed = bool(closed) or (len(P) > 2 and bool(np.all(P[0] == P[-1])))
-    if closed and np.all(P[0] == P[-1]):
-        P = P[:-1]
-    n = len(P)
-    if n < 3 and closed or n < 2:
-        return P.copy()
-    out = [] if closed else [P[0]]
-    for i in (range(n) if closed else range(1, n - 1)):
-        p0, p1, p2 = P[i - 1], P[i], P[(i + 1) % n]
-        d0, d2 = float(dnp.hypot(*(p0 - p1))), float(dnp.hypot(*(p2 - p1)))
-        c = min(cut, d0 / 2.0, d2 / 2.0)
-        if c < 1e-9 or d0 < 1e-9 or d2 < 1e-9:
-            out.append(p1)
-            continue
-        a, b = p1 + (p0 - p1) * (c / d0), p1 + (p2 - p1) * (c / d2)
-        for k in range(steps + 1):
-            q = k / steps
-            out.append((1.0 - q) * (1.0 - q) * a + 2.0 * (1.0 - q) * q * p1 + q * q * b)
-    out.append(out[0] if closed else P[-1])
-    return np.array(out)
 
 
 def lead_straight(length):
@@ -397,7 +342,8 @@ def _raw(feats):
     ref)] of its way lines, [(id, lonlat, width tag or None, ref)] of the runway lines (ref: the `ref` tag, "" when
     none: the airfield signs' designators), [(id, lon, lat)] of the holding positions, and whether an international
     aerodrome is in it."""
-    got = feats.__dict__.get(_RAW)
+    slot = _RAW + str(aeroways.runwaysnap.token())      # (per provider of the OurAirports runways the lines are moved onto)
+    got = feats.__dict__.get(slot)
     if got is not None:
         return got
     ways, runways, holds, intl = [], [], [], False
@@ -407,6 +353,7 @@ def _raw(feats):
         cls = np.asarray(cls).astype(str)
         intl = bool((air & (cls == aeroways.AERODROME)).any())
         kinds = np.asarray(feats.kind)
+        snap = aeroways.snapped(feats)                  # (the mapped runway lines on the OurAirports runways they are, the ways' ends with them)
         for i in np.flatnonzero(air & (np.isin(cls, (aeroways.RUNWAY,) + aeroways.WAYS) | (kinds == 1))):
             tags = aeroways._tags(feats, i)
             kind = int(feats.kind[i])
@@ -417,13 +364,17 @@ def _raw(feats):
                               for part in feats.parts(i) for ln in part if len(ln)]
             elif kind == 2 and c == aeroways.RUNWAY:
                 w = aeroways.width_tag(tags.get("width"))
-                runways += [(str(feats.ids[i]), np.asarray(ln, np.float64), w, str(tags.get("ref") or "").strip())
-                            for part in feats.parts(i) for ln in part if len(ln) >= 2]
+                for k, ln in enumerate(ln for part in feats.parts(i) for ln in part if len(ln) >= 2):
+                    moved = snap[0].get((int(i), k))
+                    if moved is None:
+                        runways.append((str(feats.ids[i]), np.asarray(ln, np.float64), w, str(tags.get("ref") or "").strip()))
+                    elif moved[0] is not None:
+                        runways.append((str(feats.ids[i]), moved[0], moved[1], str(tags.get("ref") or "").strip()))
             elif kind == 2 and c in aeroways.WAYS and not aeroways._unpaved(feats, i, tags):
                 w = aeroways.width_tag(tags.get("width"))
-                ways += [(str(feats.ids[i]), np.asarray(ln, np.float64), c, w, str(tags.get("ref") or "").strip())
-                         for part in feats.parts(i) for ln in part if len(ln) >= 2]
-    got = feats.__dict__[_RAW] = (ways, runways, holds, intl)
+                ways += [(str(feats.ids[i]), snap[1].get((int(i), k), np.asarray(ln, np.float64)), c, w, str(tags.get("ref") or "").strip())
+                         for k, ln in enumerate(ln for part in feats.parts(i) for ln in part if len(ln) >= 2)]
+    got = feats.__dict__[slot] = (ways, runways, holds, intl)
     return got
 
 
@@ -771,69 +722,6 @@ def _runway_pads(pads):
     return tuple(x[m] for x in pads)
 
 
-def _alongside(lanes, nose, u):
-    """Does a mapped way run along the stand's axis in the last ALONG_CHECK_M before its nose (within ALONG_NEAR_M of it, within
-    ~25 degrees of it, at most ALONG_GAP of the checks missed)? Its painted line is then the lead-in: a second beside it
-    would be two."""
-    a, t, ln = lanes[0], lanes[1], lanes[2]
-    if not len(a):
-        return False
-    hit = 0
-    for back in ALONG_CHECK_M:
-        p = nose - u * back
-        q = a + t * np.clip(dnp.vecdot(p - a, t), 0.0, ln)[:, None]
-        d = dnp.hypot(*(q - p).T)
-        hit += bool(((d <= ALONG_NEAR_M) & (np.abs(dnp.vecdot(t, u[None])) >= ALONG_ALIGN)).any())
-    return hit >= len(ALONG_CHECK_M) - ALONG_GAP
-
-
-def _stand_line(lanes, spine, nose, u, r, pads, length, rmin=MIN_RADIUS_M, straight=None):
-    """The lead-in of a stand (the polyline (k, 2), or None where a lane already reaches the nose or runs along its axis), at most
-    length + LEAD_OVER_M long (`length`: the aircraft's), exactly one per stand: the stand's own mapped lead-in lane carried on to
-    the nose; else, for a stand of a row (`spine`: (lanes, forward) of _spines), a branch off its row's spine and never a line
-    from another lane; else _lead_line's: the first that crosses no other pad; else one that crosses no runway's (pads' taxiway
-    part only). Each at the radius rmin or more (r preferred; _lead_line's arcs and, where a lane has no room, its arc, straight
-    and arc); where none has room, the same with the tightest smooth arc (TIGHT_RADIUS_M): a stand is never left without its
-    line. Only where no lane is in reach at all the stub of LEAD_STUB_M behind the tail to the nose (a row's: the straight run
-    from the spine's nearest point). Every line starts on the polyline of the lane or spine it leaves."""
-    cap = length + LEAD_OVER_M
-    straight = lead_straight(length) if straight is None else straight
-    line, found = _lead_line(_empty_lanes(lanes[5]), nose, u, r, pads, cap)
-    if found:
-        return line
-    if _alongside(lanes, nose, u):
-        return None
-    if spine is not None:
-        sources = [(spine[0], pads, spine[1])]
-    else:
-        sources = [(lanes, pads, False), (lanes, _runway_pads(pads), False)]
-    # (the radius is kept before the pads: at the radius rmin the lane's pads, then across them, before the tightest smooth arc;
-    # the length cap is the last thing a line is dropped for: then the lane is reached anyway)
-    for modes in (((rmin, True, False), (rmin, False, True)), ((TIGHT_RADIUS_M, True, False),)):
-        for relaxed in (False, True):
-            for cap_ in ((LEAD_FAR_M,) if relaxed else (cap, LEAD_FAR_M)):
-                for radius, arcs, dubins in modes:
-                    for ls, pd, forward in ([(sources[0][0], _runway_pads(pads), sources[0][2])] if relaxed else sources):
-                        line, found = _lead_line(ls, nose, u, r, pd, cap_, forward, radius, dubins, arcs, straight)
-                        if found:
-                            return line
-    for radius, arcs, dubins in ((rmin, True, False), (rmin, False, True), (TIGHT_RADIUS_M, True, False)):
-        line, found = _lead_line(spine[0] if spine is not None else lanes, nose, -u, r, _runway_pads(pads), LEAD_FAR_M,   # (a stand that faces
-                                 spine is not None and spine[1], radius, dubins, arcs, straight)                        # away from every lane: from its front)
-        if found:
-            return line
-    lane_set = spine[0] if spine is not None else lanes
-    a, t, ln = lane_set[:3]
-    if len(a):                                  # (no smooth route: a straight run from the nearest point of the lane, never a dead end)
-        tail = nose - u * length
-        q = a + t * np.clip(dnp.vecdot(tail - a, t), 0.0, ln)[:, None]
-        k = int(np.argmin(dnp.hypot(*(q - tail).T)))
-        line = np.array([q[k], nose])
-        if _length(line) <= LEAD_FAR_M and (spine is not None or not _crosses(_runway_pads(pads), line, int(lane_set[6][k]))):
-            return line
-    return np.array([nose - u * (length + LEAD_STUB_M), nose])
-
-
 def _crosses(pads, pts, own):
     """Does the polyline pts (k, 2) enter (by more than PAD_EDGE_M) the pad of a taxiway or runway other than the way `own`?"""
     a, b, half, way = pads
@@ -859,143 +747,6 @@ def _length(pts):
     return float(dnp.hypot(*d.T).sum())
 
 
-def _lead_line(lanes, n, u, r, pads=None, cap=LEAD_LINE_MAX_M, forward=False, rmin=MIN_RADIUS_M, dubins=False,
-               arcs=True, straight=LEAD_STRAIGHT_M):
-    """(polyline (k, 2), True) of the lead-in of a stand whose nose is at n, the nose direction u (unit), the curve's
-    preferred radius r: from the lane the axis (tail-ward from n) meets nearest to n, along it, round a circular arc into the
-    straight run to n (the arc's radius the largest of at most r that the lane and the run have room for: the join point slides
-    back along the lane, never under rmin); (None, True) where a lane already reaches n; (None, False) without a lane. A line
-    longer than `cap`, or across the pad of a taxiway or runway that is not the lane it leaves (pads: _pads), is passed over for
-    the next lane. forward: every lane is left along its own direction (a spine's: all the branches turn the same way). dubins:
-    where no lane has room for the arc at rmin, a path of an arc, a straight and an arc (_dubins) from a point slid along a lane
-    (a lane nearly along the axis, one the axis meets too near its end); arcs False: that only."""
-    a, t, ln, first, last, ends, owner = lanes
-    cands = []
-    for p, e, wi in ends:                               # (a lane's end the nose points along: its own lead-in)
-        v = n - p
-        along = float(v[0] * e[0] + v[1] * e[1])
-        lat = abs(float(v[0] * e[1] - v[1] * e[0]))
-        if float(e[0] * u[0] + e[1] * u[1]) >= ALONG_COS and lat <= ALONG_LAT_M and -2.0 <= along <= LEAD_MAX_M:
-            cands.append((along, wi, p))
-    for along, wi, p in sorted(cands, key=lambda c: (c[0], c[1])):
-        if along < 1.0:
-            return None, True
-        pts = np.array([p, n])
-        if _length(pts) <= cap and not (pads is not None and _crosses(pads, pts, wi)):
-            return pts, True
-    if not len(a):
-        return None, False
-    mid = a + t * (ln / 2.0)[:, None]
-    near = np.flatnonzero(dnp.hypot(*(mid - n).T) <= LEAD_MAX_M + ln / 2.0)
-    if not len(near):
-        return None, False
-    a_, t_, l_ = a[near], t[near], ln[near]
-    w = n - a_
-    det = t_[:, 0] * u[1] - t_[:, 1] * u[0]
-    ok = np.abs(det) >= LEAD_MIN_SIN
-    det = np.where(ok, det, 1.0)
-    tau = (w[:, 0] * u[1] - w[:, 1] * u[0]) / det                   # the axis (n - s u) meets the lane at a + tau t
-    s = (t_[:, 0] * w[:, 1] - t_[:, 1] * w[:, 0]) / det
-    cos = t_[:, 0] * u[0] + t_[:, 1] * u[1]
-    # (the way's sense that turns into the stand: the one that bends less; across it, the one with more way behind the meeting)
-    fwd = np.where(np.abs(cos) < 0.02, tau >= l_ - tau, cos > 0.0) if not forward else np.ones(len(near), bool)
-    tp = np.where(fwd, tau, l_ - tau)                               # the meeting along that sense from its start
-    ext = np.where(fwd, last[near], first[near]) * LEAD_EXT_M       # (carried on past the way's end)
-    cs = np.where(fwd, cos, -cos)                                   # the cosine of the turn from the lane's sense onto the axis
-    sa = np.abs(det)
-    half = np.where(cs > -0.9, sa / (1.0 + np.maximum(cs, -0.9)), np.inf)      # tan of half the turn
-    room = np.minimum(tp, s - straight)                      # the tangent length the lane and the run have room for
-    radius = np.minimum(r, np.where(half > 1e-9, room / np.maximum(half, 1e-9), np.inf))
-    ok &= (s <= LEAD_MAX_M) & (tp <= l_ + ext + 0.05) & (room > 0.0) & (radius >= rmin - 1e-6)     # (a stand at a spine's very end meets it there)
-    if arcs and ok.any():
-        cost = np.where(ok, s + np.maximum(tp - l_, 0.0), np.inf)
-        for k in np.argsort(cost, kind="stable")[:LEAD_TRIES]:
-            if not np.isfinite(cost[k]):
-                break
-            tt = t_[k] if fwd[k] else -t_[k]
-            start = a_[k] if fwd[k] else a_[k] + t_[k] * l_[k]
-            tpk, dk = float(tp[k]), float(radius[k] * half[k])      # (the arc's tangent length)
-            x = start + tt * tpk                                    # where the lane's line meets the axis: the corner
-            arc = _fillet(x, tt, u, dk)
-            pts = [start + tt * min(tpk - dk, float(l_[k]))]
-            if float(dnp.hypot(*(arc[0] - pts[0]))) > 0.05:
-                pts.append(arc[0])                                  # (the lane carried on to the arc)
-            pts = np.array(pts + list(arc[1:]) + [n])
-            if _length(pts) <= cap and not (pads is not None and _crosses(pads, pts, int(owner[near[k]]))):
-                return pts, True
-    if dubins:
-        return _lead_dubins(a_, t_, l_, owner[near], n, u, rmin, pads, cap, forward, straight)
-    return None, False
-
-
-def _lead_dubins(a_, t_, l_, owner, n, u, radius, pads, cap, forward, straight=LEAD_STRAIGHT_M):
-    """(polyline, True) of the shortest path of an arc, a straight and an arc (radius at least `radius`) from a point slid along the
-    lane segments (a_, t_, l_: start, unit direction, length; owner: their ways) onto the axis `straight` m before the nose n and on
-    to it, within `cap` and across no other pad; (None, False) where there is none. The points tried: every DUBINS_STEP_M along the
-    segments, the DUBINS_POINTS nearest to the axis point (a spine of short arcs has its long straights beyond its nearest
-    segments); a lane is left either way along it (forward: only the way it runs, a spine's)."""
-    target = n - u * straight
-    pts_, dirs_, own_ = [], [], []
-    for k in range(len(a_)):
-        sl = np.unique(np.r_[np.arange(0.0, float(l_[k]), DUBINS_STEP_M), float(l_[k])])
-        pts_.append(a_[k] + t_[k] * sl[:, None])
-        dirs_.append(np.repeat(t_[k][None], len(sl), axis=0))
-        own_.append(np.full(len(sl), int(owner[k])))
-    if not pts_:
-        return None, False
-    pts_, dirs_, own_ = np.concatenate(pts_), np.concatenate(dirs_), np.concatenate(own_)
-    cands = []
-    for q in np.argsort(dnp.hypot(*(pts_ - target).T), kind="stable")[:DUBINS_POINTS]:
-        along = float(dirs_[q][0] * u[0] + dirs_[q][1] * u[1]) >= 0.0
-        for sense in (1.0,) if forward else (1.0 if along else -1.0, -1.0 if along else 1.0):
-            plan = _dubins(pts_[q], dirs_[q] * sense, target, u, radius)
-            if plan is not None and plan[0] + straight <= cap:
-                cands.append((round(plan[0], 3), int(q), sense, plan))
-    cands.sort(key=lambda c: c[:3])
-    for _length_, q, _sense, plan in cands[:LEAD_TRIES]:
-        pts = np.vstack([_dubins_pts(plan), n])
-        if not (pads is not None and _crosses(pads, pts, int(own_[q]))):
-            return pts, True
-    return None, False
-
-
-def _empty_lanes(ends=()):
-    """_lanes' form with no segments and the given ends: what _lead_line reads for a stand's own mapped lead-in only."""
-    z = np.zeros((0, 2))
-    return z, z, np.zeros(0), np.zeros(0, bool), np.zeros(0, bool), list(ends), np.zeros(0, np.int64)
-
-
-def _poly_lanes(pts, closed=False, own=-2):
-    """_lanes' form of the polyline pts (k, 2): its segments in order (a lead-in leaves along their direction), none carried on."""
-    P = np.asarray(pts, np.float64)
-    Q = np.vstack([P, P[:1]]) if closed else P
-    a, b = Q[:-1], Q[1:]
-    ln = dnp.hypot(*(b - a).T)
-    keep = ln > 1e-6
-    a, b, ln = a[keep], b[keep], ln[keep]
-    n = len(a)
-    return a, (b - a) / ln[:, None], ln, np.zeros(n, bool), np.zeros(n, bool), [], np.full(n, own, np.int64)
-
-
-def _join(lanes, pads, p):
-    """(q (2,), way index, unit direction (2,) of its segment, the segment's start (2,) and length) the nearest point q on a mapped way to p (within SPINE_JOIN_MAX_M)
-    that a straight piece p-q reaches without entering another way's or a runway's pad; q is p itself where p is on a way
-    already. None where there is none."""
-    a, t, ln, _f, _l, _e, owner = lanes
-    if not len(a):
-        return None
-    q = a + t * np.clip(dnp.vecdot(p - a, t), 0.0, ln)[:, None]
-    d = dnp.hypot(*(q - p).T)
-    for k in np.argsort(d, kind="stable")[:LEAD_TRIES]:
-        if d[k] > SPINE_JOIN_MAX_M:
-            break
-        if d[k] < 0.5:
-            return np.array(p, np.float64), int(owner[k]), t[k], a[k], float(ln[k])
-        if not _crosses(pads, np.array([p, q[k]]), int(owner[k])):
-            return q[k], int(owner[k]), t[k], a[k], float(ln[k])
-    return None
-
-
 def _project(pts, p):
     """(point, unit direction, distance) of the polyline pts (k, 2) nearest to p."""
     P = np.asarray(pts, np.float64)
@@ -1006,85 +757,6 @@ def _project(pts, p):
     dist = dnp.hypot(*(q - p).T)
     k = int(np.argmin(dist))
     return q[k], d[k] / max(float(dnp.hypot(*d[k])), _EPS), float(dist[k])
-
-
-def _connector(q, tq, seg, p, sdir, pads, own, rmin=MIN_RADIUS_M, lanes=None, radii=None):
-    """The curve (k, 2) from a mapped way to p, the end of a spine (its direction sdir from p along it): it leaves the way along
-    its direction tq (turned to the sense the spine goes on in) and arrives along the spine, an arc of radius rmin or more, a
-    straight and an arc (_dubins), from the point of the way's segment seg (start, length) that makes the shortest one: the join
-    point slides along the way (its segments within the path's reach of p, `lanes`: _lanes' form; else the segment alone: DUBINS_STEP_M
-    apart, each leaving along its own direction) until the arcs fit. Where none is across no other pad at rmin the same at the largest smaller radius (down to TIGHT_RADIUS_M: the tightest
-    smooth fillet); the straight piece only where nothing smooth is clear of the pads (none of it with `radii`, a tuple: those radii
-    only, None where none fits). None where p is on the way already."""
-    v = p - q
-    dist = float(dnp.hypot(*v))
-    if dist < 0.5:
-        return None
-    sd = sdir / max(float(dnp.hypot(*sdir)), _EPS)
-    t1 = sd if float(sd[0] * v[0] + sd[1] * v[1]) >= 0.0 else -sd         # (arrives going toward where the spine goes on)
-    reach = dist + 4.0 * rmin
-    pieces = [(seg[0], tq, float(seg[1]))]                                   # (start, direction, length) of the way's segments
-    if lanes is not None:
-        a_, t_, l_, _f, _l, _e, owner = lanes
-        near = np.flatnonzero(owner == own)
-        if len(near):
-            d = a_[near] + t_[near] * np.clip(dnp.vecdot(p - a_[near], t_[near]), 0.0, l_[near])[:, None] - p
-            pieces = [(a_[k], t_[k], float(l_[k])) for k in near[dnp.hypot(d[:, 0], d[:, 1]) <= reach]] or pieces
-    for radius in radii or [rmin] + [x for x in CONNECTOR_FALLBACK_M if x < rmin] + [TIGHT_RADIUS_M]:
-        cands = []
-        for pi, (a, tq_, ln) in enumerate(pieces):
-            s0 = min(max(float(tq_[0] * (q[0] - a[0]) + tq_[1] * (q[1] - a[1])), 0.0), ln)     # (q along the segment)
-            lo, hi = max(0.0, s0 - reach), min(ln, s0 + reach)
-            h0 = tq_ if float(tq_[0] * t1[0] + tq_[1] * t1[1]) >= 0.0 else -tq_
-            for sl in np.unique(np.r_[np.arange(lo, hi, DUBINS_STEP_M), s0, hi]):
-                plan = _dubins(a + tq_ * float(sl), h0, p, t1, radius)
-                if plan is not None:
-                    cands.append((round(plan[0], 3), pi, round(float(sl), 3), plan))
-        cands.sort(key=lambda c: c[:3])
-        for _length_, _pi, _sl, plan in cands[:LEAD_TRIES]:
-            pts = _dubins_pts(plan)
-            if len(pts) >= 2 and not _crosses(pads, pts, own):
-                return pts
-    return None if radii else np.array([q, p])
-
-
-def _way_joins(lanes, pads, p):
-    """[(q (2,), way index, unit direction (2,), segment start (2,), segment length)] _join's, for up to JOIN_TRIES different ways
-    nearest p (nearest first): the points of the mapped ways a straight piece from p reaches without entering another pad."""
-    a, t, ln, _f, _l, _e, owner = lanes
-    if not len(a):
-        return []
-    q = a + t * np.clip(dnp.vecdot(p - a, t), 0.0, ln)[:, None]
-    d = dnp.hypot(*(q - p).T)
-    out, seen = [], set()
-    for k in np.argsort(d, kind="stable")[:LEAD_TRIES * 4]:
-        if d[k] > SPINE_JOIN_MAX_M:
-            break
-        wk = int(owner[k])
-        if wk in seen:
-            continue
-        if d[k] < 0.5:
-            return [(np.array(p, np.float64), wk, t[k], a[k], float(ln[k]))]
-        if not _crosses(pads, np.array([p, q[k]]), wk):
-            seen.add(wk)
-            out.append((q[k], wk, t[k], a[k], float(ln[k])))
-            if len(out) >= JOIN_TRIES:
-                break
-    return out
-
-
-def _connector_joins(joins, p, sdir, pads, rmin, lanes, smooth_only=False, radii=None):
-    """_connector's curve from the first of the mapped ways' `joins` (_joins') that has room at the largest radius: rmin, then
-    smaller down to TIGHT_RADIUS_M; the straight piece from the nearest only where none is smooth (smooth_only: None then). None
-    where p is on a way."""
-    if float(dnp.hypot(*(p - joins[0][0]))) < 0.5:
-        return None
-    for radius in radii or [rmin] + [x for x in CONNECTOR_FALLBACK_M if x < rmin] + [TIGHT_RADIUS_M]:
-        for q, wi, tq, a, ln in joins:
-            got = _connector(q, tq, (a, ln), p, sdir, pads, wi, rmin, lanes, (radius,))
-            if got is not None:
-                return got
-    return None if smooth_only else np.array([joins[0][0], p])
 
 
 def _min_radius(P, closed=False):
@@ -1121,197 +793,32 @@ def _under_aircraft(pts, items, margin):
     return False
 
 
-def _spine_connectors(attach, lanes, pads, rmin, spine_lines, items=()):
-    """[(connector polyline (k, 2), the spine point it arrives at)] of a spine (several: one to each mapped way the spine comes within
-    reach of): from each of the points `attach` ([(point (2,), unit direction along the spine)] of the spine, its ends and each
-    stand's tail) to the nearest point of each mapped way (_way_joins: within SPINE_JOIN_MAX_M, none across another pad), by
-    _connector_joins: leaving the way along it and arriving along the spine, tangent at both ends, an arc of rmin or more (the
-    largest that has room) and a straight. The first (the shortest) is kept whatever its length; the others are kept to
-    SPINE_JOIN_MAX_M, at most SPINE_CONN_MAX in all, none that crosses the spine (`spine_lines`) or one already kept or passes
-    within WING_CLEAR_M of an aircraft (`items`: _spines'); of a way's attach points, the next nearest where one does. A way the
-    spine already lies on needs none. The spine joins the network at each of them; stand lead-ins still branch off the spine
-    alone (the tree of the lead-ins has no loop)."""
-    free = _runway_pads(pads)                   # (a taxiway's pad may be crossed, a runway's never)
-    for pd, radii, smooth in ((pads, (rmin,), True), (free, (rmin,), True), (pads, None, True), (free, None, False)):
-        got = _spine_joins(attach, lanes, pd, rmin, spine_lines, items, smooth, radii)       # (the radius before the pads, as the lead-ins)
-        if got:
-            return got
-    return []
-
-
-def _spine_joins(attach, lanes, pads, rmin, spine_lines, items, smooth_only, radii=None):
-    """_spine_connectors' search over `pads` (smooth_only: no connector that is not an arc, a straight and an arc: the next attach
-    point is tried instead of a straight piece)."""
-    cands, on = {}, set()
-    for p, sd in attach:
-        for q, wi, tq, sa, sl in _way_joins(lanes, pads, p):
-            d = float(dnp.hypot(*(q - p)))
-            if d < 0.5:
-                on.add(wi)
-            else:
-                cands.setdefault(wi, []).append((round(d, 3), round(float(p[0]), 3), round(float(p[1]), 3), p, sd, (q, wi, tq, sa, sl)))
-    ways = sorted((w for w in cands if w not in on), key=lambda w: (min(c[:3] for c in cands[w]), w))
-    kept = []
-    for wi in ways:
-        for _d, _x, _y, p, sd, join in sorted(cands[wi], key=lambda c: c[:3])[:SPINE_TRIES]:
-            conn = _connector_joins([join], p, sd, pads, rmin, lanes, smooth_only, radii)
-            if conn is None or len(conn) < 2 or (kept and _length(conn) > SPINE_JOIN_MAX_M):
-                continue
-            if any(_crossing(conn, other) for other in list(spine_lines) + [c for c, _p in kept]):
-                continue
-            if _under_aircraft(conn, items, WING_CLEAR_M):
-                continue
-            kept.append((conn, p))
-            break
-        if len(kept) >= SPINE_CONN_MAX:
-            break
-    return kept
-
-
-def _push_spine(build, round_ok, fits):
-    """build(extra) for the first of SPINE_PUSH_M (the spine's distance behind the tails) whose result passes round_ok and fits; where
-    none passes both, the first that passes round_ok, else the last."""
-    first, got = None, None
-    for extra in SPINE_PUSH_M:
-        got = build(extra)
-        if round_ok(got):
-            if fits(got):
-                return got
-            first = first or got
-    return first or got
-
-
-def _row_fits(spine, items, members, kinds):
-    """Does every stand of a row (items' indexes `members`) have room between its spine (_poly_lanes') and its nose for the straight
-    run of lead_straight and an arc of at least its kind's radius, leaving the spine along it?"""
+def _fan_centre(items, members):
+    """(the point the stands' axes point at, closed): the least-squares meeting point of the lines along their headings through their
+    noses (a satellite's centre, a pier tip's), and whether the stands leave no gap over SPINE_FAN_GAP_DEG round it (a full ring)."""
+    a11 = a12 = a22 = b1 = b2 = 0.0
     for i in members:
-        nose, u, length, span = items[i]
-        rmin = _rmin(kinds[i]) if kinds else MIN_RADIUS_M
-        if not _lead_line(spine, nose, u, max(rmin, LEAD_RADIUS_K * span), None, LEAD_FAR_M, True, rmin, False, True, lead_straight(length))[1]:
-            return False
-    return True
+        (nx, ny), (ux, uy) = items[i][0], items[i][1]
+        m11, m12, m22 = 1.0 - ux * ux, -ux * uy, 1.0 - uy * uy
+        a11, a12, a22 = a11 + m11, a12 + m12, a22 + m22
+        b1, b2 = b1 + m11 * nx + m12 * ny, b2 + m12 * nx + m22 * ny
+    det = a11 * a22 - a12 * a12
+    if abs(det) < 1e-6:
+        c = np.array([items[i][0] for i in members]).mean(axis=0)
+    else:
+        c = np.array([(a22 * b1 - a12 * b2) / det, (a11 * b2 - a12 * b1) / det])
+    ang = sorted(dmath.atan2(float(items[i][0][1] - c[1]), float(items[i][0][0] - c[0])) for i in members)
+    gaps = [ang[k + 1] - ang[k] for k in range(len(ang) - 1)] + [ang[0] + 2.0 * np.pi - ang[-1]]
+    return c, max(gaps) <= dmath.radians(SPINE_FAN_GAP_DEG)
 
 
-class _Lines(list):
-    """The polylines a function paints, and `roles` [(role, rmin)] one each: "spine" or "connector" (the network's, audit)."""
-
-    def __init__(self):
-        super().__init__()
-        self.roles = []
-
-    def put(self, xy, role, rmin):
-        self.append(xy)
-        self.roles.append((role, rmin))
-
-
-def _along(items, members, mu, mean):
-    """The members of a row in order across its mean heading mu."""
-    along = np.array([-mu[1], mu[0]]) / max(mean, _EPS)
-    return sorted(members, key=lambda i: (round(float(items[i][0][0] * along[0] + items[i][0][1] * along[1]), 3), i))
-
-
-def _spines(items, lanes, pads, kinds=None):
-    """({item index: (lanes, forward)}, [polyline (k, 2) to paint], [(members in order along the row, kind)], [(members, index of
-    the spine in the polylines, index of its connector or None)]) of the rows of stands in items [(nose (2,), unit direction (2,),
-    length, span)] (kinds: their aircraft kinds, for the radius: _rmin), the tree the lead-ins branch off. Stands link (noses
-    within half their spans plus SPINE_LINK_M, axes within 72 degrees) into rows; a row of two or more has one spine, through the
-    points behind each tail (the row's largest half wingspan and SPINE_CLEAR_M: ICAO's taxilane clearance), in order along the building (across the mean heading; by angle round the centroid for a
-    satellite, a ring), its corners circular arcs (at least the row's _rmin): the rounded line is what is painted and what the lead-ins leave, so
-    a lead-in ends on the paint. The spine joins the mapped ways at ONE end only, the nearer to a mapped way, by a curve that leaves
-    the way along it and arrives along the spine (_connector; none where the way is further than SPINE_JOIN_MAX_M: the spine stands
-    alone), so lane, spine and lead-ins are a tree and never a closed loop. Where a mapped way runs within SPINE_LANE_M of every
-    one of those points it is the spine instead (nothing is painted). A row of one has none. The rows' kinds: "row", "ring"
-    (a satellite), "lane" (a mapped way)."""
-    n = len(items)
-    parent = list(range(n))
-
-    def find(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-    for i in range(n):
-        for j in range(i + 1, n):
-            (ni, ui, _li, si), (nj, uj, _lj, sj) = items[i], items[j]
-            if (float(dnp.hypot(*(ni - nj))) <= (si + sj) / 2.0 + SPINE_LINK_M
-                    and float(ui[0] * uj[0] + ui[1] * uj[1]) >= SPINE_LINK_COS):
-                ri, rj = find(i), find(j)
-                parent[max(ri, rj)] = min(ri, rj)
-    rows = {}
-    for i in range(n):
-        rows.setdefault(find(i), []).append(i)
-    got, paint, listed, trims = {}, _Lines(), [], []
-    a, t, ln, first, last, _ends, owner = lanes
-    for members in sorted(rows.values(), key=lambda m: m[0]):
-        if len(members) < 2:
-            continue
-        back = max(items[i][3] for i in members) / 2.0 + SPINE_CLEAR_M
-        tails_at = lambda extra: np.array([items[i][0] - items[i][1] * (items[i][2] + back + extra) for i in members])
-        tails = tails_at(0.0)
-        rrow = max(_rmin(kinds[i]) for i in members) if kinds else MIN_RADIUS_M
-        mu = np.array([items[i][1] for i in members]).mean(axis=0)
-        mean = float(dnp.hypot(*mu))
-        if len(a):                                      # (a mapped way along the tail points: it is the spine)
-            v = tails[:, None, :] - a[None]
-            q = a[None] + t[None] * np.clip(dnp.vecdot(v, t[None]), 0.0, ln[None])[..., None]
-            d = dnp.hypot(q[..., 0] - tails[:, None, 0], q[..., 1] - tails[:, None, 1])
-            best = d.argmin(axis=1)
-            if bool((d[np.arange(len(members)), best] <= SPINE_LANE_M).all()):
-                m = np.isin(owner, owner[best])
-                sp = (a[m], t[m], ln[m], first[m], last[m], [], owner[m]), False
-                got.update({i: sp for i in members})
-                listed.append((_along(items, members, mu, mean), "lane"))
-                continue
-        if len(members) >= SPINE_RING_MIN and mean < SPINE_RING_MEAN:
-            def build_ring(extra):
-                tails = tails_at(extra)
-                c = tails.mean(axis=0)
-                ang = [dmath.atan2(float(y - c[1]), float(x - c[0])) for x, y in tails]
-                order = sorted(range(len(members)), key=lambda k: (round(ang[k], 6), members[k]))
-                return tails, order, _round_arcs(tails[order], rrow, closed=True)
-
-            # (further out until the ring's corners are arcs of the radius and every stand has the room for its straight run and arc)
-            tails, order, ring = _push_spine(build_ring, lambda b: _min_radius(b[2], True) >= rrow - 0.5,
-                                             lambda b: _row_fits(_poly_lanes(b[2], closed=True), items, members, kinds))
-            for c, _p in _spine_connectors([_project(ring, p)[:2] for p in tails[order]], lanes, pads, rrow, [ring], items):
-                paint.put(c, "connector", rrow)
-            paint.put(ring, "spine", rrow)
-            sp = _poly_lanes(ring, closed=True), True
-            kind = "ring"
-        else:
-            along = np.array([-mu[1], mu[0]]) / max(mean, _EPS)
-            def build_chain(extra):
-                tails = tails_at(extra)
-                proj = dnp.vecdot(tails, along[None])
-                order = sorted(range(len(members)), key=lambda k: (round(float(proj[k]), 3), members[k]))
-                pts = tails[order]
-                ja, jb = _join(lanes, pads, pts[0]), _join(lanes, pads, pts[-1])
-                da = float(dnp.hypot(*(ja[0] - pts[0]))) if ja else np.inf
-                db = float(dnp.hypot(*(jb[0] - pts[-1]))) if jb else np.inf
-                if db < da:                             # (the end nearer to a mapped way is the start)
-                    pts, order = pts[::-1], order[::-1]
-                head = members[order[0]]
-                ahead = max(_rmin(kinds[head]) if kinds else MIN_RADIUS_M, LEAD_RADIUS_K * items[head][3])
-                e = pts[0] - pts[1]
-                start = pts[0] + e / max(float(dnp.hypot(*e)), _EPS) * ahead        # (carried on: the first branch's arc)
-                return pts, order, _round_arcs(np.array([start] + list(pts)), rrow)
-
-            # (further out until the chain's corners are arcs of the radius and every stand has the room for its straight run and arc)
-            pts, order, chain = _push_spine(build_chain, lambda b: _min_radius(b[2]) >= rrow - 0.5,
-                                            lambda b: _row_fits(_poly_lanes(b[2]), items, members, kinds))
-            # (the curves end on the painted line: at its start, its end and beside each tail)
-            attach = [(chain[0], chain[1] - chain[0]), (chain[-1], chain[-2] - chain[-1])] + [_project(chain, p)[:2] for p in pts]
-            conns = []
-            for conn, at in _spine_connectors(attach, lanes, pads, rrow, [chain], items):
-                conns.append((len(paint), _station(chain, at)))
-                paint.put(conn, "connector", rrow)
-            trims.append(([members[k] for k in order], len(paint), conns))
-            paint.put(chain, "spine", rrow)
-            sp = _poly_lanes(chain), True
-            kind = "row"
-        got.update({i: sp for i in members})
-        listed.append(([members[k] for k in order], kind))
-    return got, paint, listed, trims
+def _fan_order(ang, members):
+    """The indices of the angles in order round the centre, starting after the widest gap (an open fan's two ends)."""
+    order = sorted(range(len(ang)), key=lambda k: (round(ang[k], 6), members[k]))
+    a = [ang[k] for k in order]
+    gaps = [a[k + 1] - a[k] for k in range(len(a) - 1)] + [a[0] + 2.0 * np.pi - a[-1]]
+    g = max(range(len(gaps)), key=lambda k: (gaps[k], -k))
+    return order[g + 1:] + order[:g + 1]
 
 
 def _crossing(a, b, tol=0.02):
@@ -1326,23 +833,6 @@ def _crossing(a, b, tol=0.02):
     o3, o4 = cr(d2, p - r) / n2, cr(d2, q - r) / n2
     split = lambda x, y: ((x > tol) & (y < -tol)) | ((x < -tol) & (y > tol))
     return bool((split(o1, o2) & split(o3, o4)).any())
-
-
-def _uncrossed(lines):
-    """The indices of lines (polylines or None) kept: of two that cross, the longer is dropped."""
-    idx = [i for i, ln in enumerate(lines) if ln is not None]
-    size = {i: round(_length(lines[i]), 3) for i in idx}
-    lo = {i: lines[i].min(axis=0) for i in idx}
-    hi = {i: lines[i].max(axis=0) for i in idx}
-    dropped = set()
-    for x, i in enumerate(idx):
-        for k in idx[x + 1:]:
-            if i in dropped or k in dropped:
-                continue
-            if (lo[i] > hi[k]).any() or (lo[k] > hi[i]).any() or not _crossing(lines[i], lines[k]):
-                continue
-            dropped.add(i if size[i] > size[k] else k)
-    return {i for i in idx if i not in dropped}
 
 
 def _pt_segs(p, s, e):
@@ -1441,34 +931,6 @@ def _subpath(P, lo, hi):
     return np.array([standmarks.at(P, lo)[0]] + inner + [standmarks.at(P, hi)[0]])
 
 
-def _trim_spines(paint, trims, found, keep):
-    """`paint` (the spines and their connectors, _spines') without the branches that lead nowhere: a row's spine runs from its
-    connector (or, with none, its first lead-in's start) to its last lead-in's start, and nothing beyond; with no lead-in of the
-    row on it, neither the spine nor its connector is painted."""
-    drop, cut = set(), {}
-    for members, ci, conns in trims:
-        chain = paint[ci]
-        st = [_station(chain, found[i][0]) for i in members
-              if i in keep and found[i] is not None and _project(chain, found[i][0])[2] < TRIM_TOL_M]
-        if not st:
-            drop.add(ci)
-            drop.update(cj for cj, _s in conns)
-            continue
-        joined = st + [x for _cj, x in conns]       # (the spine runs from its first connector or branch to its last)
-        lo, hi = min(joined), max(joined)
-        if hi - lo < 0.3:
-            drop.add(ci)
-            drop.update(cj for cj, _s in conns)
-        else:
-            cut[ci] = _subpath(chain, lo, hi)
-    out = _Lines()
-    roles = getattr(paint, "roles", None) or [("spine", MIN_RADIUS_M)] * len(paint)
-    for i, xy in enumerate(paint):
-        if i not in drop:
-            out.put(cut.get(i, xy), *roles[i])
-    return out
-
-
 def stand_key(stands):
     """A hashable key of the stands' (parkedaircraft Craft) places, kinds and refs: what the memos of the lead-ins and the stand
     signs are kept by."""
@@ -1507,11 +969,6 @@ def _wall_hit(nose, u, walls):
         which = min((wi for t, wi in found if t <= best + WALL_TIE_M), key=lambda wi: (size(wi), wi))
         best = next(t for t, wi in found if wi == which)
     return best, which
-
-
-def _wall_gap(nose, u, walls):
-    """The distance from the nose along u to the first edge of the rings `walls` ([(k, 2)]): inf where there is none."""
-    return _wall_hit(nose, u, walls)[0]
 
 
 def _station(poly, p):
@@ -1584,7 +1041,7 @@ def _pt_segs_many(P, a, b):
 
 def _service_roads(items, rows, walls, leads, bridges=()):
     """([(xy (k, 2), width, kind, colour)], [(polygon (k, 2), colour, layer)]) of the service roads of the stands (items:
-    [(nose, unit direction, length, span)]; rows: _spines'; bridges: [(outer end (2,), unit direction out of the terminal)]):
+    [(nose, unit direction, length, span)]; rows: standpaths.build's; bridges: [(outer end (2,), unit direction out of the terminal)]):
     ONE path along each building's frontage, offset from its outline (`walls`: [(k, 2)] rings). The stands whose axis meets a
     wall (ROAD_MIN_GAP_M to ROAD_MAX_GAP_M from the nose: a nearer wall has none) set the road's distance from it, ROAD_WALL_M,
     nearer (ROAD_NOSE_M clear of the nose, the offset easing back ROAD_TAPER per metre along the wall) where the gap is short.
@@ -1730,7 +1187,7 @@ def _service_roads(items, rows, walls, leads, bridges=()):
 
 
 def _site_xy(sc, site):
-    """(walls [(k, 2)], bridges [(point (2,), unit direction (2,))]) of a Site in the scene's plane, kept on the scene."""
+    """(walls [(k, 2)], bridges [(point (2,), unit direction (2,))], blocks [(k, 2)]) of a Site in the scene's plane, kept on the scene."""
     key = ("site", site.key)
     got = sc.memo.get(key)
     if got is None:
@@ -1741,7 +1198,7 @@ def _site_xy(sc, site):
         bridges = []
         for la, lo, de, dn in site.bridges:
             bridges.append((xy([la], [lo])[0], _unit2(de, dn)))
-        got = sc.memo[key] = (walls, bridges)
+        got = sc.memo[key] = (walls, bridges, [xy(la, lo) for la, lo in site.blocks if len(la) >= 3])
     return got
 
 
@@ -1750,8 +1207,21 @@ def _unit2(x, y):
     return np.array([x / n, y / n])
 
 
+def _hits_blocks(poly, blocks):
+    """Does the convex polygon `poly` (k, 2) overlap any of `blocks` [(ring (m, 2), (x0, y0, x1, y1))]: an edge across a ring's, or one inside the other?"""
+    lo, hi = poly.min(axis=0), poly.max(axis=0)
+    closed = np.vstack([poly, poly[:1]])
+    for ring, (x0, y0, x1, y1) in blocks:
+        if x1 < lo[0] or x0 > hi[0] or y1 < lo[1] or y0 > hi[1]:
+            continue
+        if pa._pip(ring, poly).any() or pa._pip(poly, ring).any() or _crossing(closed, np.vstack([ring, ring[:1]]), 0.0):
+            return True
+    return False
+
+
 def _lead_lines(sc, stands, site=None):
-    """(lines, boxes, polys, pboxes) of the lead-ins, stop bars and stand details (module docstring) of the stands (parkedaircraft
+    """(lines, boxes, polys, pboxes) of the lead-ins (standpaths.build: the lanes, then each stand's lens off its lane), stop bars and stand
+    details (module docstring) of the stands (parkedaircraft
     Craft), memoized on the scene. lines: _build's form (lat, lon, width, kind, colour); polys: [(lat (k,), lon (k,), colour,
     layer)], convex polygons (the boxes, the lettering, the bars, the hatching, the dashes and the triangles: one chunk a
     colour and layer in a tile), layer "under" (the black borders, painted first), "paint" or "glyph" (the black lettering,
@@ -1766,7 +1236,7 @@ def _lead_lines(sc, stands, site=None):
     got = sc.memo.get(key)
     if got is not None:
         return got
-    lanes, pads = _lanes(sc), _pads(sc)
+    pads = _pads(sc)
     e, nn, _ = sc.frame.geodetic_to_enu(np.array([c.lat for c in st]), np.array([c.lon for c in st]), np.zeros(len(st)))
     e, nn = np.asarray(e, np.float64), np.asarray(nn, np.float64)
     plane = [(c.kind, float(x), float(y), float(c.ne), float(c.nn)) for c, x, y in zip(st, e, nn)]
@@ -1784,13 +1254,28 @@ def _lead_lines(sc, stands, site=None):
                 out.append((xy, width + 2.0 * BORDER_M, UNDER_KIND, "black"))
             out.append((xy, width, kind, COLOR))
 
-    def box(centre, up, w, h, colour="yellow", border=True):
-        if border:
-            polys.append((sm.box(centre, up, w + 2.0 * BORDER_M, h + 2.0 * BORDER_M), "black", "under"))
-        polys.append((sm.box(centre, up, w, h), colour, "paint"))
+    blocks = [] if site is None else [(r, (float(r[:, 0].min()), float(r[:, 1].min()), float(r[:, 0].max()), float(r[:, 1].max())))
+                                      for r in _site_xy(sc, site)[2]]       # (every footprint: no nose marking lies under one)
 
-    def lettered(text, centre, up, spec):
-        polys.extend((p, "text", "glyph") for p in sm.text_polys(text, centre, up, *spec))
+    def box(centre, up, w, h, colour="yellow", border=True, acc=None):
+        acc = polys if acc is None else acc
+        if border:
+            acc.append((sm.box(centre, up, w + 2.0 * BORDER_M, h + 2.0 * BORDER_M), "black", "under"))
+        acc.append((sm.box(centre, up, w, h), colour, "paint"))
+
+    def lettered(text, centre, up, spec, acc=None):
+        (polys if acc is None else acc).extend((p, "text", "glyph") for p in sm.text_polys(text, centre, up, *spec))
+
+    def put(*builds):
+        """The chunks of the first of the builds (functions taking the list to fill) that lies under no footprint, painted; False where
+        every one does (a marking that cannot be moved clear is clipped away whole)."""
+        for build in builds:
+            acc = []
+            build(acc)
+            if not any(_hits_blocks(p, blocks) for p, _c, _l in acc):
+                polys.extend(acc)
+                return True
+        return False
 
     stands_ = []                                        # (Craft, unit direction, length, span, nose) of the stands kept
     for j in pa.drop_overlaps(plane):
@@ -1800,14 +1285,15 @@ def _lead_lines(sc, stands, site=None):
         length, span = pa.SPECS[c.kind][0], pa.SPECS[c.kind][1]
         stands_.append((c, u, length, span, np.array([ce, cn]) + u * (length / 2.0)))
     items = [(x[4], x[1], x[2], x[3]) for x in stands_]
-    spines, paint, rows, trims = _spines(items, lanes, pads, [x[0].kind for x in stands_])
-    found = [_stand_line(lanes, spines.get(i), nose, u, max(_rmin(c.kind), LEAD_RADIUS_K * span), pads, length, _rmin(c.kind))
-             for i, (c, u, length, span, nose) in enumerate(stands_)]
+    import standpaths                                    # (lanes first, then each stand's lens off its lane: standpaths)
+    runs = [(xy, wi) for xy, _cls, wi, _f, _l in _mapped_runs(sc) if len(xy) >= 2]
+    aprons = list(sc.memo.get("apron_rings") or ())
+    paint, found, rows = standpaths.build(items, [x[0].kind for x in stands_], runs, pads, blocks,
+                                          aprons + list(sc.memo.get("pad_rings") or ()), aprons)
     stops = [(x[4], x[1], x[0].kind) for x in stands_]
-    keep = _uncrossed(found)                            # (of two lead-ins that cross, the longer is dropped)
+    keep = {i for i, f in enumerate(found) if f is not None}
     leads = []
-    trimmed = _trim_spines(paint, trims, found, keep)   # (the spines to their last lead-in: no branch that leads nowhere)
-    for xy, (role, rm) in zip(trimmed, trimmed.roles):
+    for xy, role, rm in paint:
         add(xy, role=role, rmin=rm)
         leads.append(xy)
     wings = _wing_lines(stands_, [found[i] if i in keep else None for i in range(len(stands_))])
@@ -1820,22 +1306,37 @@ def _lead_lines(sc, stands, site=None):
         ladder = _ladder(c.kind)
         back = min(off for _k, off in ladder)
         if back < -0.5:                                 # (the thick centreline through the ladder)
-            box(nose + u * (back / 2.0), u, STOP_BAR_W_M, -back + STOP_BAR_W_M)
-        for kind, off in ladder:                        # (a stop bar for each kind, a type label beside it)
+            put(lambda acc: box(nose + u * (back / 2.0), u, STOP_BAR_W_M, -back + STOP_BAR_W_M, acc=acc))
+        for kind, off in ladder:                        # (a stop bar for each kind, a type label beside it: on the pilot's right, else his left)
             at = nose + u * off
-            box(at, u, STOP_BAR_M, STOP_BAR_W_M)
-            lab = at - left * (STOP_BAR_M / 2.0 + LABEL_SIDE_M + LABEL_BOX_M[0] / 2.0)       # (the pilot's right: -left)
-            box(lab, u, LABEL_BOX_M[0], LABEL_BOX_M[1])
-            lettered(LABEL[kind], lab, u, LABEL_TEXT)
+            put(lambda acc: box(at, u, STOP_BAR_M, STOP_BAR_W_M, acc=acc))
+            builds = []
+            for side in (-1.0, 1.0):
+                lab = at + left * (side * (STOP_BAR_M / 2.0 + LABEL_SIDE_M + LABEL_BOX_M[0] / 2.0))
+
+                def build(acc, lab=lab, kind=kind):
+                    box(lab, u, LABEL_BOX_M[0], LABEL_BOX_M[1], acc=acc)
+                    lettered(LABEL[kind], lab, u, LABEL_TEXT, acc=acc)
+                builds.append(build)
+            put(*builds)
         for p, q in wings[i]:                           # (the wing-tip clearance lines, ending level with the stop bar)
             add(np.array([p, q]), STAND_KIND, CENTRE_W_M)
         text = str(c.ref or "").upper().replace(" ", "")
         if len(text) <= NUM_MAX and sm.supported(text):  # (the number: black on a yellow box past the stop bars)
             h, cw, _bar, _gap, cg = NUM_TEXT
             bw, bh = sm.text_width(len(text), cw, cg) + 2.0 * NUM_MARGIN[0], h + 2.0 * NUM_MARGIN[1]
-            at = nose + u * (STOP_BAR_W_M / 2.0 + NUM_AFTER_M + bh / 2.0)
-            box(at, u, bw, bh)
-            lettered(text, at, u, NUM_TEXT)
+            ahead = STOP_BAR_W_M / 2.0 + NUM_AFTER_M + bh / 2.0
+            behind = back - STOP_BAR_W_M / 2.0 - NUM_AFTER_M - bh / 2.0
+            slide = max(STOP_BAR_M, bw) / 2.0 + bw / 2.0 + NUM_AFTER_M
+            builds = []
+            for along, across in ((ahead, 0.0), (ahead, -slide), (ahead, slide), (behind, 0.0), (behind, -slide), (behind, slide)):
+                at = nose + u * along + left * across   # (past the stop bars: centred, then to a side, then behind the ladder: the first clear)
+
+                def build(acc, at=at):
+                    box(at, u, bw, bh, acc=acc)
+                    lettered(text, at, u, NUM_TEXT, acc=acc)
+                builds.append(build)
+            put(*builds)
         # (the equipment restraint line: two legs either side of the forward fuselage, RESTRAINT_OFF_M off its skin and
         # 0.4 of the length back; a U round the whole envelope crossed the next stands' at Brisbane)
         a = RESTRAINT_OFF_M + 0.06 * length
@@ -1844,7 +1345,7 @@ def _lead_lines(sc, stands, site=None):
             out.append((np.array([nose + left * (s * a), nose + left * (s * a) - u * back]), RESTRAINT_W_M,
                         RESTRAINT_KIND, "red"))
     if site is not None:
-        walls, bridges = _site_xy(sc, site)
+        walls, bridges, _blocks = _site_xy(sc, site)
         for pt, d in bridges:                           # (the red hatched box under each jet bridge's cab, at a stand)
             if not any(float(dnp.hypot(*(x[4] - pt))) < BRIDGE_STAND_M for x in stands_):
                 continue
@@ -1910,13 +1411,15 @@ def scene(feats_list):
 class Site:
     """What the stand marks read of the buildings of an airport: walls [(lat (k,), lon (k,))], the outlines of its terminals and
     piers (airportroles), and bridges [(lat, lon, east, north)], the outer end of each mapped jet bridge with its unit
-    direction out of the terminal; key, a hashable summary of them (what the memos of the stands' marks are kept by)."""
-    __slots__ = ("walls", "bridges", "key")
+    direction out of the terminal, and blocks [(lat (k,), lon (k,))], the outlines of every footprint (buildings, parts, bridges, canopies:
+    nothing is painted under one); key, a hashable summary of them (what the memos of the stands' marks are kept by)."""
+    __slots__ = ("walls", "bridges", "blocks", "key")
 
-    def __init__(self, walls, bridges):
-        self.walls, self.bridges = walls, bridges
+    def __init__(self, walls, bridges, blocks=()):
+        self.walls, self.bridges, self.blocks = walls, bridges, blocks
         self.key = (tuple((len(la), round(float(np.mean(la)), 6), round(float(np.mean(lo)), 6)) for la, lo in walls),
-                    tuple((round(float(b[0]), 6), round(float(b[1]), 6)) for b in bridges))
+                    tuple((round(float(b[0]), 6), round(float(b[1]), 6)) for b in bridges),
+                    tuple((len(la), round(float(np.mean(la)), 6), round(float(np.mean(lo)), 6)) for la, lo in blocks))
 
 
 def _build_site(infra, blds, parts):
@@ -1926,11 +1429,15 @@ def _build_site(infra, blds, parts):
     if roles.frame is None or not len(roles.units):
         return None
     fr, (x0, y0) = roles.frame, roles.origin
-    walls = []
+    walls, blocks = [], []
     for uid, u in roles.units.items():
-        if roles.get(uid) in (airportroles.TERMINAL, airportroles.PIER) and len(u.ring) >= 3:
-            la, lo, _ = fr.enu_to_geodetic(u.ring[:, 0] + x0, u.ring[:, 1] + y0, np.zeros(len(u.ring)))
-            walls.append((np.asarray(la, np.float64), np.asarray(lo, np.float64)))
+        if len(u.ring) < 3:
+            continue
+        la, lo, _ = fr.enu_to_geodetic(u.ring[:, 0] + x0, u.ring[:, 1] + y0, np.zeros(len(u.ring)))
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        blocks.append((la, lo))
+        if roles.get(uid) in (airportroles.TERMINAL, airportroles.PIER):
+            walls.append((la, lo))
     bridges, seen = [], set()
     for gid in sorted(roles.gates):
         g = roles.gates[gid]
@@ -1939,7 +1446,7 @@ def _build_site(infra, blds, parts):
         seen.add(g["bridge"])
         la, lo, _ = fr.enu_to_geodetic(np.array([g["end"][0] + x0]), np.array([g["end"][1] + y0]), np.zeros(1))
         bridges.append((float(la[0]), float(lo[0]), float(g["dir"][0]), float(g["dir"][1])))
-    return Site(walls, bridges) if walls or bridges else None
+    return Site(walls, bridges, blocks) if walls or bridges else None
 
 
 def site_of(infra, blds, parts):
@@ -1971,10 +1478,103 @@ def _simplify(P, tol):
     return P[keep]
 
 
+def _covered(pts, rings, buffer):
+    """Which of pts (k, 2) lie inside one of `rings` [(m, 2)] or within `buffer` of its outline: (k,) booleans."""
+    got = np.zeros(len(pts), bool)
+    if not len(pts):
+        return got
+    lo, hi = pts.min(axis=0) - buffer, pts.max(axis=0) + buffer
+    for r in rings:
+        rlo, rhi = r.min(axis=0), r.max(axis=0)
+        if (rhi < lo).any() or (rlo > hi).any():
+            continue
+        m = np.all((pts >= rlo - buffer) & (pts <= rhi + buffer), axis=1) & ~got
+        if not m.any():
+            continue
+        idx = np.flatnonzero(m)
+        inside = polygon.contains_points(r, pts[idx])
+        got[idx[inside]] = True
+        rest = idx[~inside]
+        if len(rest):
+            segs = np.stack([r, np.roll(r, -1, axis=0)], axis=1)
+            got[rest[_pts_dist(pts[rest], segs) < buffer]] = True
+    return got
+
+
+def _bridge_gaps(keep, step, gap):
+    """keep (k,) booleans of the samples round a closed outline with each run of dropped samples shorter than `gap` m (a sample
+    `step` m apart) between kept ones kept too: the edge line runs on across a tiny break."""
+    n = len(keep)
+    if keep.all() or not keep.any():
+        return keep
+    out = keep.copy()
+    first = int(np.flatnonzero(keep)[0])
+    order = np.roll(np.arange(n), -first)
+    run = []
+    for k in order:
+        if keep[k]:
+            if run and len(run) * step < gap:
+                out[run] = True
+            run = []
+        else:
+            run.append(k)
+    if run and len(run) * step < gap:
+        out[run] = True                                   # (the break that wraps round to the first kept sample)
+    return out
+
+
+def _chain_runs(runs, gap):
+    """The polylines `runs` [(k, 2)] with each end joined to the nearest start within `gap` m (a run's end and another's start; its own
+    start closes a loop): [(m, 2)]. The nearest pairs first, each end and each start once."""
+    n = len(runs)
+    if n == 0:
+        return []
+    starts = np.array([r[0] for r in runs], np.float64)
+    ends = np.array([r[-1] for r in runs], np.float64)
+    cell = {}
+    for j, p in enumerate(starts):
+        cell.setdefault((int(p[0] // gap), int(p[1] // gap)), []).append(j)
+    pairs = []
+    for i, p in enumerate(ends):
+        cx, cy = int(p[0] // gap), int(p[1] // gap)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for j in cell.get((cx + dx, cy + dy), ()):
+                    d = float(dnp.hypot(*(p - starts[j])))
+                    if d < gap and (i != j or len(runs[i]) >= 3):
+                        pairs.append((d, i, j))
+    nxt, prv, closed = {}, {}, set()
+    for _d, i, j in sorted(pairs):
+        if i in nxt or j in prv:
+            continue
+        head = i
+        while head in prv:
+            head = prv[head]
+        if head == j:                                   # (it would close the chain on itself: a loop)
+            closed.add(head)
+            nxt[i] = -1
+            continue
+        nxt[i], prv[j] = j, i
+    out = []
+    for h in range(n):
+        if h in prv:
+            continue
+        chain, k = [h], h
+        while nxt.get(k, -1) >= 0:
+            k = nxt[k]
+            chain.append(k)
+        pts = np.vstack([runs[c] for c in chain])
+        out.append(np.vstack([pts, pts[:1]]) if h in closed else pts)
+    return out
+
+
 def _edge_lines(sc, feats_list):
-    """[(xy (k, 2), width, kind, colour)] of the taxiways' double yellow edge lines: along the outline of every taxiway pad
-    (aeroways.ways: the buffered ways with their fillets), except where it lies inside an apron, a runway's strip or another
-    pad (a junction), two EDGE_W_M lines EDGE_GAP_M apart, the nearer EDGE_IN_M inside the pad's edge."""
+    """[(xy (k, 2), width, kind, colour)] of the taxiways' double yellow edge lines: along the OUTER boundary of the paving, the union of
+    the taxiway pads (aeroways.ways: the buffered ways with their fillets), the aprons and the runway pads (the mapped runway and
+    stopway lines' and the runway strips), each grown by PAVE_BUFFER_M: the outline of a taxiway pad where it is not inside, or within
+    PAVE_BUFFER_M of, another pad (a junction, an apron, a runway: the edge there lies in the paving, whichever pad's), two EDGE_W_M lines EDGE_GAP_M
+    apart, the nearer EDGE_IN_M inside the pad's edge. A break shorter than EDGE_JOIN_M is run across, the pieces of one line (two pads'
+    outlines) that end within it of each other are one, and a line shorter than EDGE_MIN_M is none."""
     ways = [r for r in aeroways.ways(feats_list) if len(r[0]) >= 4]
     if not ways:
         return []
@@ -1984,12 +1584,13 @@ def _edge_lines(sc, feats_list):
         return np.stack([np.asarray(e), np.asarray(n)], 1)
     rings = [xy(la, lo) for la, lo in ways]
     rings = [r[:-1] if float(dnp.hypot(*(r[0] - r[-1]))) < 1e-6 else r for r in rings]
-    aprons = [xy(la, lo) for la, lo in aeroways.aprons(feats_list) if len(la) >= 3]
+    fixed = [xy(la, lo) for la, lo in aeroways.aprons(feats_list) if len(la) >= 3]
+    fixed += [xy(la, lo) for la, lo in aeroways.runway_pads(feats_list) if len(la) >= 3]
     lo_hi = lambda rs: (np.array([r.min(axis=0) for r in rs]).reshape(-1, 2), np.array([r.max(axis=0) for r in rs]).reshape(-1, 2))
     wlo, whi = lo_hi(rings)
-    alo, ahi = lo_hi(aprons)
+    flo, fhi = lo_hi(fixed)
     rsegs = [(np.stack([r[:-1], r[1:]], axis=1), half) for r, half, _ref in sc.runways if len(r) >= 2]
-    out = []
+    runs, closed_runs = [], []                          # (the kept parts of the outlines, the paving's inside on their left)
     for i, ring in enumerate(rings):
         closed = np.vstack([ring, ring[:1]])
         seg = np.diff(closed, axis=0)
@@ -1998,43 +1599,38 @@ def _edge_lines(sc, feats_list):
             continue
         cnt = np.maximum(1, np.ceil(ln / EDGE_STEP_M).astype(np.int64))
         pts = np.concatenate([closed[j] + seg[j] * (np.arange(c) / c)[:, None] for j, c in enumerate(cnt)])
-        drop = np.zeros(len(pts), bool)
-        lo, hi = pts.min(axis=0), pts.max(axis=0)
-        others = [(aprons[j], True) for j in np.flatnonzero(np.all((ahi >= lo) & (alo <= hi), axis=1))]
-        others += [(rings[j], False) for j in np.flatnonzero(np.all((whi >= lo) & (wlo <= hi), axis=1)) if j != i]
-        for r, _apron in others:
-            m = np.all((pts >= r.min(axis=0)) & (pts <= r.max(axis=0)), axis=1) & ~drop
-            if m.any():
-                drop[np.flatnonzero(m)[polygon.contains_points(r, pts[m])]] = True
+        lo, hi = pts.min(axis=0) - PAVE_BUFFER_M, pts.max(axis=0) + PAVE_BUFFER_M
+        near = [fixed[j] for j in np.flatnonzero(np.all((fhi >= lo) & (flo <= hi), axis=1))]
+        near += [rings[j] for j in np.flatnonzero(np.all((whi >= lo) & (wlo <= hi), axis=1)) if j != i]
+        drop = _covered(pts, near, PAVE_BUFFER_M)
         for segs, half in rsegs:
             if (segs.min(axis=(0, 1)) - half - 2.0 <= hi).all() and (segs.max(axis=(0, 1)) + half + 2.0 >= lo).all():
                 drop |= _pts_dist(pts, segs) < half + EDGE_RUNWAY_M
-        keep = ~drop
+        keep = _bridge_gaps(~drop, EDGE_STEP_M, EDGE_JOIN_M)
         if keep.sum() < 2:
             continue
         area = float((ring[:, 0] * np.roll(ring[:, 1], -1) - np.roll(ring[:, 0], -1) * ring[:, 1]).sum())
-        inward = 1.0 if area > 0.0 else -1.0                 # (counter-clockwise: the inside is on the left)
-        if keep.all():
-            runs = [np.vstack([pts, pts[:1]])]
-        else:
-            first = int(np.flatnonzero(drop)[0])
-            rot = np.roll(np.arange(len(pts)), -first)
-            runs, cur = [], []
-            for k in rot:
-                if keep[k]:
-                    cur.append(pts[k])
-                elif cur:
-                    runs.append(np.array(cur))
-                    cur = []
-            if cur:
-                runs.append(np.array(cur))
-        for run in runs:
-            if len(run) < 2 or _length(run) < EDGE_MIN_M:
-                continue
-            run = _simplify(run, EDGE_TOL_M)
-            for k in (0, 1):
-                out.append((standmarks.offset(run, inward * (EDGE_IN_M + k * (EDGE_W_M + EDGE_GAP_M))), EDGE_W_M,
-                            EDGE_KIND, COLOR))
+        if keep.all():                                  # (the whole outline: a closed line of its own)
+            run = np.vstack([pts, pts[:1]])
+            closed_runs.append(run if area > 0.0 else run[::-1])
+            continue
+        first = int(np.flatnonzero(~keep)[0])
+        cur = []
+        for k in np.roll(np.arange(len(pts)), -first):
+            if keep[k]:
+                cur.append(pts[k])
+            elif cur:
+                runs.append(np.array(cur) if area > 0.0 else np.array(cur)[::-1])      # (counter-clockwise: the inside is on the left)
+                cur = []
+        if cur:
+            runs.append(np.array(cur) if area > 0.0 else np.array(cur)[::-1])
+    out = []
+    for run in _chain_runs([r for r in runs if len(r) >= 2], EDGE_JOIN_M) + closed_runs:
+        if len(run) < 2 or _length(run) < EDGE_MIN_M:
+            continue
+        run = _simplify(run, EDGE_TOL_M)
+        for k in (0, 1):
+            out.append((standmarks.offset(run, EDGE_IN_M + k * (EDGE_W_M + EDGE_GAP_M)), EDGE_W_M, EDGE_KIND, COLOR))
     return out
 
 
@@ -2313,12 +1909,88 @@ def _mapped_runs(sc):
                 log.warning("smoothing the taxiways: %s: %s", type(ex).__name__, ex)
             pieces = [(w[0], i, True, True) for i, w in enumerate(sc.ways)]
         blocks = _runway_blocks([x[0] for x in pieces], [(r[0], r[1]) for r in sc.runways], RUNWAY_GAP_M)
+        rcl = [np.stack([r[0][:-1], r[0][1:]], axis=1) for r in sc.runways if len(r[0]) >= 2]
         got = sc.memo["runs"] = []
         for (sm, wi, at_first, at_last), blk in zip(pieces, blocks):
+            on = [False, False]                         # (an end of the way on a runway's centreline: it runs on to it, not cut short of the edge)
+            for k, (end, own) in enumerate(((sm[0], at_first), (sm[-1], at_last))):
+                on[k] = bool(own and any(float(_pts_dist(end[None], segs)[0]) <= aeroways.JOIN_TOL_M for segs in rcl))
+            if blk and (on[0] or on[1]):
+                blk = _open_ends(blk, len(sm) - 1, on[0], on[1])
             for run in (_free_runs(sm, blk) if blk else [sm]):
-                got.append((run, sc.ways[wi][3], wi, at_first and bool(float(dnp.hypot(*(run[0] - sm[0]))) < _EPS),
-                            at_last and bool(float(dnp.hypot(*(run[-1] - sm[-1]))) < _EPS)))
+                first = at_first and bool(float(dnp.hypot(*(run[0] - sm[0]))) < _EPS)
+                last = at_last and bool(float(dnp.hypot(*(run[-1] - sm[-1]))) < _EPS)
+                if first and on[0]:
+                    run = _lead_on(run[::-1], rcl)[::-1]
+                if last and on[1]:
+                    run = _lead_on(run, rcl)
+                got.append((run, sc.ways[wi][3], wi, first, last))
     return got
+
+
+def _open_ends(blk, nseg, first, last):
+    """blk ({segment: [(lo, hi)]}: _runway_blocks') without the blocked intervals that run on to the way's start (first) or end (last):
+    the way is not cut where it ends on the runway."""
+    blk = {j: list(v) for j, v in blk.items()}
+    for at_end, flag in ((True, last), (False, first)):
+        if not flag:
+            continue
+        for j in (range(nseg - 1, -1, -1) if at_end else range(nseg)):
+            hit = [iv for iv in blk.get(j, ()) if (iv[1] >= 1.0 - _EPS if at_end else iv[0] <= _EPS)]
+            if not hit:
+                break
+            for iv in hit:
+                blk[j].remove(iv)
+            if not any((iv[0] <= _EPS if at_end else iv[1] >= 1.0 - _EPS) for iv in hit):
+                break
+    return {j: v for j, v in blk.items() if v}
+
+
+def _lead_on(run, rcl):
+    """The polyline `run` (k, 2) ending on a runway's centreline (rcl: its segments (m, 2, 2)) with its end the lead-on: at less than
+    RUNWAY_LEAD_RAD to the centreline, the last straight (at least RUNWAY_LEAD_MIN_M) replaced by a tangent arc of RUNWAY_LEAD_R_M (a
+    smaller radius where it is shorter) that ends along the centreline; else straight to the centreline (the end on it)."""
+    seg = np.diff(run, axis=0)
+    ln = dnp.hypot(seg[:, 0], seg[:, 1])
+    cum = np.r_[0.0, np.cumsum(ln)]
+    end = run[-1]
+    best = None                                         # (the nearest centreline segment: distance, (a, b))
+    for segs in rcl:
+        a, ab = segs[:, 0], segs[:, 1] - segs[:, 0]
+        k = np.clip(dnp.vecdot(end - a, ab) / np.maximum(dnp.vecdot(ab, ab), 1e-12), 0.0, 1.0)
+        dd = dnp.hypot(*(a + k[:, None] * ab - end).T)
+        j = int(np.argmin(dd))
+        if best is None or float(dd[j]) < best[0]:
+            best = (float(dd[j]), segs[j])
+    if best is None:
+        return run
+    r = best[1][1] - best[1][0]
+    r = r / max(float(dnp.hypot(*r)), _EPS)
+    a, b = best[1]                                      # (the end moved onto the centreline)
+    t = float(np.clip(float(dnp.dot(end - a, b - a)) / max(float(dnp.dot(b - a, b - a)), 1e-12), 0.0, 1.0))
+    on = a + t * (b - a)
+    back = run[cum <= cum[-1] - 3.0]                    # (the direction it arrives in: over the last 3 m)
+    p3 = run[-2] if not len(back) else back[-1]
+    d = on - p3
+    d = d / max(float(dnp.hypot(*d)), _EPS)
+    if float(d[0] * r[0] + d[1] * r[1]) < 0.0:
+        r = -r
+    ang = dmath.atan2(abs(float(d[0] * r[1] - d[1] * r[0])), float(d[0] * r[0] + d[1] * r[1]))
+    run = np.vstack([run[:-1], on[None]]) if float(dnp.hypot(*(run[-1] - on))) > 1e-9 else run
+    if ang >= RUNWAY_LEAD_RAD or ang < 0.02:
+        return run
+    line = run[:-1] - on                                # (how far back from the end it is straight: within STRAIGHT_TOL_M of the line)
+    off = np.abs(line[:, 0] * d[1] - line[:, 1] * d[0])
+    bad = np.flatnonzero(off > STRAIGHT_TOL_M)
+    straight = float(dnp.hypot(*(on - run[bad[-1]]))) if len(bad) else float(cum[-1])
+    tl = min(RUNWAY_LEAD_R_M * dmath.tan(ang / 2.0), straight)
+    if tl < RUNWAY_LEAD_MIN_M:
+        return run
+    new_cum = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(run, axis=0).T))]
+    keep = new_cum <= new_cum[-1] - tl + 1e-9
+    head = run[keep]
+    arc = _fillet(on, d, r, tl)
+    return np.vstack([head, arc]) if float(dnp.hypot(*(head[-1] - arc[0]))) > 1e-6 else np.vstack([head[:-1], arc])
 
 
 def _build(feats_list):

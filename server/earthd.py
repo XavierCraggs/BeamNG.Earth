@@ -149,6 +149,7 @@ from types import SimpleNamespace  # noqa: E402
 import gravity as gravitymod  # noqa: E402
 import aeroways  # noqa: E402
 import airportgrade as airportgrademod  # noqa: E402
+import runwaysnap  # noqa: E402
 import airports as airportsmod  # noqa: E402
 import seacarve as seacarvemod  # noqa: E402
 import seatiles as seatilesmod  # noqa: E402
@@ -1262,6 +1263,8 @@ class Server:
         _railways.RAW_ELEV = lambda la, lo, _d=self.dem: _d.sample(la, lo, gradingmod.PROFILE_ZOOM)
         # runways graded in (--airports on: main() loads the OurAirports copy before the worker processes)
         self.airports = airportgrademod.AirportGrader(airports_db, self.dem) if airports_db is not None else None
+        if self.airports is not None:
+            runwaysnap.set_provider(self.airports.runways_in_box)      # (the mapped runway lines are laid on the graded runways)
         self.airports_db = airports_db  # (also the road rules' country where no border says: navgraph.country_at)
         self.regional_poles = regional_poles
         if regional_poles != "off":

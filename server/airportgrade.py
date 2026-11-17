@@ -157,6 +157,16 @@ class AirportGrader:
             i += m
         return out
 
+    def runways_in_box(self, lat0, lon0, lat1, lon1):
+        """[(le lat, le lon, he lat, he lon, width m)] of the open runways whose map-data cells the box touches (runwaysnap.set_provider:
+        the mapped runway lines and the taxiways' ends are laid onto these)."""
+        out = []
+        for g in self._groups(np.array([lat0, lat1]), np.array([lon0, lon1])):
+            for rw in g:
+                if not rw.closed and rw.surface != "water":
+                    out.append((rw.le.lat, rw.le.lon, rw.he.lat, rw.he.lon, rw.width_m))
+        return out
+
     def runway_pads(self, lat, lon):
         """[(lat (4,), lon (4,))]: the paved, open runways near the points (their map-data cells) as rectangles end to
         end and RUNWAY_PAD_SHOULDER_M wider each side than the runway, painted in like the gas stations' forecourts

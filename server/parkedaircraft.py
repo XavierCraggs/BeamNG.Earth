@@ -11,21 +11,27 @@ gate's own building when it stands inside one: its cell's and its neighbours' bu
 building edge nearest the gate (an edge of at least EDGE_MIN_M; a shorter one: the length-weighted principal direction of
 the edges within FACADE_R_M of it), and the aircraft parks nose-in, its axis along the facade's normal (so perpendicular to
 the wall): nose NOSE_GAP_M off the facade, centre on from there by half its length, the tail toward the open apron. A
+wall's direction is its general line (wall_normal: a line fitted to the outline over the widest straight window of MACRO_HALF_M,
+a crenellated pier's edges' principal direction where the edge is a step), tried before the nearest edge's own: a pier drawn with a
+protrusion at each gate, a diagonal or a curved wall takes the aircraft nose-in to the wall, not to a step. A
 numeric tag direction / heading / bearing on the gate (the nose's compass bearing) is preferred where it points
 within HEADING_MAX_DEG of the facade's normal. A mapped jet bridge (airportroles: the gate's nearest bridge with an end within GATE_BRIDGE_M of it; the cell's buildings and
 parts classified) places the aircraft from the bridge: the axis the wall's normal at the bridge's root (nose-in; at a round satellite
 radial), or, where the bridge is more than BRIDGE_AXIS_DEG off that normal, the bridge's own (the nose still toward the
-building); the fuselage's centreline to the RIGHT of the bridge's (looking tail to nose) by its half width + the fuselage's
-half width + BRIDGE_GAP_M, so the bridge meets the forward LEFT door (DOOR_K of its length back from the nose) from the
-side, level with the bridge's outer end. Every mapped bridge is an obstacle to the fuselage (the wings pass under), the
-gate's own (every one with an end by the gate, their tails) all but the last BRIDGE_CAB_M of each: the cab at the door
-(and a small piece beside it); if the right side is blocked the mirror is tried (fuselage to the left of the bridge, the
-door on its right), then both from up to BRIDGE_BACK_M further back (tail-ward), then none. A small building touching the
+building). The pose is solved (_bridge_pose): of those where the whole plan (fuselage, wings, tailplane) keeps SKIN_GAP_M off every building
+and bridge (the gate's own bridge and its tails (airportroles: Roles.tails), less the last BRIDGE_CAB_M of each: the cab at the
+door; every mapped bridge is an obstacle to the fuselage only, the wings pass under) and meets nothing else, the one that puts the forward LEFT door (DOOR_K of its
+length back from the nose) nearest the bridge's outer end (within BRIDGE_CAB_M + SKIN_GAP_M of its end face, else the next kind is tried), sliding along
+the axis and across the bridge and turning the axis by up to 5 degrees; the door is the left one (no mirror). A small building touching the
 gate that airportroles does not take for a bridge (under BRIDGE_MAX_M2, within ATTACH_M, reaching BRIDGE_MIN_M or more out) fixes
 the nose BACK_M (the door's setback from the nose, by type) short of its tip as before; such buildings are no obstacle.
 A gate in, or within CENTRE_M of, a terminal's or pier's footprint (mapped on its centreline) tries both sides' facades
 (the sides within SIDE_REACH_M and SIDE_SLACK_M of the nearest wall): the side whose stand is clear is kept, where both are
 the side away from the nearest stand kept (a pair of gates alternates sides).
+A gate at a pier's tip or a corner of the wall (radial_centre: the building's outline turns convex by over RADIAL_TURN within 40 m and goes on
+turning over 80 m, round an arc the circle fitted to it describes: a notch or a step, out and back, is none) parks radially, tried
+before the facades' normals: its axis through the centre of that arc, the nose NOSE_GAP_M off the outline, so a tip's gates fan out like a
+round satellite's.
 Gate pitch: a stand needs its span plus PITCH_GAP_M free beside the stands kept so far, along the wall (World.pitch_ok); the
 kind is the first of the type's order (below) that fits, before the clearance test. No terminal within NEAR_M (a remote stand): a gate
 with such a tag is placed on its point (nose wheel stop) by it; otherwise it lines up with the nearest taxiway or taxilane
@@ -35,13 +41,17 @@ nearest edge of the apron it stands in, any other gate nose toward the nearest t
 Type by the aerodrome's class (the polygon around the gate, else the nearest aerodrome feature, else regional):
 international_airport -> narrow, a wide one a quarter of the gates (by hash) where it fits, else a narrow, else a turboprop;
 regional / domestic / plain airport -> turboprop (3 in 5) or narrow (the other as the fallback); military, heliports, seaplane bases and the like -> none; the rest (airstrips,
-private, other) -> light. Occupancy: a gate's id's crc32 under OCCUPIED_PCT (never random: a rebuilt tile is the same).
+private, other) -> light. Occupancy: a gate's id's crc32 under OCCUPIED_PCT (85: a hub's stands are mostly full; never random: a rebuilt tile is the same).
+Paving (a cell that maps aprons): the nose gear and both main legs on it, or, for a terminal's stand, off it by up to PAVING_GAP_M
+where the leg is nearer the terminal's wall than that paving is (the strip between a wall and an apron mapped short of it, or a hole
+between patches); never a leg beyond the paving, away from the wall (grass: no land cover reaches the stands, so this is the sound test
+there is).
 General aviation: each apron (a polygon of at least APRON_MIN_M2) of an aerodrome that is neither international nor
 military, or named / tagged general aviation (GA, aero club ...), gets ac_light every GA_SPACING_M along its edge, nose
 to the edge, each slot kept by hash (GA_PCT), at most GA_MAX per apron (the lowest hashes), inside the apron.
 Clearance (whole aircraft, fuselage + wing + tailplane rectangles, not a disc): dropped where it meets any building or
 building part (the buildings Features and the building_parts Features alike: canopies and covered walkways count whatever
-their height; OBSTACLE_MIN_M2 skips slivers; BUILDING_CLEAR_M margin; the gate's own jet bridges excepted); a gate's
+their height; OBSTACLE_MIN_M2 skips slivers; BUILDING_CLEAR_M margin, SKIN_GAP_M at a bridged gate); a gate's
 aircraft that meets one is pulled back along its axis (tail-ward, PULL_BACK_STEP_M at a time up to PULL_BACK_MAX_M) before
 it is dropped; a runway or
 stopway (half its width + RUNWAY_CLEAR_M), a taxiway (its half width), a taxilane's centreline (one the nose points along is the stand's lead-in: none), or
@@ -120,6 +130,9 @@ RAISED_MIN_M = 3.0              # a part raised this far (min_height) is no obst
 NOSE_GEAR_K = 0.12              # the nose gear this many lengths behind the nose,
 MAIN_GEAR_K = 0.58              # the main gear this many behind it,
 MAIN_TRACK_K = 0.10             # each leg this many spans off the axis: all on the paving (aprons and taxiways)
+PAVING_GAP_M = 25.0             # a terminal stand's gear may stand this far off the mapped paving, on the wall's side of it (mappers stop an apron short of the building's
+                                # wall, or map it in scattered patches: unmapped paving between)
+PAVING_SLACK_M = 3.0            # (a leg is on the wall's side of the paving where it is no further from the wall than the paving's nearest point, and this)
 BUILDING_CLEAR_M = 1.5
 PULL_BACK_MAX_M = 15.0          # a gate's aircraft that meets a building moves tail-ward by up to this far
 PULL_BACK_STEP_M = 1.5
@@ -132,7 +145,7 @@ RUNWAY_CLEAR_M = 5.0
 AIRCRAFT_CLEAR_M = 2.0
 CENTRE_HIT_M = 1.6              # a point this near a centreline touches it (the sampling's step)
 STEP_M = 1.5                    # the sampling of an aircraft's rectangles
-OCCUPIED_PCT = 65
+OCCUPIED_PCT = 85                # a busy hub's stands are mostly full by day
 GA_PCT = 50
 GA_SPACING_M = 15.0
 GA_MAX = 12
@@ -147,16 +160,36 @@ FACADES_MAX, FACADE_SEP_DEG = 6, 25.0
 DOOR_K = 0.12                   # the forward left door: this many lengths back from the nose, half the fuselage's width out
 CAB_MAX_M2 = 60.0               # a footprint this small within CAB_NEAR_M of a gate's bridge is its cab: no obstacle to that gate
 CAB_NEAR_M = 4.0
-BRIDGE_GAP_M = BUILDING_CLEAR_M + 0.1       # m between a mapped jet bridge's side and the fuselage (just clear of it)
-BRIDGE_CAB_M = 3.0              # m: the last of the gate's own bridge (the cab at the door) is no obstacle to its aircraft
-BRIDGE_BACK_M = 6.0             # a bridged gate's aircraft that meets a building steps back tail-ward by up to this far
-BRIDGE_COS_MIN = 0.5            # (a bridge skewed beyond 60 degrees from the axis counts as 60: its lateral reach)
+SKIN_GAP_M = 0.3                # m: the skin gap a bridged gate's fuselage keeps off any building or bridge (the door's bridge-end contact aside)
+BRIDGE_CAB_M = 2.0              # m: the last of the gate's own bridge (the cab at the door) is no obstacle to its aircraft
+BRIDGE_YAWS_DEG = (0.0, -2.5, 2.5, -5.0, 5.0)      # the search for a bridged gate's pose: the axis turns by up to 5 degrees either way,
+                                                   # the door within BRIDGE_CAB_M + SKIN_GAP_M of the bridge's end face (a cab's reach)
+SEARCH_STEP_M, REFINE_STEP_M = 0.5, 0.1             # (a coarse grid, then a fine one round the best pose)
+YAW_COST_M = 0.1                # a degree of yaw is worth this much door distance (the axis turns only where it gains more)
 BRIDGE_AXIS_DEG = 35.0          # a bridge this far off the wall's normal turns the aircraft's axis to the bridge's (the nose
 BRIDGE_AXIS_COS = dmath.cos(math.radians(BRIDGE_AXIS_DEG))      # still toward the building: at most BRIDGE_TURN_DEG off the normal)
 BRIDGE_TURN_COS = dmath.cos(math.radians(75.0))
 CENTRE_M = 3.0                  # a gate this near (or in) a pier's or a terminal's footprint is on its centreline: both sides tried
 SIDE_REACH_M = 40.0             # ... the sides within this far of the gate, and no more than SIDE_SLACK_M
+MACRO_HALF_M = (40.0, 24.0, 12.0)   # a wall's line is fitted to the outline this far each way of the facade point (the widest that is straight)
+MACRO_STEP_M = 1.0              # (the outline sampled this finely)
+MACRO_LINEAR = 0.2              # a window is straight where its spread across the fitted line is under this of its spread along it (a
+                                # stepped pier's, a gently curved wall's: yes; a corner: no)
+MACRO_EDGE_M = 12.0             # (the edge at the facade point shorter than this is a step; a longer one is the wall: the fitted line
+MACRO_EDGE_COS = dmath.cos(math.radians(30.0))   # lies within 30 degrees of it)
+MACRO_RADII_M = (24.0, 40.0, 60.0)  # ... else (a crenellated pier: a notch every 20 m) the edges' length-weighted principal direction (doubled
+MACRO_COHERENCE = 0.1           # angles) within each of these of q, where each is this coherent and all lie within MACRO_AGREE_COS of the middle one
+MACRO_AGREE_COS = dmath.cos(math.radians(15.0))
+MACRO_SNAP_COS = dmath.cos(math.radians(50.0))   # a normal found by a ray (a gate inside its terminal) turns to the wall's line within this
 SIDE_COS = dmath.cos(math.radians(35.0))
+RADIAL_HALF_M = 20.0            # a wall's outline over this far each way of the facade point (40 m in all) that turns convex by more than
+RADIAL_TURN = math.radians(30.0)   # this (its direction at the two ends: the principal direction of the last RADIAL_END_M) is a pier's tip or
+RADIAL_END_M = 12.0             # a corner, and one that goes on turning (over RADIAL_FAR_M each way: a step or a notch, out and back, does not)
+RADIAL_FAR_M = 40.0             # is where a gate parks radially: its axis from the gate to the centre of the circle fitted to the outline,
+RADIAL_HAIRPIN = 0.35            # (a turn within this of a half turn: a tip narrower than the stretch: convex wherever its circle is inside)
+RADIAL_R_MIN_M = 9.0            # (the circle's radius between these; a rounder or straighter outline has no tip: its normal is the wall's)
+RADIAL_R_MAX_M = 80.0
+RADIAL_FIT = 0.16               # ... and the circle fits the outline: its rms distance from it under this of the radius
 SIDE_SLACK_M = 8.0              # ... further than the nearest wall (a gate just inside a wide terminal's facade is on one side)
 PITCH_GAP_M = 4.0               # m: a stand needs its span plus this free between the stands kept beside it
 PITCH_PARALLEL_COS = 0.5        # (beside: an axis within 60 degrees of the other's)
@@ -228,13 +261,13 @@ def _world(pts, cx, cy, nx, ny):
     return np.stack([cx + pts[:, 0] * nx - pts[:, 1] * ny, cy + pts[:, 0] * ny + pts[:, 1] * nx], 1)
 
 
-def _in_rects(kind, cx, cy, nx, ny, pts, margin):
-    """Which plane points lie within `margin` of the aircraft's rectangles."""
+def _in_rects(kind, cx, cy, nx, ny, pts, margin, first=None):
+    """Which plane points lie within `margin` of the aircraft's rectangles (first: only the first so many: the fuselage's)."""
     d = pts - (cx, cy)
     u = d[:, 0] * nx + d[:, 1] * ny
     v = -d[:, 0] * ny + d[:, 1] * nx
     hit = np.zeros(len(pts), bool)
-    for u0, u1, v0, v1 in _rects(kind):
+    for u0, u1, v0, v1 in _rects(kind)[:first]:
         hit |= (u >= u0 - margin) & (u <= u1 + margin) & (v >= v0 - margin) & (v <= v1 + margin)
     return hit
 
@@ -252,6 +285,26 @@ def _pip(ring, pts):
     dy = np.where(b[:, 1] == a[:, 1], 1.0, b[:, 1] - a[:, 1])
     xi = a[:, 0] + (y - a[:, 1]) * (b[:, 0] - a[:, 0]) / dy
     return ((cross & (pts[:, 0:1] < xi)).sum(1) % 2) == 1
+
+
+_DENSE = {}
+
+
+def _dense(ring):
+    """The points along the polygon `ring`'s outline every SKIN_GAP_M (kept, per ring object): a rectangle that has none within its
+    margin does not cross or touch the outline."""
+    got = _DENSE.get(id(ring))
+    if got is None or got[0] is not ring:
+        if len(_DENSE) > 4096:
+            _DENSE.clear()
+        a, b = ring, np.roll(ring, -1, axis=0)
+        out = []
+        for i in range(len(a)):
+            n = max(1, int(math.ceil(float(dnp.hypot(*(b[i] - a[i]))) / SKIN_GAP_M)))
+            t = np.arange(n) / n
+            out.append(a[i] + t[:, None] * (b[i] - a[i]))
+        got = _DENSE[id(ring)] = (ring, np.concatenate(out))
+    return got[1]
 
 
 def _seg_dist(pts, a, b):
@@ -329,6 +382,156 @@ def _facade(ring, p):
     if inside:
         n = -n
     return q, n
+
+
+def _outward(ring, q, n):
+    """The unit normal n or its opposite, whichever points out of the building ring at q: the one with less of the ring on its
+    side over several distances (a notch of a crenellated wall does not fool it)."""
+    ds = np.array([2.0, 5.0, 10.0, 20.0])
+    ahead = int(_pip(ring, q[None] + ds[:, None] * n[None]).sum())
+    behind = int(_pip(ring, q[None] - ds[:, None] * n[None]).sum())
+    return -n if ahead > behind or (ahead == behind and bool(_pip(ring, (q + n * 3.0)[None])[0])) else n
+
+
+def _outline(ring, q):
+    """(points (m, 2) of the ring sampled every MACRO_STEP_M, each one's signed arc distance (m,) along the ring from q (the
+    shorter way round), the index of q's edge, the ring's length) or None where the ring is too short or q is off its outline."""
+    a, b = ring, np.roll(ring, -1, axis=0)
+    ab = b - a
+    ln = dnp.hypot(ab[:, 0], ab[:, 1])
+    total = float(ln.sum())
+    if total < 4.0 * MACRO_STEP_M:
+        return None
+    d, _q, j = _nearest_on(ring, q)
+    if d > 2.0:
+        return None
+    cnt = np.maximum(1, np.ceil(ln / MACRO_STEP_M).astype(int))
+    start = np.cumsum(ln) - ln
+    idx = np.repeat(np.arange(len(a)), cnt)
+    first = np.cumsum(cnt) - cnt
+    frac = (np.arange(int(cnt.sum())) - first[idx]) / cnt[idx]
+    pts = a[idx] + ab[idx] * frac[:, None]
+    arc = start[idx] + ln[idx] * frac
+    sq = start[j] + float(dnp.hypot(*(q - a[j])))
+    ds = arc - sq
+    ds = np.where(ds > total / 2.0, ds - total, np.where(ds < -total / 2.0, ds + total, ds))       # (signed, along the ring)
+    return pts, ds, j, total
+
+
+def _run_axis(w):
+    """The unit principal direction of the points w (k, 2) in order, pointing the way they run."""
+    c = w - w.mean(0)
+    sxx, syy, sxy = float((c[:, 0] * c[:, 0]).sum()), float((c[:, 1] * c[:, 1]).sum()), float((c[:, 0] * c[:, 1]).sum())
+    t = 0.5 * dmath.atan2(2.0 * sxy, sxx - syy)
+    v = np.array([dmath.cos(t), dmath.sin(t)])
+    return v if float(dnp.matmul(w[-1] - w[0], v)) >= 0.0 else -v
+
+
+def _fit_circle(w):
+    """(centre (2,), radius, rms distance of the points from the circle) of the circle fitted to the points w (k, 2) (the algebraic fit);
+    (None, 0, 0) where they are on a line."""
+    m = w.mean(0)
+    c = w - m
+    sol = dnp.lstsq(np.stack([c[:, 0], c[:, 1], np.ones(len(c))], 1), -(c[:, 0] * c[:, 0] + c[:, 1] * c[:, 1]))[0]
+    cx, cy = -sol[0] / 2.0, -sol[1] / 2.0
+    r2 = float(cx * cx + cy * cy - sol[2])
+    if r2 <= 0.0:
+        return None, 0.0, 0.0
+    r = math.sqrt(r2)
+    d = dnp.hypot(c[:, 0] - cx, c[:, 1] - cy) - r
+    return m + np.array([cx, cy]), r, math.sqrt(float((d * d).mean()))
+
+
+def _end_turn(pts, ds, h):
+    """The signed turn (radians) of the outline's direction from its stretch's start (-h) to its end (+h) about the point the arc
+    distances `ds` are from: the principal directions of the first and the last RADIAL_END_M of the stretch (None: too few points)."""
+    left = np.flatnonzero((ds >= -h) & (ds <= -h + RADIAL_END_M))
+    right = np.flatnonzero((ds >= h - RADIAL_END_M) & (ds <= h))
+    if len(left) < 8 or len(right) < 8:
+        return None
+    dl, dr = _run_axis(pts[left[np.argsort(ds[left])]]), _run_axis(pts[right[np.argsort(ds[right])]])
+    return dmath.atan2(float(dl[0] * dr[1] - dl[1] * dr[0]), float(dl[0] * dr[0] + dl[1] * dr[1]))
+
+
+def radial_centre(ring, q, p=None):
+    """The centre (2,) of the arc a gate near the outline's point q of a building ring parks radially to, where the outline turns convex
+    by more than RADIAL_TURN within 2 * RADIAL_HALF_M about q and by that much still within 2 * RADIAL_FAR_M (a pier's tip, a corner of
+    the wall; the outline's direction at the two ends of the stretch is the principal direction of its first and last RADIAL_END_M,
+    so a step in a wall, or a notch, or a finger, out and back, is none): the centre of the circle fitted to the nearer
+    stretch (radius RADIAL_R_MIN_M to RADIAL_R_MAX_M), else its centroid, in either case inside the ring. p (a nose): None where it
+    lies on the far side of the centre from q (the radial would point into the building). None where q is on a wall that does not turn
+    that way (a straight or a concave one, a rounder arc: the wall's normal then)."""
+    got = _outline(ring, q)
+    if got is None:
+        return None
+    pts, ds, _j, total = got
+    h = RADIAL_HALF_M
+    if total <= 2.0 * RADIAL_FAR_M + 8.0:
+        return None
+    sign = float(dnp.dot(ring[:, 0], np.roll(ring[:, 1], -1)) - dnp.dot(np.roll(ring[:, 0], -1), ring[:, 1]))   # (twice the signed area)
+    for half in (h, RADIAL_FAR_M):
+        turn = _end_turn(pts, ds, half)
+        if turn is None or abs(turn) <= RADIAL_TURN:
+            return None
+        if half == h and abs(turn) < math.pi - RADIAL_HAIRPIN and turn * sign <= 0.0:       # (a hairpin has no sense: the circle's centre decides)
+            return None
+    w = pts[(ds >= -h) & (ds <= h)]
+    centre, radius, rms = _fit_circle(w)
+    if centre is None or not RADIAL_R_MIN_M <= radius <= RADIAL_R_MAX_M or rms > RADIAL_FIT * radius             or not bool(_pip(ring, centre[None])[0]):
+        return None
+    if p is not None and float(dnp.matmul(p - centre, q - centre)) <= 0.0:
+        return None
+    return centre
+
+
+def wall_normal(ring, q):
+    """The unit outward normal of the building ring's wall at its point q, from a line fitted to the outline (principal axis
+    of the sampled points) over the widest window of MACRO_HALF_M about q that is straight (MACRO_LINEAR), centred on q or, near
+    a corner, running one way from it: a pier drawn with a notch or a protrusion at each gate (Frankfurt's: steps of 4 m every
+    30 m), a diagonal wall or a curved one gets the normal of its general line, not of the step it happens to stand at. Where
+    the edge at q is short (a step: under MACRO_EDGE_M) and no window is straight, the edges' length-weighted principal
+    direction (a crenellated pier). None where neither holds (a corner) or q is off the outline."""
+    a, b = ring, np.roll(ring, -1, axis=0)
+    ab = b - a
+    ln = dnp.hypot(ab[:, 0], ab[:, 1])
+    got = _outline(ring, q)
+    if got is None:
+        return None
+    pts, ds, j, total = got
+    for half in MACRO_HALF_M:
+        if 2.0 * half >= total:
+            continue
+        for lo, hi in ((-half, half), (0.0, half), (-half, 0.0)):
+            w = pts[(ds >= lo) & (ds <= hi)]
+            if len(w) < 8:
+                continue
+            c = w - w.mean(0)
+            sxx, syy, sxy = float((c[:, 0] * c[:, 0]).sum()), float((c[:, 1] * c[:, 1]).sum()), float((c[:, 0] * c[:, 1]).sum())
+            mid, rad = (sxx + syy) / 2.0, math.sqrt(((sxx - syy) / 2.0) * ((sxx - syy) / 2.0) + sxy * sxy)
+            big, small = mid + rad, max(mid - rad, 0.0)
+            if big <= 0.0 or math.sqrt(small / big) > MACRO_LINEAR:
+                continue
+            t = 0.5 * dmath.atan2(2.0 * sxy, sxx - syy)
+            along = np.array([dmath.cos(t), dmath.sin(t)])
+            if float(ln[j]) >= MACRO_EDGE_M and abs(float(dnp.matmul(along, ab[j]))) < MACRO_EDGE_COS * float(ln[j]):
+                continue                                        # (a long edge at q is the wall: a window that turns a corner is not)
+            return _outward(ring, q, np.array([-along[1], along[0]]))
+    if float(ln[j]) >= MACRO_EDGE_M:
+        return None
+    ang = dnp.arctan2(ab[:, 1], ab[:, 0])
+    centre = (a + b) / 2.0
+    got = []
+    for r in MACRO_RADII_M:
+        near = dnp.hypot(*(centre - q).T) <= r + ln / 2.0
+        w = np.minimum(ln, r)[near]
+        sy, sx = float((w * dnp.sin(2 * ang[near])).sum()), float((w * dnp.cos(2 * ang[near])).sum())
+        if not len(w) or dnp.hypot(sx, sy) < MACRO_COHERENCE * float(w.sum()):
+            return None
+        t = 0.5 * dmath.atan2(sy, sx)
+        got.append(np.array([-dmath.sin(t), dmath.cos(t)]))
+    if any(abs(float(dnp.matmul(v, got[1]))) < MACRO_AGREE_COS for v in got):
+        return None
+    return _outward(ring, q, got[1])
 
 
 # ------------------------------------------------------------------------------------------------- the scene
@@ -524,8 +727,10 @@ class _World:
         """The indexes of the narrow, elongated rings (bridges, fingers) within `near` m of (x, y)."""
         return tuple(oi for oi in self.narrow if float(dnp.hypot(*(self.rings[oi][0] - (x, y)).T).min()) <= near)
 
-    def paved(self, kind, x, y, nx, ny):
-        """Are the aircraft's nose gear and both main legs on the paving (always, where it is not tested)?"""
+    def paved(self, kind, x, y, nx, ny, strip=0.0, wall=None):
+        """Are the aircraft's nose gear and both main legs on the paving (always, where it is not tested)? strip (with `wall`, the ring of
+        the gate's terminal): each may be off it by this far where it is nearer the wall than the paving is (the unmapped strip between a
+        terminal's wall and its apron, or between patches), never beyond the paving, away from the wall: that is grass."""
         if not self.paving:
             return True
         length, span = SPECS[kind][0], SPECS[kind][1]
@@ -535,16 +740,31 @@ class _World:
         pts = _world(local, x, y, nx, ny)
         for p in pts:
             q = p[None]
-            if not any(x0 <= p[0] <= x1 and y0 <= p[1] <= y1 and _pip(ring, q)[0] for ring, (x0, y0, x1, y1) in self.paving):
+            near = None                                     # (the nearest paving within strip: distance, its nearest point)
+            on = False
+            for ring, (x0, y0, x1, y1) in self.paving:
+                if not (x0 - strip <= p[0] <= x1 + strip and y0 - strip <= p[1] <= y1 + strip):
+                    continue
+                if bool(_pip(ring, q)[0]):
+                    on = True
+                    break
+                if strip > 0.0:
+                    d, nq, _j = _nearest_on(ring, p)
+                    if d <= strip and (near is None or d < near[0]):
+                        near = (d, nq)
+            if on:
+                continue
+            if near is None or (wall is not None and _nearest_on(wall, p)[0] >= _nearest_on(wall, near[1])[0] + PAVING_SLACK_M):
                 return False
         return True
 
-    def why(self, kind, x, y, nx, ny, inside=None, ignore=(), repl=None):
+    def why(self, kind, x, y, nx, ny, inside=None, ignore=(), repl=None, strip=0.0, wall=None, skin=None):
         """None where an aircraft of `kind` at (x, y) heading (nx, ny) keeps clear (and lies in the ring `inside`), else
         the first thing it meets: "outside", "building", "taxiway" (runways, stopways, taxiways), "taxilane", "aircraft",
-        "unpaved" (a gear leg off the paving). ignore: indexes into self.rings of buildings that are no obstacle (a narrow
+        "unpaved" (a gear leg off the paving by more than `strip`, or beyond it from the terminal `wall`). ignore: indexes into self.rings of buildings that are no obstacle (a narrow
         piece by the gate); repl: {index: (ring, bbox) or None}, the ring to test instead (a gate's own jet bridge less its
-        cab), None for none; a raised part is one to the fuselage only."""
+        cab), None for none; a raised part is one to the fuselage only; skin: the margin kept off every building (default
+        BUILDING_CLEAR_M)."""
         pts = _world(_local_points(kind), x, y, nx, ny)
         n_fus = _fuselage_n(kind)
         r = _radius(kind) + BUILDING_CLEAR_M
@@ -560,6 +780,10 @@ class _World:
             if x0 - r > x or x1 + r < x or y0 - r > y or y1 + r < y:
                 continue
             hit = pts[:n_fus] if oi in self.raised else pts
+            if skin is not None:                # (the plan's rectangles against the outline, sampled finer than the skin gap: exact)
+                if _pip(ring, hit).any() or _in_rects(kind, x, y, nx, ny, _dense(ring), skin, 1 if oi in self.raised else None).any():
+                    return "building"
+                continue
             if _pip(ring, hit).any() or _seg_dist(hit, ring, np.roll(ring, -1, axis=0)).min() < BUILDING_CLEAR_M:
                 return "building"
         if len(self.a):
@@ -579,7 +803,7 @@ class _World:
             if _in_rects(k2, x2, y2, nx2, ny2, pts, AIRCRAFT_CLEAR_M).any() or \
                     _in_rects(kind, x, y, nx, ny, _world(_local_points(k2), x2, y2, nx2, ny2), AIRCRAFT_CLEAR_M).any():
                 return "aircraft"
-        return None if self.paved(kind, x, y, nx, ny) else "unpaved"
+        return None if self.paved(kind, x, y, nx, ny, strip, wall) else "unpaved"
 
     def add(self, kind, x, y, nx, ny):
         self.placed.append((kind, x, y, nx, ny))
@@ -719,6 +943,30 @@ def _inside_facades(ring, p):
     return out
 
 
+def _macro_snap(ring, q, n):
+    """The normal n (a ray's, out of the building at q) turned to the wall's general line (wall_normal) where that is within
+    MACRO_SNAP_COS of it, else n."""
+    m = wall_normal(ring, q)
+    return n if m is None or float(dnp.matmul(m, n)) < MACRO_SNAP_COS else m
+
+
+def _radial(ring, q, n):
+    """(point on the facade, outward unit normal) of the radial stand for the facade (q, n) of a building ring where it is at a pier's tip
+    or a corner of the wall (radial_centre): the nose NOSE_GAP_M off the facade along n, the axis from there to the arc's centre, the
+    facade point where that line leaves the ring. None otherwise."""
+    nose = q + n * NOSE_GAP_M
+    c = radial_centre(ring, q, nose)
+    if c is None:
+        return None
+    v = nose - c
+    r = float(dnp.hypot(*v))
+    if r < 1.0:
+        return None
+    m = v / r
+    t = float(_exit_out(ring, c[None], m[None])[0])
+    return None if t >= RAY_MAX_M else (c + m * t, m)
+
+
 def _terminal(obstacles, x, y, near=None):
     """(ring, [(facade point, outward normal) ...], on its centreline) of the terminal of a gate at (x, y): the nearest large
     building within NEAR_M (the one it stands in first), None without; the facades by preference; True where the gate is in
@@ -739,7 +987,7 @@ def _terminal(obstacles, x, y, near=None):
     ring = best[1]
     centre = best[0] <= CENTRE_M                  # (in the footprint or against it: maybe on a pier's centreline)
     if best[2]:
-        out = _inside_facades(ring, p) + [_facade(ring, p)]
+        out = [(q, _macro_snap(ring, q, n)) for q, n in _inside_facades(ring, p)] + [_facade(ring, p)]
     else:
         _d, q, j = _nearest_on(ring, p)
         e = np.roll(ring, -1, axis=0)[j] - ring[j]
@@ -749,11 +997,15 @@ def _terminal(obstacles, x, y, near=None):
             n = -n                                              # (toward the gate's side: out of the building)
         near, smooth = (q, n), _facade(ring, p)
         out = [near, smooth] if ln >= EDGE_MIN_M else [smooth, near]     # (the nearest edge's own normal first)
+        macro = wall_normal(ring, q)
+        if macro is not None:                                   # (the wall's general line before a step's edge)
+            out.insert(0, (q, macro))
         if centre:                                              # (the far side of a pier: its wall's normal the other way)
             for q2, n2 in _inside_facades(ring, q - n * 1.0):
                 if float(n[0] * n2[0] + n[1] * n2[1]) <= -0.7 and float((q2 - p)[0] * n2[0] + (q2 - p)[1] * n2[1]) <= SIDE_SLACK_M + CENTRE_M:
                     out.append((q2, n2))
-    return ring, out, centre
+    radial = [r + (True,) for r in (_radial(ring, q, n) for q, n in out) if r is not None]     # (at a tip or a corner: radial, first)
+    return ring, radial + out, centre
 
 
 def _bridge(small, gx, gy, out):
@@ -855,8 +1107,8 @@ def _links(sc, feats, bld, obstacles):
     """({gate id: _Link}, {indexes of the obstacles that are jet bridges}) of a cell's gates, from airportroles' reading of the
     buildings and parts: the gate's nearest bridge (the end, its direction out of the terminal), the normal of the terminal's
     or pier's wall at the bridge's root (the bridge's own direction where no wall is near), and the bridges that are no
-    obstacle to the gate's aircraft but for their last BRIDGE_CAB_M (the cab): every bridge with an end within
-    airportroles.GATE_BRIDGE_M of the gate, and their tails (a bridge mapped in two pieces)."""
+    obstacle to the gate's aircraft but for their last BRIDGE_CAB_M (the cab): the gate's own bridge and its tails (a bridge mapped
+    in two pieces)."""
     flat = _flat(bld)
     blds = [b for b in flat if b.layer != "building_parts"]
     parts = [b for b in flat if b.layer == "building_parts"]
@@ -884,24 +1136,13 @@ def _links(sc, feats, bld, obstacles):
     jb = sorted(uid for uid, role in res.items() if role == ar.JET_BRIDGE)
     obs_of = {uid: obstacle_of(ring_of(uid)) for uid in jb}
     bobs = {oi for oi in obs_of.values() if oi is not None}
-    tails = [uid for uid in jb if uid not in res.bridges]
     terms = sorted(uid for uid, role in res.items() if role in (ar.TERMINAL, ar.PIER))
     ours = {g[0] for g in sc.gates}
     links = {}
     for gid, info in sorted(res.gates.items()):
         if info["bridge"] is None or gid not in ours or info["bridge"] not in res.bridges:
             continue
-        gx, gy = info["xy"]
-        own = {bid for bid, (_d, root, outer, _v) in res.bridges.items()
-               if min(math.hypot(root[0] - gx, root[1] - gy), math.hypot(outer[0] - gx, outer[1] - gy)) <= ar.GATE_BRIDGE_M}
-        own.add(info["bridge"])
-        grown = True
-        while grown:
-            grown = False
-            for uid in tails:
-                if uid not in own and any(_ring_gap(ring_of(uid), ring_of(o)) <= ar.TAIL_JOIN_M + 0.5 for o in own):
-                    own.add(uid)
-                    grown = True
+        own = {info["bridge"]} | {uid for uid, bids in res.tails.items() if info["bridge"] in bids}     # (its tails: a neighbour's is an obstacle all along)
         def end_of(bid):
             _d, r, o, _v = res.bridges[bid]
             r_p, o_p = _plane(sc, frame, [r, o])
@@ -941,33 +1182,70 @@ def _links(sc, feats, bld, obstacles):
     return links, bobs
 
 
-def _bridge_tries(kind, link):
-    """[(centre x, y, nose direction x, y, (), None)] of a gate's aircraft of `kind` at its mapped jet bridge, in the order to
-    try: the axis the wall's normal at the bridge's root, nose-in (the bridge more than BRIDGE_AXIS_DEG off it: along the
-    bridge, the nose still toward the building, so a round satellite's is radial); the forward left door (DOOR_K of the
-    length back from the nose) level with the bridge's outer end, the fuselage's centreline to the right of the bridge's
-    by its half width + BRIDGE_GAP_M + the fuselage's half width (on a skewed bridge, its reach across the axis, and the
-    nose's lead where the bridge leans toward the fuselage); then
-    the mirror (the fuselage to the left, the door on the right); each again from PULL_BACK_STEP_M further back (the
-    tail-ward) up to BRIDGE_BACK_M."""
+def _bridge_pose(world, kind, link, **why_kw):
+    """(None, (x, y, nx, ny)) of a gate's aircraft of `kind` at its mapped jet bridge, else (why, None): the pose that puts its
+    forward left door (DOOR_K of the length back from the nose, half the fuselage's width out) nearest the bridge's outer end,
+    of those where the aircraft's plan (fuselage, wings, tailplane: World.why) keeps SKIN_GAP_M off every building and bridge but the
+    gate's own bridge's cab (its last BRIDGE_CAB_M: World.why's repl) and meets nothing else, and the door is within a cab's reach
+    (BRIDGE_CAB_M + SKIN_GAP_M) of the bridge's end face (the aircraft of a kind that cannot meet the bridge is the next kind's). The
+    search starts from the ideal: the axis the wall's normal at the bridge's root, nose-in (the bridge more than BRIDGE_AXIS_DEG off
+    it: along the bridge, the nose still toward the building, so a round satellite's is radial), the door at the end; it slides the
+    door along the axis and across the bridge (a grid of SEARCH_STEP_M, tried nearest the end first, then a fine one of REFINE_STEP_M round the first pose
+    that clears) and turns the axis (BRIDGE_YAWS_DEG). A real aircraft's forward door is its left: the bridge is on the left,
+    the fuselage right of it (nose toward the building); there is no mirror."""
     length, fus = SPECS[kind][0], SPECS[kind][3]
     d, n = link.dir, link.normal
-    u = -n
+    u0 = -n
     if BRIDGE_TURN_COS < float(d[0] * n[0] + d[1] * n[1]) < BRIDGE_AXIS_COS:
-        u = -d
-    left = np.array([-u[1], u[0]])
-    cos = max(abs(float(d[0] * u[0] + d[1] * u[1])), BRIDGE_COS_MIN)
-    lean = -float(d[0] * left[0] + d[1] * left[1]) / cos            # the bridge's sideways drift per m toward the building (to the left: +)
-    reach = (link.half + BRIDGE_GAP_M) / cos + fus / 2.0
-    e_u = float(link.end[0] * u[0] + link.end[1] * u[1])
-    e_l = float(link.end[0] * left[0] + link.end[1] * left[1])
-    out = []
-    for k in range(int(BRIDGE_BACK_M / PULL_BACK_STEP_M + 1e-9) + 1):
-        for side in (1.0, -1.0):                    # (the bridge on the aircraft's left, then on its right)
-            lat = e_l - side * (reach + max(0.0, -side * lean) * DOOR_K * length)     # (a bridge leaning toward the fuselage: further off)
-            c = u * (e_u - (length / 2.0 - DOOR_K * length) - k * PULL_BACK_STEP_M) + left * lat
-            out.append((float(c[0]), float(c[1]), float(u[0]), float(u[1]), (), None))
-    return out
+        u0 = -d
+    left0 = np.array([-u0[1], u0[0]])
+    perp = np.array([-d[1], d[0]])
+    fwd = length / 2.0 - DOOR_K * length
+    reach = BRIDGE_CAB_M + SKIN_GAP_M
+    lmax = link.half + fus + SKIN_GAP_M                         # (the door off the bridge's axis by at most the bridge's half width, the fuselage's width and a gap)
+    yaws = [(dmath.cos(math.radians(y)), dmath.sin(math.radians(y)), y) for y in BRIDGE_YAWS_DEG]
+
+    def door(a, l):
+        return link.end + u0 * a + left0 * l                    # (a along the axis from the end, l across it)
+
+    def face(t):                                                # (the door's distance to the bridge's end face)
+        s = float(np.clip(float(dnp.dot(t - link.end, perp)), -link.half, link.half))
+        return float(dnp.hypot(*(t - (link.end + perp * s))))
+
+    def pose(a, l, yc, ys):
+        ux, uy = u0[0] * yc - u0[1] * ys, u0[0] * ys + u0[1] * yc
+        t = door(a, l)
+        return (float(t[0] - ux * fwd + uy * fus / 2.0), float(t[1] - uy * fwd - ux * fus / 2.0), float(ux), float(uy))
+
+    def ok(a, l, yc, ys):
+        if face(door(a, l)) > reach:
+            return False
+        x, y, nx, ny = pose(a, l, yc, ys)
+        return world.pitch_ok(kind, x, y, nx, ny) and world.why(kind, x, y, nx, ny, skin=SKIN_GAP_M, **why_kw) is None
+
+    along = np.arange(-reach, BRIDGE_CAB_M + 1e-9, SEARCH_STEP_M)
+    across = np.arange(-lmax, 1e-9, SEARCH_STEP_M)              # (the door on the bridge's right of its axis or on it: the bridge is on the aircraft's left)
+    fine = np.arange(-SEARCH_STEP_M, SEARCH_STEP_M + 1e-9, REFINE_STEP_M)
+    best = None                                                 # (door distance + the yaw's cost, a, l, yaw's cos, sin)
+    for yc, ys, y in yaws:                                      # (each axis turn: its nearest clearing pose, the coarse grid then a fine one)
+        for _dist, a, l in sorted((float(dnp.hypot(a, l)), a, l) for a in along for l in across):
+            if best is not None and _dist - SEARCH_STEP_M + YAW_COST_M * abs(y) >= best[0]:   # (the fine grid gains less than a step)
+                break
+            if not ok(a, l, yc, ys):
+                continue
+            got = (_dist, a, l)
+            for dd, a2, l2 in sorted((float(dnp.hypot(a + da, l + dl)), a + da, l + dl) for da in fine for dl in fine):
+                if dd >= got[0] - 1e-9:
+                    break
+                if ok(a2, l2, yc, ys):
+                    got = (dd, a2, l2)
+                    break
+            if best is None or got[0] + YAW_COST_M * abs(y) < best[0]:
+                best = (got[0] + YAW_COST_M * abs(y), got[1], got[2], yc, ys)
+            break
+    if best is not None:
+        return None, pose(best[1], best[2], best[3], best[4])
+    return "building", None
 
 
 def _gate_tries(kind, gx, gy, bearing, term, small):
@@ -980,7 +1258,7 @@ def _gate_tries(kind, gx, gy, bearing, term, small):
     if bearing is not None:
         d = np.array([dmath.sin(math.radians(bearing)), dmath.cos(math.radians(bearing))])
     tagged, tries = [], []
-    for q, n in term[1]:
+    for q, n, *radial in term[1]:
         base = float(dnp.matmul(q - g, n)) + NOSE_GAP_M
         br = _bridge(small, gx, gy, n)
         if br is not None:                                  # (the bridge fixes the door and the side)
@@ -988,8 +1266,8 @@ def _gate_tries(kind, gx, gy, bearing, term, small):
             c = g + n * (br[0] - BACK_M[kind] + length / 2.0) + np.array([-n[1], n[0]]) * lat
             tries.append((float(c[0]), float(c[1]), -float(n[0]), -float(n[1]), br[3], None))
             continue
-        c = g + n * (base + length / 2.0)
-        tries.append((float(c[0]), float(c[1]), -float(n[0]), -float(n[1]), (), base - NOSE_GAP_M))
+        c = (q + n * (NOSE_GAP_M + length / 2.0)) if radial else g + n * (base + length / 2.0)     # (radial: the axis through the arc's centre)
+        tries.append((float(c[0]), float(c[1]), -float(n[0]), -float(n[1]), (), base - NOSE_GAP_M) + ((True,) if radial else ()))
         if d is not None and base > 0.0:
             dn = float(dnp.matmul(d, n))
             if dn <= -HEADING_COS:                          # (the tag's nose line through the gate, NOSE_GAP_M off the wall)
@@ -998,12 +1276,12 @@ def _gate_tries(kind, gx, gy, bearing, term, small):
     return tagged + tries
 
 
-def _first_clear(world, kind, tries, extra=(), sides=False, at=(0.0, 0.0), repl=None, back=None):
+def _first_clear(world, kind, tries, extra=(), sides=False, at=(0.0, 0.0), repl=None, back=None, strip=0.0, wall=None):
     """(None, (x, y, nx, ny)) of the first of the tries (centre, nose direction, ignored obstacles, reach) that clears, one
     that meets a building tried again pulled back along its axis (not where a jet bridge fixes the door), else (why, None).
     A try whose span (PITCH_GAP_M more) does not fit beside the stands kept is "pitch", before anything else is tested.
     extra: obstacles that are none to any of the tries (the narrow bridges and fingers by the gate); repl: rings tested in
-    place of some obstacles (World.why); back: the most a try is pulled back (default PULL_BACK_MAX_M, and none where it
+    place of some obstacles (World.why); strip, wall: the gear's reach off the paving and the terminal's ring (World.paved); back: the most a try is pulled back (default PULL_BACK_MAX_M, and none where it
     ignores obstacles).
     sides (a gate on a pier's or a terminal's centreline): the tries with a reach of at most SIDE_REACH_M, within
     SIDE_SLACK_M of the nearest facade's, and across or along its normal are the sides, tried after a tagged heading and
@@ -1011,7 +1289,7 @@ def _first_clear(world, kind, tries, extra=(), sides=False, at=(0.0, 0.0), repl=
     `at` (so a pair of gates alternates sides), the first without a stand kept."""
     why = "no_terminal"
     clear = []                                              # ((x, y, nx, ny), is a side)
-    faced = [t for t in tries if t[5] is not None]
+    faced = [t for t in tries if t[5] is not None and len(t) == 6]
     ref = min(faced, key=lambda t: t[5]) if faced else None     # (the nearest facade's normal: the sides are across or along it)
     near = ref[5] if ref else 0.0
 
@@ -1019,16 +1297,16 @@ def _first_clear(world, kind, tries, extra=(), sides=False, at=(0.0, 0.0), repl=
         return bool(sides and t[5] is not None and t[5] <= min(SIDE_REACH_M, near + SIDE_SLACK_M)
                     and abs(t[2] * ref[2] + t[3] * ref[3]) >= SIDE_COS)
 
-    if sides:                                               # (a tagged heading first, then the sides, then the rest)
-        tries = sorted(tries, key=lambda t: 0 if t[5] is None else (1 if is_side(t) else 2))
+    if sides:                                               # (a tagged heading first, then the radial ones, the sides, then the rest)
+        tries = sorted(tries, key=lambda t: 0 if t[5] is None else (1 if len(t) > 6 else 2 if is_side(t) else 3))
     seen = set()
     for try_ in tries:
-        cx, cy, nx, ny, ign, reach = try_
+        cx, cy, nx, ny, ign, reach = try_[:6]
         key = (round(cx, 2), round(cy, 2), round(nx, 3), round(ny, 3))
         if key in seen:                                     # (rays that snapped to one wall's normal)
             continue
         seen.add(key)
-        side = is_side(try_)
+        side = is_side(try_) and len(try_) == 6
         if not world.pitch_ok(kind, cx, cy, nx, ny):
             why = "pitch"
             continue
@@ -1036,7 +1314,7 @@ def _first_clear(world, kind, tries, extra=(), sides=False, at=(0.0, 0.0), repl=
             if k and (ign if back is None else k * PULL_BACK_STEP_M > back + 1e-9):
                 break
             x, y = cx - nx * k * PULL_BACK_STEP_M, cy - ny * k * PULL_BACK_STEP_M
-            why = world.why(kind, x, y, nx, ny, ignore=tuple(ign) + tuple(extra), repl=repl)
+            why = world.why(kind, x, y, nx, ny, ignore=tuple(ign) + tuple(extra), repl=repl, strip=strip, wall=wall)
             if why != "building":
                 break
         if why is None:
@@ -1092,10 +1370,18 @@ def _gate_craft(sc, world, small, obstacles, links=None, empty=False):
             extra += link.cabs                          # (the gate's own bridges are obstacles but for their cab)
             repl = link.cut
             world.raised.update(link.cut)               # ... to the fuselage only
+        wall = None if term is None and link is None else (term or _terminal(obstacles, gx, gy) or (None,))[0]   # (the unmapped strip is by its wall)
         for kind in kinds:
             length = SPECS[kind][0]
-            if link is not None:                        # (a mapped jet bridge: the door level with its end, the fuselage beside it)
-                tries = _bridge_tries(kind, link)
+            if link is not None:                        # (a mapped jet bridge: the pose that puts the door nearest its end)
+                why, got = _bridge_pose(world, kind, link, ignore=extra, repl=repl,
+                                        strip=PAVING_GAP_M, wall=wall)
+                if why is None:
+                    world.add(kind, *got)
+                    out.append((kind,) + tuple(float(v) for v in got) + ("gate", gid))
+                    stats["placed_" + kind] += 1
+                    break
+                continue
             elif term is not None:
                 tries = _gate_tries(kind, gx, gy, bearing, term, small)
             else:                                       # (a stand off the terminals: the nose wheel stop on the gate's point)
@@ -1115,7 +1401,8 @@ def _gate_craft(sc, world, small, obstacles, links=None, empty=False):
                 why = "no_terminal"
                 break
             why, got = _first_clear(world, kind, tries, extra, sides=term is not None and term[2], at=(gx, gy), repl=repl,
-                                    back=None if link is None else 0.0)
+                                    back=None if link is None else 0.0,
+                                    strip=PAVING_GAP_M if term is not None or link is not None else 0.0, wall=wall)
             if why is None:
                 world.add(kind, *got)
                 out.append((kind,) + tuple(float(v) for v in got) + ("gate" if term is not None or link is not None else "remote", gid))

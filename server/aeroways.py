@@ -25,6 +25,7 @@ import numpy as np
 
 import dmath
 import dnp
+import runwaysnap
 
 SUBTYPE = "airport"
 APRON = "apron"
@@ -57,6 +58,7 @@ M_PER_DEG = 6371008.8 * math.pi / 180.0
 FOOT_M = 0.3048
 _WIDTH = re.compile(r"^\s*([0-9]+(?:[.,][0-9]+)?)\s*(m|ft|')?\s*$", re.I)
 _KEY = "_aeroway_pads"
+_SNAP = "_aeroway_snap"
 
 
 def width_tag(value):
@@ -286,6 +288,37 @@ def _fillets(ways, runways):
     return out
 
 
+def snapped(feats):
+    """(lines, ways) of the Features' runway, stopway and taxiway lines moved onto the OurAirports runways (runwaysnap.snap), keyed by
+    (row, the line's index in the row): ({key: (lonlat or None, width)}, {key: lonlat}); empty without a provider (runwaysnap.set_provider).
+    Kept on the Features, per provider."""
+    got = feats.__dict__.get(_SNAP)
+    if got is not None and got[0] == runwaysnap.token():
+        return got[1]
+    out = ({}, {})
+    sub, cls = feats.attrs.get("subtype"), feats.attrs.get("class")
+    if sub is not None and cls is not None and len(feats):
+        air = np.asarray(sub).astype(str) == SUBTYPE
+        cls = np.asarray(cls).astype(str)
+        items = {"runway": [], "stopway": [], "way": []}
+        for i in np.flatnonzero(air & np.isin(cls, (RUNWAY, STOPWAY) + WAYS) & (np.asarray(feats.kind) == 2)):
+            name = "way" if cls[i] in WAYS else str(cls[i])
+            k = 0
+            for part in feats.parts(i):
+                for ln in part:
+                    if len(ln) >= 2:
+                        items[name].append(((int(i), k), np.asarray(ln, np.float64)))
+                        k += 1
+        pts = [ln for v in items.values() for _k, ln in v]
+        if items["runway"] and pts:
+            allp = np.concatenate(pts)
+            rws = runwaysnap.runways_in(float(allp[:, 1].min()), float(allp[:, 0].min()), float(allp[:, 1].max()), float(allp[:, 0].max()))
+            if rws:
+                out = runwaysnap.snap(items, rws)
+    feats.__dict__[_SNAP] = (runwaysnap.token(), out)
+    return out
+
+
 def _feats_pads(feats, runways_too=True, only=None):
     """The pads of one Features (see pads). only: "aprons" the apron rings alone, "ways" the taxiways, taxilanes and
     their fillets alone (surface.photo_lots tones the ways inside an apron as the apron)."""
@@ -302,9 +335,11 @@ def _feats_pads(feats, runways_too=True, only=None):
         return []
     intl = bool((air & (cls == AERODROME)).any())
     out = []
+    snap = snapped(feats)
     ways, runways = [], []                  # (lon, lat (n, 2), half width): the fillets'
     for i in np.flatnonzero(air & np.isin(cls, (APRON, RUNWAY, STOPWAY) + WAYS)):
-        if (only == "aprons" and cls[i] != APRON) or (only == "ways" and cls[i] not in WAYS + (RUNWAY, STOPWAY)):
+        if (only == "aprons" and cls[i] != APRON) or (only == "ways" and cls[i] not in WAYS + (RUNWAY, STOPWAY)) \
+                or (only == "runways" and cls[i] not in (RUNWAY, STOPWAY)):
             continue
         tags = _tags(feats, i)
         kind = int(feats.kind[i])
@@ -315,10 +350,16 @@ def _feats_pads(feats, runways_too=True, only=None):
             # its ends square (an octagon's cap stuck out past the runway's end into the grass: Heathrow 27R)
             if kind == 2 and not _unpaved(feats, i, tags):
                 w = width_tag(tags.get("width")) or (RUNWAY_INTL_M if intl else RUNWAY_M)
-                lines = [np.asarray(ln, np.float64) for part in feats.parts(i) for ln in part if len(ln) >= 2]
-                runways += [(ln, w / 2.0) for ln in lines]
-                for ln in lines if runways_too and only is None else ():
-                    out += _buffer(ln[:, 1], ln[:, 0], w, butt=True)
+                lines = []                  # (the line, its width: laid on the OurAirports runway it is, at that one's width: runwaysnap)
+                for k, ln in enumerate(ln for part in feats.parts(i) for ln in part if len(ln) >= 2):
+                    moved = snap[0].get((int(i), k))
+                    if moved is None:
+                        lines.append((np.asarray(ln, np.float64), w))
+                    elif moved[0] is not None:
+                        lines.append((moved[0], moved[1]))
+                runways += [(ln, wd / 2.0) for ln, wd in lines]
+                for ln, wd in lines if runways_too and only in (None, "runways") else ():
+                    out += _buffer(ln[:, 1], ln[:, 0], wd, butt=True)
             continue
         if _unpaved(feats, i, tags):
             continue
@@ -336,10 +377,12 @@ def _feats_pads(feats, runways_too=True, only=None):
                     width = TAXIWAY_INTL_M if intl else TAXIWAY_M
                 else:
                     width = TAXILANE_INTL_M if intl else TAXILANE_M
+            k = 0
             for part in feats.parts(i):
                 for line in part:
                     if len(line) >= 2:
-                        line = np.asarray(line, np.float64)
+                        line = snap[1].get((int(i), k), np.asarray(line, np.float64))      # (its end on a runway, moved with it)
+                        k += 1
                         out += _buffer(line[:, 1], line[:, 0], width)
                         ways.append((line, width / 2.0))
     if ways:                                # the fillets, in one metric frame for the cell
@@ -355,6 +398,7 @@ def _feats_pads(feats, runways_too=True, only=None):
 
 
 def _kept(feats_list, key, build):
+    key += str(runwaysnap.token())              # (the pads are per provider of the OurAirports runways the mapped lines are moved onto)
     out = []
     for feats in feats_list:
         if feats is None or len(feats) == 0:
@@ -456,6 +500,11 @@ def aprons(feats_list):
     return _kept(feats_list, _KEY + "_aprons", lambda f: _feats_pads(f, False, "aprons"))
 
 
+def runway_pads(feats_list):
+    """[(lat (k,), lon (k,))]: the mapped runway and stopway lines' paving alone (pads without the aprons and the taxiways)."""
+    return _kept(feats_list, _KEY + "_runways", lambda f: _feats_pads(f, True, "runways"))
+
+
 def ways(feats_list):
     """[(lat (k,), lon (k,))]: the taxiway and taxilane outlines and their fillets alone (pads without the aprons and
     the runways' own strips)."""
@@ -467,7 +516,7 @@ def pads(feats_list, runways=True):
     [] for Features with no airport in them (one vectorised test of the class column, kept on the Features). runways
     False: without the mapped runway and stopway lines' paving (the aprons, taxiways and their fillets alone)."""
     out = []
-    key = _KEY if runways else _KEY + "_ways"
+    key = (_KEY if runways else _KEY + "_ways") + str(runwaysnap.token())
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue

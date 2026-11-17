@@ -9,6 +9,7 @@ import os
 import sys
 import types
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -173,9 +174,8 @@ class Gates(unittest.TestCase):
         self.assertAlmostEqual(c.ne, 0.0, 2)
         self.assertAlmostEqual(c.nn, -1.0, 2)                                       # nose-in, across the wall
         self.assertEqual(c.mode, "gate")
-        self.assertAlmostEqual(door(c)[0], -(2.0 + pa.BRIDGE_GAP_M), delta=0.3)     # the fuselage right of the bridge (the
-        self.assertAlmostEqual(door(c)[1], 30.0, delta=0.3)                         # nose toward -y: -x), level with its end
-        self.assertAlmostEqual(en(c)[0], -(2.0 + pa.BRIDGE_GAP_M + pa.SPECS[c.kind][3] / 2.0), delta=0.3)
+        self.assertLess(door(c)[0], 0.5)                                            # the fuselage right of the bridge (the nose toward -y: -x)
+        self.assertLess(end_face(door(c), (0.0, 30.0), (0.0, 1.0), 2.0), pa.BRIDGE_CAB_M)           # the door at the bridge's end (its cab)
 
 
 def door(c, side=1.0):
@@ -185,6 +185,13 @@ def door(c, side=1.0):
     length, fus = pa.SPECS[c.kind][0], pa.SPECS[c.kind][3]
     return (x + c.ne * (length / 2.0 - pa.DOOR_K * length) - c.nn * side * fus / 2.0,
             y + c.nn * (length / 2.0 - pa.DOOR_K * length) + c.ne * side * fus / 2.0)
+
+
+def end_face(p, end, d, half):
+    """The distance from the point p to a jet bridge's end face: the segment across it (half each way, square to its direction d)."""
+    perp = np.array([-d[1], d[0]])
+    t = float(np.clip((np.array(p) - end) @ perp, -half, half))
+    return float(np.hypot(*(np.array(p) - (np.array(end) + perp * t))))
 
 
 def fuselage(c):
@@ -201,14 +208,16 @@ def bridge(root, end, half=2.0):
 
 
 class Bridges(unittest.TestCase):
-    """A gate with a mapped jet bridge (airportroles): the aircraft is placed beside it, the door level with its outer end."""
+    """A gate with a mapped jet bridge (airportroles): the pose is solved, the forward left door nearest the bridge's outer end of those
+    where the aircraft's plan keeps a skin gap off every building and bridge but the bridge's cab."""
+    REACH = pa.BRIDGE_CAB_M + pa.SKIN_GAP_M
 
     def assertNotOverlapping(self, c, ring, end, d):
-        """The fuselage is not on the bridge's ring, and clear of it but for its last BRIDGE_CAB_M (the cab)."""
+        """The fuselage is not on the bridge's ring, and clear of it (a skin gap) but for its last BRIDGE_CAB_M (the cab)."""
         cut = pa._cut(np.array(ring, np.float64), np.array(end, np.float64), np.array(d, np.float64))
         pts = fuselage(c)
-        self.assertFalse(pa._pip(np.array(ring, np.float64), pts).any())
-        self.assertGreater(pa._seg_dist(pts, cut[0], np.roll(cut[0], -1, axis=0)).min(), pa.BUILDING_CLEAR_M - 0.05)
+        self.assertFalse(pa._pip(cut[0], pts).any())
+        self.assertGreater(pa._seg_dist(pts, cut[0], np.roll(cut[0], -1, axis=0)).min(), pa.SKIN_GAP_M - 0.15)
 
     def test_a_skewed_bridge_turns_the_axis_along_it_nose_still_toward_the_building(self):
         d = np.array([math.sin(math.radians(55.0)), math.cos(math.radians(55.0))])         # 55 degrees off the wall's normal
@@ -218,56 +227,56 @@ class Bridges(unittest.TestCase):
         got = pa.stands(f, buildings(TERMINAL, bridge(root, end)))
         self.assertEqual(len(got), 1)
         c = got[0]
-        self.assertAlmostEqual(c.ne, -d[0], 2)                                      # the axis along the bridge ...
-        self.assertAlmostEqual(c.nn, -d[1], 2)                                      # ... the nose toward the terminal
-        right = np.array([-d[1], d[0]])                                             # (looking tail to nose, along -d)
-        want = end + right * (2.0 + pa.BRIDGE_GAP_M)                                # the door level with the end, beside it
-        self.assertAlmostEqual(door(c)[0], want[0], delta=0.3)
-        self.assertAlmostEqual(door(c)[1], want[1], delta=0.3)
+        yaw = math.degrees(math.acos(max(-1.0, min(1.0, float(c.ne * -d[0] + c.nn * -d[1])))))
+        self.assertLessEqual(yaw, max(pa.BRIDGE_YAWS_DEG) + 0.1)                    # the axis along the bridge (within the search's turn) ...
+        self.assertLess(float(c.ne * d[0] + c.nn * d[1]), 0.0)                      # ... the nose toward the terminal
+        self.assertLess(end_face(door(c), end, d, 2.0), self.REACH)                 # the door at the bridge's end
         self.assertNotOverlapping(c, bridge(root, end), end, d)                     # (a radial bridge: not on it)
 
-    def test_a_slightly_skewed_bridge_keeps_the_walls_normal(self):
+    def test_a_slightly_skewed_bridge_keeps_the_walls_normal_within_the_search_turn(self):
         d = np.array([math.sin(math.radians(20.0)), math.cos(math.radians(20.0))])
         root = np.array([0.0, -3.0])
         end = root + 30.0 * d
         f = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
         c = pa.stands(f, buildings(TERMINAL, bridge(root, end)))[0]
-        self.assertAlmostEqual(c.ne, 0.0, 2)
-        self.assertAlmostEqual(c.nn, -1.0, 2)
-        lean = pa.DOOR_K * pa.SPECS[c.kind][0] * math.tan(math.radians(20.0))      # (the bridge leans toward the fuselage: the nose's lead)
-        self.assertAlmostEqual(door(c)[0], end[0] - (2.0 + pa.BRIDGE_GAP_M) / math.cos(math.radians(20.0)) - lean, delta=0.3)
-        self.assertAlmostEqual(door(c)[1], end[1], delta=0.3)                       # level with the end, a skewed bridge's reach
+        self.assertLessEqual(abs(math.degrees(math.atan2(c.ne, -c.nn))), max(pa.BRIDGE_YAWS_DEG) + 0.1)     # (the wall's normal, turned at most 5 degrees)
+        self.assertLess(end_face(door(c), end, d, 2.0), self.REACH)
         self.assertNotOverlapping(c, bridge(root, end), end, d)
 
-    def test_the_right_side_blocked_the_mirror_is_used_the_door_on_the_right(self):
+    def test_the_pose_minimises_the_door_to_end_distance_a_skin_gap_off_the_bridge(self):
         ring = [(-2, -3), (2, -3), (2, 30), (-2, 30)]
         f = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
-        free = pa.stands(f, buildings(TERMINAL, ring))[0]
-        self.assertLess(en(free)[0], 0.0)                                           # (to the right of the bridge: -x)
-        shed = [(-17, 10), (-7, 10), (-7, 27.5), (-17, 27.5)]                       # on that side, by the nose
-        f2 = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
-        got = pa.stands(f2, buildings(TERMINAL, ring, shed))
+        c = pa.stands(f, buildings(TERMINAL, ring))[0]
+        self.assertLess(math.hypot(door(c)[0], door(c)[1] - 30.0), 3.0)             # (the audit's check, not a placement constant)
+        cut = pa._cut(np.array(ring, np.float64), np.array([0.0, 30.0]), np.array([0.0, 1.0]))
+        gap = pa._seg_dist(fuselage(c), cut[0], np.roll(cut[0], -1, axis=0)).min()
+        self.assertGreater(gap, pa.SKIN_GAP_M - 0.15)
+        self.assertLess(gap, pa.SKIN_GAP_M + 0.35)                                  # (as near as the skin gap lets it)
+
+    @mock.patch.object(pa, "_kinds_for", lambda tier, gid: ("narrow",))
+    def test_a_small_obstacle_at_the_nose_the_door_slides_tail_ward_to_clear_it(self):
+        ring = [(-2, -3), (2, -3), (2, 30), (-2, 30)]
+        shed = [(-16, 10), (-4.5, 10), (-4.5, 26.5), (-16, 26.5)]                   # on the fuselage's side, by the nose
+        free = pa.stands(feats(aerodrome("regional_airport"), gate(0.0), occupied=True), buildings(TERMINAL, ring))[0]
+        got = pa.stands(feats(aerodrome("regional_airport"), gate(0.0), occupied=True), buildings(TERMINAL, ring, shed))
         self.assertEqual(len(got), 1)
         c = got[0]
-        self.assertAlmostEqual(c.nn, -1.0, 2)
-        self.assertAlmostEqual(en(c)[0], 2.0 + pa.BRIDGE_GAP_M + pa.SPECS[c.kind][3] / 2.0, delta=0.3)     # the fuselage to the left
-        self.assertAlmostEqual(door(c, -1.0)[0], 2.0 + pa.BRIDGE_GAP_M, delta=0.3)                   # the door on its right
-        self.assertAlmostEqual(door(c, -1.0)[1], 30.0, delta=0.3)                   # (level with the bridge's end: not stepped back)
-        self.assertNotOverlapping(c, ring, (0.0, 30.0), (0.0, 1.0))
-        self.assertFalse(pa._pip(np.array(shed, np.float64), footprint(c)).any())
+        self.assertLess(door(free)[1], 30.8)                                        # (level with the end without it)
+        self.assertGreater(door(c)[1], 31.0)                                        # (stepped back: +y is tail-ward)
+        self.assertLess(end_face(door(c), (0.0, 30.0), (0.0, 1.0), 2.0), self.REACH)
+        sh = np.array(shed, np.float64)
+        self.assertGreater(pa._seg_dist(fuselage(c), sh, np.roll(sh, -1, axis=0)).min(), pa.SKIN_GAP_M - 0.15)
+        self.assertFalse(pa._pip(sh, fuselage(c)).any())
 
-    def test_both_sides_blocked_it_steps_back_up_to_six_metres_then_is_dropped(self):
+    def test_no_mirror_where_the_left_door_cannot_meet_the_bridge_the_stand_stays_empty(self):
         ring = [(-2, -3), (2, -3), (2, 30), (-2, 30)]
-        sheds = [[(-17, 10), (-7, 10), (-7, 27.5), (-17, 27.5)], [(7, 10), (17, 10), (17, 27.5), (7, 27.5)]]
-        f2 = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
-        got = pa.stands(f2, buildings(TERMINAL, ring, *sheds))
-        self.assertEqual(len(got), 1)                                               # (the nose clear of the sheds)
-        back = door(got[0])[1] - 30.0                                               # (the door's step back from the bridge's end)
-        self.assertGreater(back, 0.5)
-        self.assertLessEqual(back, pa.BRIDGE_BACK_M + 0.01)
-        deep = [[(-17, 10), (-7, 10), (-7, 32), (-17, 32)], [(7, 10), (17, 10), (17, 32), (7, 32)]]
-        f3 = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
-        self.assertEqual(pa.stands(f3, buildings(TERMINAL, ring, *deep)), [])
+        deep = [(-16, 10), (-2.5, 10), (-2.5, 36), (-16, 36)]                       # the fuselage cannot be right of the bridge
+        f = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
+        self.assertEqual(pa.stands(f, buildings(TERMINAL, ring, deep)), [])
+        beside = [(4.5, 10), (16, 10), (16, 26.5), (4.5, 26.5)]                     # a building on the bridge's other side changes nothing
+        got = pa.stands(feats(aerodrome("regional_airport"), gate(0.0), occupied=True), buildings(TERMINAL, ring, beside))
+        self.assertEqual(len(got), 1)
+        self.assertLess(en(got[0])[0], 0.0)                                         # (the fuselage right of the bridge, never left)
 
     def test_every_bridged_gate_of_a_row_gets_its_own_aircraft(self):
         xs = [-60.0, 0.0, 60.0]
@@ -276,8 +285,17 @@ class Bridges(unittest.TestCase):
         got = pa.stands(f, buildings(TERMINAL, *bridges))
         self.assertEqual(len(got), 3)
         for c, x in zip(sorted(got, key=lambda c: en(c)[0]), xs):
-            self.assertAlmostEqual(door(c)[0], x - (2.0 + pa.BRIDGE_GAP_M), delta=0.3)
-            self.assertAlmostEqual(door(c)[1], 30.0, delta=0.3)
+            self.assertLess(end_face(door(c), (x, 30.0), (0.0, 1.0), 2.0), self.REACH)
+            self.assertLess(door(c)[0], x)
+
+    def test_a_neighbours_bridge_is_an_obstacle_all_along_only_the_gates_own_cab_is_exempt(self):
+        own = [(-2, -3), (2, -3), (2, 30), (-2, 30)]
+        near = [(-12, -3), (-8, -3), (-8, 30), (-12, 30)]                           # another gate's bridge, where the fuselage would stand
+        f = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
+        nr = np.array(near, np.float64)
+        for k in pa.stands(f, buildings(TERMINAL, own, near)):
+            self.assertFalse(pa._pip(nr, fuselage(k)).any())
+            self.assertGreater(pa._seg_dist(fuselage(k), nr, np.roll(nr, -1, axis=0)).min(), pa.SKIN_GAP_M - 0.15)
 
     def test_only_the_cab_of_the_bridge_is_exempt_another_building_is_not(self):
         f = feats(aerodrome("regional_airport"), gate(0.0), occupied=True)
@@ -569,6 +587,22 @@ class Apron(unittest.TestCase):
         self.assertEqual(run([(-60, 0), (60, 0), (60, 14), (-60, 14)]), [])             # (the main gear on the grass)
         self.assertEqual(run([(-60, 40), (60, 40), (60, 90), (-60, 90)]), [])           # (the nose gear on the grass)
 
+    def test_a_terminal_stands_gear_may_be_in_the_unmapped_strip_between_its_wall_and_the_apron_never_beyond_it(self):
+        """Mappers stop an apron short of the wall: a leg in the strip (nearer the wall than the apron, within PAVING_GAP_M of it) is on
+        paving; one beyond the apron, away from the wall, is on grass however near the apron it is."""
+        def run(apron):
+            f = feats(aerodrome("regional_airport"), (poly(apron), "apron", {}), gate(0.0), occupied=True)
+            return [c for c in pa.stands(f, buildings(TERMINAL)) if c.mode == "gate"]
+        strip = [(-60, 14), (60, 14), (60, 80), (-60, 80)]                  # (the apron starts 14 m off the wall: the nose gear, 9 m out, in the strip)
+        self.assertEqual(len(run(strip)), 1)
+        old, pa.PAVING_GAP_M = pa.PAVING_GAP_M, 0.0
+        try:
+            self.assertEqual(run(strip), [])                                # (no tolerance: that leg is on the grass)
+        finally:
+            pa.PAVING_GAP_M = old
+        self.assertEqual(run([(-60, 0), (60, 0), (60, 14), (-60, 14)]), [])     # (the main gear 8 m past the apron's far edge: 8 m is within the gap)
+        self.assertEqual(run([(-60, 70), (60, 70), (60, 140), (-60, 140)]), [])     # (further than the gap)
+
     def test_a_hangar_on_the_apron_is_kept_off(self):
         hangar = [(-150, 100), (-60, 100), (-60, 140), (-150, 140)]
         f = feats(aerodrome("regional_airport"), (poly(self.APRON), "apron", {}))
@@ -578,6 +612,117 @@ class Apron(unittest.TestCase):
         for c in got:
             x, y = en(c)
             self.assertFalse(-155 < x < -55 and 95 < y < 145)
+
+
+class WallLines(unittest.TestCase):
+    """A stepped, diagonal, curved or corner wall: the aircraft is nose-in to the wall's general line, not to the step it stands at."""
+
+    @staticmethod
+    def stair(n=10, step=8.0):
+        """A building whose lower-right wall is a staircase up the diagonal y = x (treads and risers of `step` m)."""
+        pts = [(0.0, 0.0)]
+        for k in range(n):
+            pts += [((k + 1) * step, k * step), ((k + 1) * step, (k + 1) * step)]
+        return pts[:-1] + [(n * step, n * step), (n * step - 40.0, n * step + 40.0), (-40.0, 40.0)]
+
+    def angle(self, a, b):
+        return math.degrees(math.acos(max(-1.0, min(1.0, float(a[0] * b[0] + a[1] * b[1])))))
+
+    def test_a_stepped_walls_normal_is_the_general_lines_not_the_treads(self):
+        ring = np.array(self.stair(), np.float64)
+        for q in ((44.0, 40.0), (46.0, 40.0), (48.0, 40.0), (48.0, 44.0)):        # (on a tread, on a riser)
+            n = pa.wall_normal(ring, np.array(q))
+            self.assertIsNotNone(n, q)
+            self.assertLess(self.angle(n, (math.sqrt(0.5), -math.sqrt(0.5))), 8.0, q)
+
+    def test_a_gate_on_a_stepped_wall_parks_across_the_general_line(self):
+        f = feats(aerodrome(), (point(46.0, 36.0), "airport_gate", {"aeroway": "gate"}), occupied=True)
+        got = [c for c in pa.stands(f, buildings(self.stair())) if c.mode == "gate"]
+        self.assertEqual(len(got), 1)
+        self.assertLess(self.angle((got[0].ne, got[0].nn), (-math.sqrt(0.5), math.sqrt(0.5))), 10.0)    # (the nose to the building)
+
+    def test_a_curved_walls_normal_is_radial(self):
+        ang = np.radians(np.arange(0.0, 360.0, 15.0))
+        ring = np.stack([60.0 * np.cos(ang), 60.0 * np.sin(ang)], 1)
+        for k in (0, 5, 11, 17):
+            n = pa.wall_normal(ring, ring[k])
+            self.assertIsNotNone(n)
+            self.assertLess(self.angle(n, (math.cos(ang[k]), math.sin(ang[k]))), 10.0)
+
+    def test_near_a_corner_a_long_edge_keeps_its_own_normal(self):
+        ring = np.array([(0.0, 0.0), (22.0, 0.0), (22.0, 300.0), (0.0, 300.0)])
+        for x in (4.0, 11.0):                                                      # (the pier's tip, 4 m from its corner)
+            n = pa.wall_normal(ring, np.array([x, 300.0]))
+            self.assertIsNotNone(n)
+            self.assertLess(self.angle(n, (0.0, 1.0)), 5.0)
+        self.assertLess(self.angle(pa.wall_normal(ring, np.array([22.0, 150.0])), (1.0, 0.0)), 5.0)
+
+
+class Radial(unittest.TestCase):
+    """A pier's tip or a corner of the wall (the outline turns convex by over 30 degrees within 40 m and goes on turning over 80 m): a gate
+    there parks radially, its axis from the gate to the centre of the circle fitted to the outline, like a round satellite's."""
+    PIER = [(-300, -40), (300, -40), (300, 0), (30, 0), (30, 150), (-30, 150), (-30, 0), (-300, 0)]     # a 60 m wide pier, 150 m out
+
+    @staticmethod
+    def round_tip(r=30.0, length=150.0):
+        """A pier of half width r with a half-circle tip (chords of 10 degrees)."""
+        a = np.radians(np.arange(0.0, 180.0 + 1e-9, 10.0))
+        tip = [(r * math.cos(t), length + r * math.sin(t)) for t in a]
+        return [(-300, -40), (300, -40), (300, 0), (r, 0)] + tip + [(-r, 0), (-300, 0)]
+
+    def test_the_centre_of_a_round_tip_and_a_corner_none_on_a_straight_or_stepped_or_concave_wall(self):
+        ring = np.array(self.round_tip(), np.float64)
+        c = pa.radial_centre(ring, np.array([0.0, 180.0]))                        # (the tip's apex)
+        self.assertIsNotNone(c)
+        self.assertLess(math.hypot(c[0], c[1] - 150.0), 6.0)                       # (the arc's centre)
+        corner = np.array(self.PIER, np.float64)
+        c = pa.radial_centre(corner, np.array([30.0, 150.0]))                      # (a square tip's corner)
+        self.assertIsNotNone(c)
+        self.assertTrue(bool(pa._pip(corner, c[None])[0]))
+        self.assertIsNone(pa.radial_centre(corner, np.array([30.0, 60.0])))        # (the pier's straight side)
+        self.assertIsNone(pa.radial_centre(corner, np.array([100.0, 0.0])))        # (the terminal's wall, with the pier's root 70 m off)
+        self.assertIsNone(pa.radial_centre(corner, np.array([30.0, 0.0])))         # (a concave corner: the root of the pier)
+        steps = [(0.0, 0.0)]                                                       # (a wall with notches every 30 m: out and back)
+        for k in range(10):
+            steps += [(30.0 * k + 10.0, 0.0), (30.0 * k + 10.0, 6.0), (30.0 * k + 20.0, 6.0), (30.0 * k + 20.0, 0.0)]
+        steps += [(300.0, 0.0), (300.0, -40.0), (0.0, -40.0)]
+        notched = np.array(steps, np.float64)
+        for x in (70.0, 80.0, 115.0, 175.0, 200.0):                                # (away from the building's own corners)
+            self.assertIsNone(pa.radial_centre(notched, np.array([x, 0.0])), x)
+
+    def test_a_gate_at_a_tips_corner_parks_toward_the_arcs_centre_not_across_the_wall(self):
+        ring = np.array(self.PIER, np.float64)
+        f = feats(aerodrome("regional_airport"), (point(33.0, 140.0), "airport_gate", {"aeroway": "gate"}), occupied=True)
+        got = [c for c in pa.stands(f, buildings(self.PIER)) if c.mode == "gate"]
+        self.assertEqual(len(got), 1)
+        c = got[0]
+        half = pa.SPECS[c.kind][0] / 2.0
+        x, y = en(c)
+        nose = np.array([x + c.ne * half, y + c.nn * half])
+        centre = pa.radial_centre(ring, pa._nearest_on(ring, nose)[1], nose)
+        self.assertIsNotNone(centre)
+        want = (centre - nose) / np.hypot(*(centre - nose))
+        self.assertGreater(c.ne * want[0] + c.nn * want[1], math.cos(math.radians(5.0)))    # (the axis through the centre)
+        self.assertLess(abs(c.ne), math.cos(math.radians(8.0)))                             # (not across the east face (-x): rotated toward the tip)
+
+    def test_the_gates_of_a_square_tip_fan_out_and_none_overlap(self):
+        gates = [(34.0, 100.0), (33.0, 140.0), (15.0, 154.0), (-15.0, 154.0), (-33.0, 140.0), (-34.0, 100.0)]
+        f = feats(aerodrome("regional_airport"), *[(point(x, y), "airport_gate", {"aeroway": "gate"}) for x, y in gates], occupied=True)
+        got = [c for c in pa.stands(f, buildings(self.PIER)) if c.mode == "gate"]
+        self.assertGreaterEqual(len(got), 3)
+        placed = [(c.kind,) + en(c) + (c.ne, c.nn) for c in got]
+        for i, (k, x, y, nx, ny) in enumerate(placed):
+            for k2, x2, y2, nx2, ny2 in placed[i + 1:]:
+                self.assertFalse(pa._in_rects(k, x, y, nx, ny, pa._world(pa._local_points(k2), x2, y2, nx2, ny2), 0.0).any())
+        angles = sorted(math.degrees(math.atan2(c.nn, c.ne)) for c in got)
+        self.assertGreater(angles[-1] - angles[0], 40.0)                                   # (a fan, not all one way)
+
+
+class Occupancy(unittest.TestCase):
+    def test_most_of_a_hubs_stands_are_full(self):
+        share = sum(1 for i in range(2000) if pa._crc(f"gate{i}") % 100 < pa.OCCUPIED_PCT) / 2000.0
+        self.assertGreaterEqual(pa.OCCUPIED_PCT, 80)
+        self.assertAlmostEqual(share, pa.OCCUPIED_PCT / 100.0, delta=0.04)
 
 
 class Rows(unittest.TestCase):

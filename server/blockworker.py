@@ -28,6 +28,7 @@ import dmath
 import dnp
 
 import aeroways
+import runwaysnap
 import secrossings
 import streetparking
 import blockcache
@@ -198,7 +199,9 @@ def load_airports(cache_dir, dem):
     except (airportsmod.AirportsUnavailable, OSError, ValueError) as e:
         log.warning("airports: no runway grading (%s)", e)
         return None
-    return airportgrade.AirportGrader(db.lean(), dem)      # (runways only: the grading's)
+    grader = airportgrade.AirportGrader(db.lean(), dem)      # (runways only: the grading's)
+    runwaysnap.set_provider(grader.runways_in_box)           # (the mapped runway lines are laid on the graded runways)
+    return grader
 
 
 def _rss_mb():

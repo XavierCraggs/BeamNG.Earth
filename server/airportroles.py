@@ -122,12 +122,13 @@ class Unit:
 
 class Roles(dict):
     """{id: role} of the airport's buildings and parts, with: .gates {gate id: {...}} (the module docstring), .airside_parking
-    [{"id", "ring"}], .units {id: Unit} (every classified footprint, in metres), .gate_xy {gate id: (x, y)}, .inside {id} (the terminal look, see above), .frame, .origin."""
+    [{"id", "ring"}], .units {id: Unit} (every classified footprint, in metres), .tails {tail id: {ids of the bridges it carries on}}, .gate_xy {gate id: (x, y)}, .inside {id} (the terminal look, see above), .frame, .origin."""
 
     def __init__(self):
         super().__init__()
         self.gates, self.airside_parking, self.units, self.gate_xy, self.bridges = {}, [], {}, {}, {}
         self.by_key, self.inside = {}, set()
+        self.tails = {}
         self.frame, self.origin = None, (0.0, 0.0)
 
     def stacked(self, uid):
@@ -512,7 +513,7 @@ def _stage_bridges(zone, gate_xy, gids, gxy, aprons, res):
             if u.role is not None:
                 continue
             ends = _ends(u)
-            for bid in sorted(bridges):
+            for bid in sorted(bridges):             # (every bridge it joins carries it on: a bridge mapped twice, one over the other)
                 d, root, outer, _dir = bridges[bid]
                 k = 0 if float(dnp.hypot(*(ends[0] - outer))) <= float(dnp.hypot(*(ends[1] - outer))) else 1
                 if float(dnp.hypot(*(ends[k] - outer))) <= TAIL_JOIN_M:
@@ -520,9 +521,9 @@ def _stage_bridges(zone, gate_xy, gids, gxy, aprons, res):
                     v = far - root
                     if float(dnp.hypot(*v)) > float(dnp.hypot(*(outer - root))):      # (it runs on away from the root)
                         u.role = JET_BRIDGE
+                        res.tails.setdefault(u.id, set()).add(bid)
                         bridges[bid] = (d, root, far, v / max(float(dnp.hypot(v[0], v[1])), 1e-9))
                         grown = True
-                        break
     res.bridges = bridges
 
 
