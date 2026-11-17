@@ -537,7 +537,7 @@ class LeadIns(Unpaved):
                               tm.tile_chunks([f], FRAME, tx, ty, lambda la, lo: np.full(len(la), 7.0), tc.bbox, stands)]
         plain, with_lead = run(None), run(st)
         length = lambda cs: sum(float(np.hypot(*np.diff(np.array(c["n"])[:, :2], axis=0).T).sum()) for c in cs
-                                if c["n"] and c["w"] == tm.LEAD_W_M and "layer" not in c)
+                                if c["n"] and c["w"] == tm.LEAD_W_M and c.get("layer") != "edge")
         wings = [metres(s) for s in tm.strokes([f], st) if s[5] == tm.STAND_KIND]       # (the wing-tip lines are as wide now)
         want = sum(float(np.hypot(m[2] - m[0], m[3] - m[1])) for m in self.painted(f, *st)[0] + wings)
         self.assertAlmostEqual(length(with_lead) - length(plain), want, delta=want * 0.02)
@@ -1045,11 +1045,14 @@ class GlyphOverBox(unittest.TestCase):
         box = [ch for ch in chunks if ch["m"] == yellow and ch.get("poly")]
         self.assertTrue(glyph and box)
         self.assertEqual({roadmesh.layer_of(ch) for ch in glyph}, {"glyph"})
-        self.assertEqual({roadmesh.layer_of(ch) for ch in box}, {"mark"})
-        self.assertGreater(roadmesh.LIFT["glyph"], roadmesh.LIFT["mark"])
+        self.assertEqual({roadmesh.layer_of(ch) for ch in box}, {"apaint"})
+        self.assertGreater(roadmesh.LIFT["glyph"], roadmesh.LIFT["apaint"])
+        # (each layer 1.5 mm or more over the one under it: at 1 mm or less the black won the depth test in game)
+        self.assertGreaterEqual(roadmesh.LIFT["apaint"] - roadmesh.LIFT["edge"], 0.0015 - 1e-9)
+        self.assertGreaterEqual(roadmesh.LIFT["glyph"] - roadmesh.LIFT["apaint"], 0.0015 - 1e-9)
         # (the chunks of the polygons come in the layers' order: the border under, then the paint, then the lettering)
         layers = [ch["layer"] for ch in chunks if ch.get("poly")]
-        self.assertEqual(layers, sorted(layers, key=lambda x: ["edge", "gutter", "mark", "glyph"].index(x)))
+        self.assertEqual(layers, sorted(layers, key=lambda x: ["edge", "gutter", "apaint", "glyph"].index(x)))
 
 
 def circumradii(P, min_side=0.2):

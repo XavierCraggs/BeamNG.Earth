@@ -40,9 +40,13 @@ LIFT = {"base": 0.0, "edge": 0.001, "gutter": 0.0015, "mark": 0.002, "frontage":
         # then (the user: "they still float. i want to make them virtualy the same height of the road"): paint 2 mm, the
         # wear 2.2-2.6 mm, spots 1.8 mm (FOLLOW_TOL stays 2 cm: the ground steps by 1/32 m)
         "wear": 0.0022, "wear2": 0.0024, "spot": 0.0018, "wline": 0.0026,
-        # the black lettering on the stand marks' yellow boxes (taxiwaymarks): clear of the paint's 2 mm (0.6 mm over it z-fought
-        # in game and the yellow won: plain boxes), in its own material, listed after the yellow's
-        "glyph": 0.0035}
+        # the airports' yellow paint over its black borders (taxiwaymarks: "edge", 1 mm): 2 mm clear of them (at the road
+        # marks' 1 mm the black won the depth test in game: lead-ins and stop bars black for whole pieces, 2026-11-17, KATL;
+        # the mesh had the yellow, 0.5-1 mm over the black)
+        "apaint": 0.003,
+        # the black lettering on the stand marks' yellow boxes (taxiwaymarks): clear of the paint (0.6 mm over it z-fought
+        # in game and the yellow won: plain boxes; 1.5 mm held), in its own material, listed after the yellow's
+        "glyph": 0.0045}
 # The wear strips may depart further from the drawn ground than the paint before follow_ground cuts them, lifted about
 # as far (a soft decal shows no parallax): a motorway tile's lanes of tyre polish (I-95, Baltimore) were +21k triangles
 # at FOLLOW_TOL, +9k at 4 cm. The spots (small quads) keep FOLLOW_TOL.

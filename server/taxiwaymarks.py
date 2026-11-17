@@ -2334,7 +2334,7 @@ def tile_chunks_md(md, keys, frame, tx, ty, elev, tile_bbox):
 
 # the layers a mark is drawn in (roadmesh.LIFT: the height over the road, so what is painted over what does not rest on the order
 # of the mesh): the black borders first, the red marks, the yellow and white paint, the black lettering last
-LAYER_OF = {"under": "edge", "red": "gutter", "paint": "mark", "glyph": "glyph"}
+LAYER_OF = {"under": "edge", "red": "gutter", "paint": "apaint", "glyph": "glyph"}   # (roadmesh.LIFT: 1, 1.5, 3, 4.5 mm)
 LAYER_ORDER = ("under", "red", "paint", "glyph")     # (the order of the chunks: the road mesh draws a material's triangles in one primitive, in
                                                      # the order the materials first appear: the lettering's ("text") after the yellow's)
 RIBBON_LAYER = {"black": "under", "red": "red"}
@@ -2421,8 +2421,7 @@ def tile_chunks(feats_list, frame, tx, ty, elev, tile_bbox, stands=None, site=No
                 c = {"m": look["m"], "w": round(float(line[2]), 2), "tl": look["tl"], "p": look["p"],
                      "n": [[round(float(x), 3), round(float(y), 3), round(float(z), 3)]
                            for x, y, z in zip(px, py, zs[i:i + m])]}
-                if line[4] in RIBBON_LAYER:
-                    c["layer"] = LAYER_OF[RIBBON_LAYER[line[4]]]
+                c["layer"] = LAYER_OF[RIBBON_LAYER.get(line[4], "paint")]     # (the yellow 2 mm over its black border)
                 out.append(c)
                 i += m
     pnear = inside(pboxes) if len(polys) else []
